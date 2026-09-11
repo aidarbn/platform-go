@@ -1,6 +1,6 @@
 # platformgo.yaml
 
-`platformgo.yaml` в корне проекта — единственный источник правды о том, что нужно проекту: модули, их настройки, дополнительная генерация, правила линтера, CI. Проект меняется так: правишь файл → `platformgo plan` → `platformgo apply`. Команд `add` и `remove` нет.
+`platformgo.yaml` в корне проекта — единственный источник правды об устройстве проекта: какие модули подключены и как они настроены технически, дополнительная генерация, правила линтера, CI. Бизнес-настройки здесь не хранятся — см. [settings.md](settings.md). Проект меняется так: правишь файл → `platformgo plan` → `platformgo apply`. Команд `add` и `remove` нет.
 
 ## Файлы
 
@@ -29,13 +29,11 @@ modules:
     queries: sqlc
 
   river:
-    queues:
-      default: 5
-      notify: 3
-    periodic:
-      - job: CleanupExpired
-        cron: "0 3 * * *"
-    ui: true
+    ui: true                       # riverui в docker-compose
+
+  settings:
+    schema: settings.yaml          # схема бизнес-настроек проекта
+    storage: postgres
 
   api:
     grpc_addr: 127.0.0.1:9090
@@ -44,10 +42,8 @@ modules:
     openapi:
       base: api/base.openapi.yaml
       out: api/shop.openapi.yaml
-    interceptors: [logging, recovery, validate, ratelimit]
 
-  s3:
-    buckets: [media]
+  s3: {}
 
 generate:
   extra:
@@ -69,7 +65,7 @@ ci:
 - **Схема JSON** публикуется для каждой версии платформы; ссылка в первой строке включает автодополнение и проверку в редакторе.
 - **`schema`** — версия формата файла. `platformgo upgrade` переводит файл на новую схему миграциями, см. [upgrades.md](upgrades.md).
 - **Модуль добавляется** появлением секции в `modules`, **убирается** её удалением. Owned-файлы модуля при удалении остаются — платформа предупреждает о них.
-- **Заготовки кода** появляются из объявлений: например, задание из `river.periodic`, которого ещё нет, `apply` создаст owned-файлом.
+- **Только техническая настройка модуля.** Пути, адреса, инструменты генерации, включение вспомогательных сервисов. Расписания, лимиты, таймауты, флаги, число попыток, имена очередей и бакетов — это бизнес-настройки и код проекта, см. [settings.md](settings.md).
 - **Зависимости ставит платформа**: соседние модули (river требует postgres — `plan` об этом скажет), Go-модули и Go-инструменты с закреплёнными версиями, сервисы локальной инфраструктуры в `docker-compose.yml`. Системные программы (Docker) проверяет `platformgo doctor`.
 
 ## Команды
@@ -94,8 +90,7 @@ $ platformgo plan
     docker-compose.yml: сервис minio
     config.gen.go: S3Config; .env.example: S3_*
 ~ модуль river
-    queues.notify: новая очередь, 3 воркера
-    periodic: CleanupExpired "0 3 * * *" — задания нет, будет создана заготовка
+    ui: включён — docker-compose.yml: сервис riverui
 - модуль keycloak
     убрать из modules.gen.go, docker-compose.yml, правил линтера
     останутся owned-файлы: internal/adapters/out/keycloak/…
