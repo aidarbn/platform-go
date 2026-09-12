@@ -1,42 +1,49 @@
 # platform-go
 
-`platformgo` — CLI для создания, кодогенерации и поддержки Go-проектов.
+`platformgo` is a command line tool that creates, generates and maintains Go projects.
 
-**Статус:** проектирование.
+**Status:** early development.
 
-## Команды (план)
+## Commands
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `platformgo new <имя>` | создаёт проект: ядро, сборка, тесты, линтер, CI |
-| `platformgo plan` | показывает, чем проект отличается от `platformgo.yaml` |
-| `platformgo apply` | приводит проект к `platformgo.yaml`: зависимости, модули, генерация, проверка |
-| `platformgo generate` | вся кодогенерация проекта одной командой |
-| `platformgo verify` | проверка для CI |
-| `platformgo doctor` | проверяет инструменты и их версии |
-| `platformgo upgrade` | переводит проект на новую версию платформы |
-| `platformgo setup` | автодополнение и короткий псевдоним `pgo` |
+| `platformgo new <module-path>` | creates a project: core, build, tests, linters, CI |
+| `platformgo plan` | shows how the project differs from `platformgo.yaml` |
+| `platformgo apply` | brings the project in line with `platformgo.yaml` |
+| `platformgo generate` | runs every generator of the project |
+| `platformgo verify` | check for CI |
+| `platformgo doctor` | checks tools and their versions |
+| `platformgo upgrade` | moves the project to a new platform version |
+| `platformgo setup` | shell completion and the short `pgo` alias |
 
-Проект описывается декларативно в `platformgo.yaml` — см. [docs/config.md](docs/config.md).
+A project is described declaratively in `platformgo.yaml` — see [docs/config.md](docs/config.md).
 
-## Устройство
+## Layout
 
-- **Модули** объявляются в `platformgo.yaml` и применяются `platformgo apply` в любой момент. Их файлы бывают трёх видов: `managed` — принадлежат платформе и обновляются при `upgrade`; `owned` — создаются один раз и дальше принадлежат проекту; `generated` — пересобираются `generate`.
-- **Настройки** проекта и модулей — в `platformgo.yaml`, версии и хеши managed-файлов — в `platformgo.lock`.
-- **Библиотеки** платформы — `github.com/aidarbn/platform-go/kit/...`; модули в проекте остаются тонкой обвязкой над ними.
+- **Modules** are declared in `platformgo.yaml` and applied with `platformgo apply` at any time. Their files come in three kinds: `managed` belongs to the platform and is rewritten on upgrade, `owned` is created once and then belongs to the project, `generated` is rebuilt by `generate`.
+- **Settings** of the project and its modules live in `platformgo.yaml`; versions and hashes of managed files live in `platformgo.lock`.
+- **Libraries** of the platform live in `github.com/aidarbn/platform-go/kit/...`; modules in a project stay a thin layer on top of them.
 
-## Установка
+## Documentation
 
-Появится с первым релизом:
+- [docs/config.md](docs/config.md) — the `platformgo.yaml` format
+- [docs/modules.md](docs/modules.md) — module catalogue
+- [docs/settings.md](docs/settings.md) — levels of settings
+- [docs/upgrades.md](docs/upgrades.md) — how projects stay upgradable
+
+## Installation
+
+Available with the first release:
 
 ```bash
 go install github.com/aidarbn/platform-go/cmd/platformgo@latest
 ```
 
-## Лицензия
+## License
 
 Copyright 2026 Aidar Babanov.
 
-Код платформы — CLI `platformgo` и библиотеки `kit` — распространяется по лицензии [Apache 2.0](LICENSE).
+The platform code — the `platformgo` tool and the `kit` libraries — is distributed under the [Apache 2.0](LICENSE) license.
 
-Код, который `platformgo` создаёт в вашем проекте (шаблоны, примеры, сгенерированные файлы), принадлежит вашему проекту: его можно использовать, менять и распространять без каких-либо условий, в том числе без сохранения уведомлений о лицензии.
+Code that `platformgo` creates inside your project (templates, examples, generated files) belongs to your project: use it, change it and distribute it without any conditions, including without keeping license notices.

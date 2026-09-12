@@ -11,11 +11,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-// App — контейнер приложения: логгер, метрики, проверки health и значения,
-// которыми модули делятся между собой.
+// App is the application container: logger, metrics, health checks and the values
+// modules share with each other.
 //
-// Модули находят друг друга через контейнер, а не через правки в main.go: поэтому
-// добавление и удаление модуля не требует ручных изменений в коде проекта.
+// Modules find each other through the container instead of through edits in main.go,
+// which is why adding or removing a module needs no manual changes in project code.
 type App struct {
 	log     *slog.Logger
 	metrics *prometheus.Registry
@@ -30,8 +30,8 @@ type healthCheck struct {
 	check func(context.Context) error
 }
 
-// NewApp создаёт контейнер без запуска модулей: нужен тестам модулей и инструментам
-// платформы, которым не требуется полный жизненный цикл. Логгер можно не передавать.
+// NewApp creates a container without running modules. Tests and platform tooling use
+// it when the full lifecycle is not needed. The logger may be nil.
 func NewApp(log *slog.Logger) *App {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -50,14 +50,14 @@ func newApp(log *slog.Logger) *App {
 	}
 }
 
-// Logger возвращает логгер приложения.
+// Logger returns the application logger.
 func (a *App) Logger() *slog.Logger { return a.log }
 
-// Metrics возвращает реестр метрик, который отдаётся в /metrics.
+// Metrics returns the registry served at /metrics.
 func (a *App) Metrics() *prometheus.Registry { return a.metrics }
 
-// AddHealthCheck добавляет проверку в /health. Модулям это делать не нужно:
-// платформа сама добавляет проверку каждого модуля, который реализует HealthChecker.
+// AddHealthCheck registers a check for /health. Modules need not call it: the platform
+// adds a check for every module implementing HealthChecker.
 func (a *App) AddHealthCheck(name string, check func(context.Context) error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -70,14 +70,14 @@ func (a *App) healthChecks() []healthCheck {
 	return append([]healthCheck(nil), a.checks...)
 }
 
-// Provide кладёт значение в контейнер под его типом. Повторный вызов заменяет значение.
+// Provide stores a value in the container under its own type, replacing any previous one.
 func Provide[T any](a *App, v T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.values[reflect.TypeFor[T]()] = v
 }
 
-// Lookup достаёт значение типа T и сообщает, есть ли оно.
+// Lookup returns the value of type T and reports whether it is present.
 func Lookup[T any](a *App) (T, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -91,14 +91,14 @@ func Lookup[T any](a *App) (T, bool) {
 	return t, ok
 }
 
-// Get достаёт значение типа T и паникует, если его нет.
+// Get returns the value of type T and panics when it is missing.
 //
-// Паника здесь уместна: отсутствие зависимости — ошибка сборки приложения,
-// она видна на первом же запуске, а не в проде под нагрузкой.
+// Panicking is right here: a missing dependency is a wiring mistake, and it shows up
+// on the first run rather than in production under load.
 func Get[T any](a *App) T {
 	v, ok := Lookup[T](a)
 	if !ok {
-		panic(fmt.Sprintf("platform: в контейнере нет %s — не подключён нужный модуль", reflect.TypeFor[T]()))
+		panic(fmt.Sprintf("platform: no %s in the container: the module providing it is not enabled", reflect.TypeFor[T]()))
 	}
 	return v
 }

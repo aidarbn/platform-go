@@ -15,7 +15,7 @@ import (
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
-// журнал вызовов модулей: по нему проверяем порядок жизненного цикла
+// journal records module calls so tests can assert the lifecycle order.
 type journal struct {
 	mu     sync.Mutex
 	events []string
@@ -61,7 +61,7 @@ func (m *fakeModule) Stop(context.Context) error {
 
 func (m *fakeModule) Health(context.Context) error { return m.healthErr }
 
-// модуль без фоновой работы: реализует только обязательную часть Module
+// bareModule implements only the required part of Module.
 type bareModule struct {
 	name    string
 	journal *journal
@@ -76,7 +76,7 @@ func (m *bareModule) Init(_ context.Context, _ *platform.App) error {
 
 func testConfig(started func(string)) platform.Config {
 	return platform.Config{
-		Service:         "тест",
+		Service:         "test",
 		OpsAddr:         "127.0.0.1:0",
 		ShutdownTimeout: 5 * time.Second,
 		Logger:          logx.New(logx.Options{Writer: io.Discard}),
@@ -84,8 +84,8 @@ func testConfig(started func(string)) platform.Config {
 	}
 }
 
-// runUntilStarted поднимает приложение, ждёт запуска и возвращает адрес служебного
-// сервера и функцию остановки, которая дожидается завершения Run.
+// runUntilStarted boots the application, waits for startup and returns the ops address
+// together with a stop function that waits for Run to return.
 func runUntilStarted(t *testing.T, cfg platform.Config, modules []platform.Module, wire platform.Wire) (string, func() error) {
 	t.Helper()
 
@@ -111,16 +111,16 @@ func runUntilStarted(t *testing.T, cfg platform.Config, modules []platform.Modul
 			case err := <-errCh:
 				return err
 			case <-time.After(10 * time.Second):
-				return errors.New("Run не завершился после отмены контекста")
+				return errors.New("Run did not return after the context was cancelled")
 			}
 		}
 	case err := <-errCh:
 		cancel()
-		t.Fatalf("Run завершился до запуска: %v", err)
+		t.Fatalf("Run returned before startup: %v", err)
 		return "", nil
 	case <-time.After(10 * time.Second):
 		cancel()
-		t.Fatal("приложение не запустилось")
+		t.Fatal("the application did not start")
 		return "", nil
 	}
 }
@@ -145,11 +145,11 @@ func TestLifecycleOrder(t *testing.T) {
 		"init:postgres", "init:settings", "init:river",
 		"wire",
 		"start:postgres", "start:river",
-		"stop:river", "stop:postgres", // остановка в обратном порядке
+		"stop:river", "stop:postgres", // reverse order
 	}
 	got := j.list()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("порядок вызовов:\n получили %v\n ждали   %v", got, want)
+		t.Errorf("call order:\n got  %v\n want %v", got, want)
 	}
 }
 
@@ -157,15 +157,15 @@ func TestStartErrorStopsInitialized(t *testing.T) {
 	j := &journal{}
 	modules := []platform.Module{
 		&fakeModule{name: "postgres", journal: j},
-		&fakeModule{name: "river", journal: j, startErr: errors.New("очередь недоступна")},
+		&fakeModule{name: "river", journal: j, startErr: errors.New("queue unavailable")},
 	}
 
 	err := platform.RunContext(context.Background(), testConfig(nil), modules, nil)
-	if err == nil || !strings.Contains(err.Error(), "очередь недоступна") {
-		t.Fatalf("ждали ошибку запуска, получили %v", err)
+	if err == nil || !strings.Contains(err.Error(), "queue unavailable") {
+		t.Fatalf("want a start error, got %v", err)
 	}
 	if got := strings.Join(j.list(), ","); !strings.Contains(got, "stop:river,stop:postgres") {
-		t.Errorf("поднятые модули должны быть остановлены: %v", j.list())
+		t.Errorf("modules that are up must be stopped: %v", j.list())
 	}
 }
 
@@ -173,17 +173,17 @@ func TestInitErrorStopsPrevious(t *testing.T) {
 	j := &journal{}
 	modules := []platform.Module{
 		&fakeModule{name: "postgres", journal: j},
-		&fakeModule{name: "settings", journal: j, initErr: errors.New("нет схемы")},
+		&fakeModule{name: "settings", journal: j, initErr: errors.New("schema is missing")},
 		&fakeModule{name: "river", journal: j},
 	}
 
 	err := platform.RunContext(context.Background(), testConfig(nil), modules, nil)
-	if err == nil || !strings.Contains(err.Error(), "нет схемы") {
-		t.Fatalf("ждали ошибку инициализации, получили %v", err)
+	if err == nil || !strings.Contains(err.Error(), "schema is missing") {
+		t.Fatalf("want an init error, got %v", err)
 	}
 	got := j.list()
 	if strings.Join(got, ",") != "init:postgres,init:settings,stop:postgres" {
-		t.Errorf("после сбоя инициализации: %v", got)
+		t.Errorf("after a failed init: %v", got)
 	}
 }
 
@@ -192,13 +192,13 @@ func TestWireErrorStopsModules(t *testing.T) {
 	modules := []platform.Module{&fakeModule{name: "postgres", journal: j}}
 
 	err := platform.RunContext(context.Background(), testConfig(nil), modules,
-		func(*platform.App) error { return errors.New("нет обработчика") })
+		func(*platform.App) error { return errors.New("handler is missing") })
 
-	if err == nil || !strings.Contains(err.Error(), "сборка домена") {
-		t.Fatalf("ждали ошибку сборки домена, получили %v", err)
+	if err == nil || !strings.Contains(err.Error(), "wire domain") {
+		t.Fatalf("want a wiring error, got %v", err)
 	}
 	if got := strings.Join(j.list(), ","); got != "init:postgres,stop:postgres" {
-		t.Errorf("модули должны быть остановлены: %v", j.list())
+		t.Errorf("modules must be stopped: %v", j.list())
 	}
 }
 
@@ -206,7 +206,7 @@ func TestHealthEndpoint(t *testing.T) {
 	j := &journal{}
 	modules := []platform.Module{
 		&fakeModule{name: "postgres", journal: j},
-		&bareModule{name: "settings", journal: j}, // без Health — в ответе его нет
+		&bareModule{name: "settings", journal: j}, // no Health, so it is absent from the response
 	}
 
 	addr, stop := runUntilStarted(t, testConfig(nil), modules, nil)
@@ -222,13 +222,13 @@ func TestHealthEndpoint(t *testing.T) {
 		Checks map[string]string `json:"checks"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("разбор ответа: %v", err)
+		t.Fatalf("decode response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK || body.Status != "ok" || body.Checks["postgres"] != "ok" {
 		t.Errorf("health = %d %+v", resp.StatusCode, body)
 	}
 	if _, ok := body.Checks["settings"]; ok {
-		t.Error("модуль без HealthChecker не должен попадать в health")
+		t.Error("a module without HealthChecker must not appear in health")
 	}
 	if err := stop(); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -238,7 +238,7 @@ func TestHealthEndpoint(t *testing.T) {
 func TestHealthReportsFailure(t *testing.T) {
 	j := &journal{}
 	modules := []platform.Module{
-		&fakeModule{name: "river", journal: j, healthErr: errors.New("нет соединения")},
+		&fakeModule{name: "river", journal: j, healthErr: errors.New("no connection")},
 	}
 
 	addr, stop := runUntilStarted(t, testConfig(nil), modules, nil)
@@ -250,7 +250,7 @@ func TestHealthReportsFailure(t *testing.T) {
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), "нет соединения") {
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), "no connection") {
 		t.Errorf("health = %d %s", resp.StatusCode, raw)
 	}
 	if err := stop(); err != nil {
@@ -269,7 +269,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "go_goroutines") {
-		t.Errorf("metrics = %d, тело: %.120s", resp.StatusCode, raw)
+		t.Errorf("metrics = %d, body: %.120s", resp.StatusCode, raw)
 	}
 	if err := stop(); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -290,18 +290,18 @@ func TestWireSeesContainer(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got == nil || got.name != "из модуля" {
-		t.Errorf("сборка домена не увидела значение из контейнера: %+v", got)
+	if got == nil || got.name != "from the module" {
+		t.Errorf("wiring did not see the value from the container: %+v", got)
 	}
 }
 
-// providerModule кладёт значение в контейнер на этапе Init
+// providerModule puts a value into the container during Init.
 type providerModule struct{ journal *journal }
 
 func (m *providerModule) Name() string { return "provider" }
 
 func (m *providerModule) Init(_ context.Context, app *platform.App) error {
 	m.journal.add("init:provider")
-	platform.Provide(app, "из модуля")
+	platform.Provide(app, "from the module")
 	return nil
 }

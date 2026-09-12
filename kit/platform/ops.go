@@ -18,8 +18,8 @@ const (
 	readHeaderTimeout = 5 * time.Second
 )
 
-// opsServer — служебный сервер: /health и /metrics. Поднимается всегда,
-// отдельно от прикладных портов, чтобы проверки не зависели от модуля api.
+// opsServer serves /health and /metrics. It always runs, separately from application
+// ports, so probes do not depend on the api module being enabled.
 type opsServer struct {
 	srv *http.Server
 	ln  net.Listener
@@ -32,7 +32,7 @@ func startOps(addr string, app *App) (*opsServer, error) {
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("служебный сервер на %s: %w", addr, err)
+		return nil, fmt.Errorf("ops server on %s: %w", addr, err)
 	}
 
 	s := &opsServer{
@@ -41,7 +41,7 @@ func startOps(addr string, app *App) (*opsServer, error) {
 	}
 	go func() {
 		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			app.log.Error("служебный сервер остановлен с ошибкой", "err", err)
+			app.log.Error("ops server stopped with an error", "err", err)
 		}
 	}()
 	return s, nil
@@ -88,6 +88,6 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		a.log.Error("не удалось отдать health", "err", err)
+		a.log.Error("failed to write health response", "err", err)
 	}
 }

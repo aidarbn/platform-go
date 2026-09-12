@@ -1,4 +1,4 @@
-// Package spec читает и проверяет platformgo.yaml — описание проекта.
+// Package spec reads and validates platformgo.yaml, the description of a project.
 package spec
 
 import (
@@ -13,13 +13,13 @@ import (
 	"github.com/aidarbn/platform-go/internal/registry"
 )
 
-// FileName — имя файла описания в корне проекта.
+// FileName is the description file in the project root.
 const FileName = "platformgo.yaml"
 
-// SchemaVersion — версия формата, которую понимает эта версия platformgo.
+// SchemaVersion is the file format this platformgo understands.
 const SchemaVersion = 1
 
-// File — содержимое platformgo.yaml.
+// File is the content of platformgo.yaml.
 type File struct {
 	Schema   int                       `yaml:"schema"`
 	Platform string                    `yaml:"platform"`
@@ -27,14 +27,14 @@ type File struct {
 	Modules  map[string]map[string]any `yaml:"modules"`
 }
 
-// Project — сведения о проекте.
+// Project describes the project itself.
 type Project struct {
-	Module  string `yaml:"module"`  // путь Go-модуля
-	Service string `yaml:"service"` // имя сервиса в логах
-	Go      string `yaml:"go"`      // версия Go
+	Module  string `yaml:"module"`  // Go module path
+	Service string `yaml:"service"` // service name in logs
+	Go      string `yaml:"go"`      // Go version
 }
 
-// Load читает файл описания и проверяет его.
+// Load reads the description file and validates it.
 func Load(path string) (*File, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -43,13 +43,13 @@ func Load(path string) (*File, error) {
 	return Parse(raw)
 }
 
-// Parse разбирает содержимое файла описания.
+// Parse reads the description from bytes.
 func Parse(raw []byte) (*File, error) {
 	var f File
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
-	dec.KnownFields(true) // опечатка в имени поля — ошибка, а не молчаливое игнорирование
+	dec.KnownFields(true) // a typo in a field name is an error, not a silently ignored key
 	if err := dec.Decode(&f); err != nil {
-		return nil, fmt.Errorf("%s: разбор: %w", FileName, err)
+		return nil, fmt.Errorf("%s: parse: %w", FileName, err)
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
@@ -62,23 +62,23 @@ func (f *File) validate() error {
 
 	switch {
 	case f.Schema == 0:
-		errs = append(errs, errors.New("не задано поле schema"))
+		errs = append(errs, errors.New("schema field is missing"))
 	case f.Schema > SchemaVersion:
-		errs = append(errs, fmt.Errorf("schema %d новее, чем понимает эта версия platformgo (%d) — обновите platformgo", f.Schema, SchemaVersion))
+		errs = append(errs, fmt.Errorf("schema %d is newer than this platformgo understands (%d): upgrade platformgo", f.Schema, SchemaVersion))
 	}
 	if f.Project.Module == "" {
-		errs = append(errs, errors.New("не задано project.module"))
+		errs = append(errs, errors.New("project.module is missing"))
 	}
 
 	for _, name := range f.moduleNames() {
 		m, ok := registry.Get(name)
 		if !ok {
-			errs = append(errs, fmt.Errorf("неизвестный модуль %q, известные: %s", name, strings.Join(registry.Names(), ", ")))
+			errs = append(errs, fmt.Errorf("unknown module %q, known modules: %s", name, strings.Join(registry.Names(), ", ")))
 			continue
 		}
 		for _, dep := range m.Requires {
 			if _, enabled := f.Modules[dep]; !enabled {
-				errs = append(errs, fmt.Errorf("модуль %s требует модуль %s — добавьте его в modules", name, dep))
+				errs = append(errs, fmt.Errorf("module %s requires module %s: add it to modules", name, dep))
 			}
 		}
 	}
@@ -97,7 +97,7 @@ func (f *File) moduleNames() []string {
 	return out
 }
 
-// Service возвращает имя сервиса: из файла или последний элемент пути Go-модуля.
+// Service returns the service name: from the file, or the last element of the module path.
 func (f *File) Service() string {
 	if f.Project.Service != "" {
 		return f.Project.Service
@@ -106,8 +106,8 @@ func (f *File) Service() string {
 	return parts[len(parts)-1]
 }
 
-// EnabledModules возвращает модули в порядке зависимостей: сначала те, от кого зависят.
-// Порядок устойчивый, поэтому сгенерированные файлы не меняются между запусками.
+// EnabledModules returns modules in dependency order: dependencies come first.
+// The order is stable, so generated files do not change between runs.
 func (f *File) EnabledModules() []registry.Module {
 	var out []registry.Module
 	added := make(map[string]bool, len(f.Modules))

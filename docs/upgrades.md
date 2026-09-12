@@ -1,52 +1,52 @@
-# Обновляемость проектов
+# Upgradability
 
-Гарантия держится на трёх слоях: архитектура, при которой обновлять почти нечего; механизмы, которые обновляют остальное; тесты платформы, которые доказывают, что обновление проходит, до выпуска.
+The guarantee rests on three layers: an architecture that leaves almost nothing to upgrade, mechanisms that upgrade the rest, and platform tests that prove an upgrade works before it is released.
 
-## 1. Архитектура
+## 1. Architecture
 
-| Правило | Как работает |
+| Rule | How it works |
 |---|---|
-| Код модулей — в `kit`, а не в проекте | большая часть обновлений — `go get` новой версии, без слияния файлов |
-| Managed-файлов минимум, и они только перезаписываются | в проект копируется лишь то, что инструментам нужно видеть в репозитории: CI, Dockerfile, `buf.gen.yaml`, `platform.mk` |
-| Managed-файлы нельзя править руками | `platformgo verify` в CI проекта сверяет хеши из `platformgo.lock` и роняет сборку при расхождении — поэтому перезапись всегда безопасна |
-| Точки расширения вместо правок | `Makefile` проекта подключает `platform.mk` и добавляет свои цели; CI — общий воркфлоу с параметрами; линтер и `buf.gen.yaml` собираются из `platformgo.yaml`, где есть секции `extra` |
-| Owned-код не трогаем без кодмода | созданный пример принадлежит проекту; платформа меняет его только автоматическим переписыванием кода |
+| Module code lives in `kit`, not in the project | most upgrades are a `go get`, with no file merging |
+| As few managed files as possible, and they are only rewritten | only what tools must see in the repository is copied: CI, Dockerfile, `buf.gen.yaml`, `platform.mk` |
+| Managed files must not be edited by hand | `platformgo verify` in the project CI compares hashes from `platformgo.lock` and fails on a mismatch, so rewriting is always safe |
+| Extension points instead of edits | the project `Makefile` includes `platform.mk` and adds its own targets; CI is a shared workflow with inputs; linters and `buf.gen.yaml` are assembled from `platformgo.yaml`, which has `extra` sections |
+| Owned code is never touched without a codemod | a scaffold created once belongs to the project; the platform changes it only through automated rewriting |
 
-## 2. Механизмы `platformgo upgrade`
+## 2. What `platformgo upgrade` does
 
 ```
 $ platformgo upgrade --dry-run
-платформа   v0.4.2 → v0.6.0 (шаги: v0.5.0, v0.6.0)
-конфиг      platformgo.yaml: schema 2 → 3
-библиотеки  platform-go/kit v0.4.2 → v0.6.0
-managed     перезаписать: platform.mk, ci.yml, buf.gen.yaml, .golangci.yml
-кодмоды     river.NewInserter → river.Inserter: 3 места
-генерация   modules.gen.go, config.gen.go, OpenAPI
-проверка    go build, go test, platformgo verify
+platform    v0.4.2 → v0.6.0 (steps: v0.5.0, v0.6.0)
+config      platformgo.yaml: schema 2 → 3
+libraries   platform-go/kit v0.4.2 → v0.6.0
+managed     rewrite: platform.mk, ci.yml, buf.gen.yaml, .golangci.yml
+codemods    river.NewInserter → river.Inserter: 3 places
+generate    modules.gen.go, config.gen.go, OpenAPI
+checks      go build, go test, platformgo verify
 ```
 
-| Механизм | Суть |
+| Mechanism | What it is |
 |---|---|
-| Пошаговые миграции | у каждой версии платформы — манифест шагов; прыжок через версии выполняется по шагам |
-| Миграции конфига | у `platformgo.yaml` номер схемы; переименования и переносы полей делает код |
-| Кодмоды | изменения API `kit` сопровождаются переписыванием проектного кода по дереву разбора Go (`golang.org/x/tools/go/analysis` с исправлениями); простые переименования — через `//go:fix inline` |
-| Закреплённые версии инструментов | версия платформы фиксирует buf, templ и остальные генераторы — сгенерированный код одинаков у всех |
-| Одно обновление — один коммит | upgrade в отдельной ветке одним коммитом; откат — `git revert` |
+| Step by step migrations | every platform version ships a manifest of steps; skipping versions replays them in order |
+| Config migrations | `platformgo.yaml` carries a schema number; renames and moves are done by code |
+| Codemods | changes to the `kit` API come with rewrites of project code through the Go syntax tree (`golang.org/x/tools/go/analysis` with suggested fixes); simple renames use `//go:fix inline` |
+| Pinned tool versions | a platform version pins buf, templ and the other generators, so generated code is identical everywhere |
+| One upgrade, one commit | upgrade runs on a branch and lands as a single commit; rollback is `git revert` |
 
-## 3. Тесты платформы
+## 3. Platform tests
 
-| Проверка | Что ловит |
+| Check | What it catches |
 |---|---|
-| Матрица обновлений | проекты, созданные последними N минорными версиями с разными наборами модулей, обновляются до новой; `go build`, `go test`, `verify`, `generate` без диффа. Упала одна комбинация — выпуск не выходит |
-| Совместимость API `kit` | `gorelease` / `apidiff` против прошлого тега; ломающее изменение без мажорной версии роняет CI |
-| Эталонные проекты | демо-сервисы в репозитории на типовые наборы модулей, всегда на последней версии |
-| Кодмоды | тесты «было → стало»: результат совпадает и компилируется |
+| Upgrade matrix | projects created by the last N minor versions with different module sets are upgraded to the new one; `go build`, `go test`, `verify` and `generate` must be clean. One failing combination blocks the release |
+| `kit` API compatibility | `gorelease` or `apidiff` against the previous tag; a breaking change without a major bump fails CI |
+| Reference projects | demo services in the repository, one per typical module set, always on the latest version |
+| Codemods | before and after tests: the result matches and compiles |
 
-## Политика версий
+## Version policy
 
-| Правило | Что значит |
+| Rule | What it means |
 |---|---|
-| SemVer | минорная версия не ломает проекты — изменения закрывают миграции и кодмоды; мажорная — с руководством по переходу |
-| Устаревание перед удалением | API `kit` сначала `// Deprecated:` и живёт минимум одну минорную версию |
-| Окно поддержки | обновление гарантировано с последних N минорных версий, со старших — по шагам |
-| Заметки к выпуску | `CHANGELOG` для людей и манифест шагов для `platformgo` собираются из одного источника |
+| SemVer | a minor version never breaks projects: changes are covered by migrations and codemods; a major version comes with an upgrade guide |
+| Deprecation before removal | a `kit` API is first marked `// Deprecated:` and lives for at least one minor version |
+| Support window | upgrades are guaranteed from the last N minor versions; older ones go step by step |
+| Release notes | a human `CHANGELOG` and the machine readable manifest of steps are built from one source |

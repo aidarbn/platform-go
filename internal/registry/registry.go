@@ -1,8 +1,8 @@
-// Package registry — каталог модулей, которые умеет подключать platformgo.
+// Package registry is the catalogue of modules platformgo knows how to wire in.
 //
-// Реестр знает о каждом модуле ровно то, что нужно генератору: пакет, тип настроек,
-// зависимости и переменные окружения. Поэтому добавление модуля в проект не требует
-// правок кода: генератор собирает подключение из этого описания.
+// For every module it holds exactly what the generator needs: package, settings type,
+// dependencies and environment variables. That is why enabling a module needs no code
+// changes: the generator assembles the wiring from this description.
 package registry
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// EnvVar — переменная окружения модуля для .env.example.
+// EnvVar describes an environment variable of a module for .env.example.
 type EnvVar struct {
 	Key      string
 	Example  string
@@ -19,23 +19,23 @@ type EnvVar struct {
 	Required bool
 }
 
-// Module — описание модуля платформы.
+// Module describes a platform module.
 type Module struct {
-	Name     string   // имя секции в platformgo.yaml
-	Requires []string // модули, без которых не работает
-	Import   string   // путь пакета модуля
-	Package  string   // имя пакета в коде
-	Field    string   // поле в структуре Config проекта
+	Name     string   // section name in platformgo.yaml
+	Requires []string // modules it cannot work without
+	Import   string   // import path of the module package
+	Package  string   // package name in code
+	Field    string   // field name in the project's Config struct
 	Env      []EnvVar
 }
 
-// ConfigType — тип настроек модуля, например postgres.Config.
+// ConfigType is the settings type of the module, for example postgres.Config.
 func (m Module) ConfigType() string { return m.Package + ".Config" }
 
-// LoadCall — вызов чтения настроек из окружения.
+// LoadCall is the call that reads settings from the environment.
 func (m Module) LoadCall() string { return m.Package + ".Load(l)" }
 
-// NewCall — создание модуля с настройками из структуры Config.
+// NewCall builds the module from the project's Config struct.
 func (m Module) NewCall() string { return fmt.Sprintf("%s.New(cfg.%s)", m.Package, m.Field) }
 
 var all = []Module{
@@ -45,21 +45,21 @@ var all = []Module{
 		Package: "postgres",
 		Field:   "Postgres",
 		Env: []EnvVar{
-			{Key: "DATABASE_URL", Example: "postgres://app:app@localhost:5432/app?sslmode=disable", Comment: "адрес базы", Required: true},
-			{Key: "DATABASE_MAX_CONNS", Example: "10", Comment: "предел соединений в пуле"},
-			{Key: "DATABASE_MIN_CONNS", Example: "0", Comment: "сколько соединений держать открытыми"},
+			{Key: "DATABASE_URL", Example: "postgres://app:app@localhost:5432/app?sslmode=disable", Comment: "database address", Required: true},
+			{Key: "DATABASE_MAX_CONNS", Example: "10", Comment: "connection limit"},
+			{Key: "DATABASE_MIN_CONNS", Example: "0", Comment: "connections kept open"},
 		},
 	},
 }
 
-// All возвращает все известные модули в алфавитном порядке.
+// All returns every known module in alphabetical order.
 func All() []Module {
 	out := slices.Clone(all)
 	slices.SortFunc(out, func(a, b Module) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 
-// Get возвращает модуль по имени.
+// Get returns a module by name.
 func Get(name string) (Module, bool) {
 	for _, m := range all {
 		if m.Name == name {
@@ -69,7 +69,7 @@ func Get(name string) (Module, bool) {
 	return Module{}, false
 }
 
-// Names возвращает имена известных модулей.
+// Names returns the names of known modules.
 func Names() []string {
 	out := make([]string, 0, len(all))
 	for _, m := range All() {

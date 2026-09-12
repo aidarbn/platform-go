@@ -1,17 +1,19 @@
 # platformgo.yaml
 
-`platformgo.yaml` в корне проекта — единственный источник правды об устройстве проекта: какие модули подключены и как они настроены технически, дополнительная генерация, правила линтера, CI. Бизнес-настройки здесь не хранятся — см. [settings.md](settings.md). Список модулей — [modules.md](modules.md). Проект меняется так: правишь файл → `platformgo plan` → `platformgo apply`. Команд `add` и `remove` нет.
+`platformgo.yaml` in the project root is the single source of truth about how the project is put together: which modules are enabled and how they are configured technically, extra generation, linter rules, CI. The project changes like this: edit the file, run `platformgo plan`, then `platformgo apply`. There are no `add` or `remove` commands.
 
-## Файлы
+Business settings do not live here — see [settings.md](settings.md). The list of modules is in [modules.md](modules.md).
 
-| Файл | Кто пишет | Что внутри | В git |
+## Files
+
+| File | Written by | Content | In git |
 |---|---|---|---|
-| `platformgo.yaml` | человек | что нужно проекту | да |
-| `platformgo.lock` | `platformgo` | что фактически применено: версии модулей и библиотек, хеши managed-файлов | да |
+| `platformgo.yaml` | a human | what the project needs | yes |
+| `platformgo.lock` | `platformgo` | what has actually been applied: module and library versions, hashes of managed files | yes |
 
-Как `go.mod` и `go.sum`: намерение отдельно, зафиксированный результат отдельно.
+Same split as `go.mod` and `go.sum`: intent in one file, the recorded result in the other.
 
-## Пример
+## Example
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.2.0/schema/platformgo.schema.json
@@ -29,14 +31,14 @@ modules:
     queries: sqlc
 
   river:
-    ui: true                       # riverui в docker-compose
+    ui: true
 
   settings:
-    schema: settings.yaml          # схема бизнес-настроек проекта
+    schema: settings.yaml
     storage: postgres
 
   admin:
-    addr: :8081                    # своя админка в том же бинарнике
+    addr: :8081
     auth: session
     totp: true
 
@@ -64,39 +66,39 @@ ci:
   security_scan: true
 ```
 
-## Правила
+## Rules
 
-- **Секретов в файле нет.** Только структура и настройки; значения — из переменных окружения. `.env.example` генерируется по файлу.
-- **Схема JSON** публикуется для каждой версии платформы; ссылка в первой строке включает автодополнение и проверку в редакторе.
-- **`schema`** — версия формата файла. `platformgo upgrade` переводит файл на новую схему миграциями, см. [upgrades.md](upgrades.md).
-- **Модуль добавляется** появлением секции в `modules`, **убирается** её удалением. Owned-файлы модуля при удалении остаются — платформа предупреждает о них.
-- **Только техническая настройка модуля.** Пути, адреса, инструменты генерации, включение вспомогательных сервисов. Расписания, лимиты, таймауты, флаги, число попыток, имена очередей и бакетов — это бизнес-настройки и код проекта, см. [settings.md](settings.md).
-- **Зависимости ставит платформа**: соседние модули (river требует postgres — `plan` об этом скажет), Go-модули и Go-инструменты с закреплёнными версиями, сервисы локальной инфраструктуры в `docker-compose.yml`. Системные программы (Docker) проверяет `platformgo doctor`.
+- **No secrets in the file.** Only structure and settings; values come from environment variables. `.env.example` is generated from the file.
+- **A JSON schema** is published for every platform version; the link on the first line turns on completion and validation in editors.
+- **`schema`** is the file format version. `platformgo upgrade` migrates the file to a newer schema, see [upgrades.md](upgrades.md).
+- **A module is enabled** by adding its section under `modules` and disabled by removing it. Owned files stay behind when a module is removed, and the platform says so.
+- **Technical settings only.** Paths, addresses, generation tools, optional services. Schedules, limits, timeouts, flags, retry counts, queue and bucket names are business settings and project code, see [settings.md](settings.md).
+- **The platform installs dependencies**: required modules (river needs postgres, and `plan` says so), Go modules and Go tools at pinned versions, local infrastructure services in `docker-compose.yml`. System programs such as Docker are checked by `platformgo doctor`.
 
-## Команды
+## Commands
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `platformgo new <имя>` | создаёт проект с `platformgo.yaml` и ядром |
-| `platformgo plan` | показывает, чем проект отличается от `platformgo.yaml`; ничего не меняет |
-| `platformgo apply` | приводит проект к `platformgo.yaml`: зависимости, managed-файлы, заготовки, генерация, `go build`, `go test`; обновляет `platformgo.lock` |
-| `platformgo generate` | только генерация; `--check` для CI падает при расхождении |
-| `platformgo verify` | для CI: проект соответствует файлу, managed-файлы не тронуты, генерация актуальна |
-| `platformgo upgrade` | переводит проект на новую версию платформы |
-| `platformgo doctor` | проверяет инструменты и системные зависимости; `--fix` предлагает установить |
-| `platformgo setup` | автодополнение и псевдоним `pgo` |
+| `platformgo new <name>` | creates a project with `platformgo.yaml` and the core |
+| `platformgo plan` | shows how the project differs from `platformgo.yaml`; changes nothing |
+| `platformgo apply` | brings the project in line: dependencies, managed files, scaffolds, generation, `go build`, `go test`; updates `platformgo.lock` |
+| `platformgo generate` | generation only; `--check` fails in CI when something is stale |
+| `platformgo verify` | for CI: the project matches the file, managed files are untouched, generation is fresh |
+| `platformgo upgrade` | moves the project to a new platform version |
+| `platformgo doctor` | checks tools and system dependencies; `--fix` offers to install them |
+| `platformgo setup` | shell completion and the `pgo` alias |
 
-## Пример плана
+## Example plan
 
 ```
 $ platformgo plan
-+ модуль s3
++ module s3
     go get github.com/minio/minio-go/v7@v7.0.69
-    docker-compose.yml: сервис minio
+    docker-compose.yml: minio service
     config.gen.go: S3Config; .env.example: S3_*
-~ модуль river
-    ui: включён — docker-compose.yml: сервис riverui
-- модуль keycloak
-    убрать из modules.gen.go, docker-compose.yml, правил линтера
-    останутся owned-файлы: internal/adapters/out/keycloak/…
+~ module river
+    ui enabled — docker-compose.yml: riverui service
+- module keycloak
+    remove from modules.gen.go, docker-compose.yml, linter rules
+    owned files stay: internal/adapters/out/keycloak/…
 ```

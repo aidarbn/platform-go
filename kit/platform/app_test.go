@@ -40,7 +40,7 @@ func TestLookupMissing(t *testing.T) {
 	app := platform.NewApp(nil)
 
 	if _, ok := platform.Lookup[*pool](app); ok {
-		t.Error("в пустом контейнере ничего не должно находиться")
+		t.Error("an empty container must hold nothing")
 	}
 }
 
@@ -48,9 +48,8 @@ func TestGetMissingPanics(t *testing.T) {
 	app := platform.NewApp(nil)
 
 	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("ждали паники: отсутствие зависимости — ошибка сборки приложения")
+		if r := recover(); r == nil {
+			t.Fatal("want a panic: a missing dependency is a wiring mistake")
 		}
 	}()
 	_ = platform.Get[*pool](app)
@@ -59,11 +58,11 @@ func TestGetMissingPanics(t *testing.T) {
 func TestProvideReplaces(t *testing.T) {
 	app := platform.NewApp(nil)
 
-	platform.Provide(app, &pool{dsn: "первый"})
-	platform.Provide(app, &pool{dsn: "второй"})
+	platform.Provide(app, &pool{dsn: "first"})
+	platform.Provide(app, &pool{dsn: "second"})
 
-	if got := platform.Get[*pool](app).dsn; got != "второй" {
-		t.Errorf("dsn = %q, ждали второй", got)
+	if got := platform.Get[*pool](app).dsn; got != "second" {
+		t.Errorf("dsn = %q, want second", got)
 	}
 }
 
@@ -71,13 +70,13 @@ func TestMetricsRegistry(t *testing.T) {
 	app := platform.NewApp(nil)
 
 	if app.Metrics() == nil {
-		t.Fatal("реестр метрик не создан")
+		t.Fatal("metrics registry is missing")
 	}
 	families, err := app.Metrics().Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
 	if len(families) == 0 {
-		t.Error("ждали метрики Go и процесса из коробки")
+		t.Error("want Go and process metrics out of the box")
 	}
 }

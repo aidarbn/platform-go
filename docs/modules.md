@@ -1,59 +1,59 @@
-# Каталог модулей
+# Module catalogue
 
-Модуль объявляется секцией в `platformgo.yaml` и применяется `platformgo apply`. Код модуля живёт в `kit/<модуль>` и подключается импортом; в проект попадают только настройки, сгенерированное подключение, managed-файлы инструментов и owned-заготовки.
+A module is declared as a section in `platformgo.yaml` and applied with `platformgo apply`. Module code lives in `kit/<module>` and is imported; a project only receives settings, generated wiring, managed tool files and owned scaffolds.
 
-| Модуль | Что даёт проекту |
+| Module | What it gives the project |
 |---|---|
-| **core** (всегда) | конфиг из окружения, slog, `/metrics`, `/health`, корректная остановка, трассировка, профилирование, Makefile, Dockerfile, линтер, CI |
-| **postgres** | пул pgx, миграции goose, миграции приложения, база в docker-compose, генерация запросов (sqlc или jet) |
-| **river** | очереди, периодические задания, воркеры, riverui, помощники для тестов |
-| **api** | gRPC-сервер с цепочкой интерцепторов, REST-шлюз, multipart, OpenAPI 3.1, страница документации |
-| **admin** | оболочка админки: вход, роли, TOTP, журнал действий; страницы настроек, заданий и состояния; точка для страниц проекта |
-| **settings** | бизнес-настройки: схема `settings.yaml`, значения в базе, кэш, уведомление об изменениях, типизированный доступ из кода |
-| **s3** | объектное хранилище (MinIO), загрузка файлов, сервис в docker-compose |
-| **keycloak** | интеграция с Keycloak, интерцептор авторизации, сервис в docker-compose |
-| **rbac** | casbin: роли и политики |
-| **i18n** | переводы, локаль в контексте, интерцепторы, миграция словарей |
-| **enums** | каталог перечислений по маркерам в домене |
-| **monitoring** | пороги алертов для внешнего агента мониторинга |
+| **core** (always) | settings from the environment, slog, `/metrics`, `/health`, graceful shutdown, tracing, profiling, Makefile, Dockerfile, linters, CI |
+| **postgres** | pgx pool, goose migrations, application migrations, database in docker-compose, query generation (sqlc and jet) |
+| **river** | queues, periodic jobs, workers, riverui, test helpers |
+| **api** | gRPC server with an interceptor chain, REST gateway, multipart, OpenAPI 3.1, documentation page |
+| **admin** | admin shell: login, roles, TOTP, audit log; pages for settings, jobs and state; a place for project pages |
+| **settings** | business settings: the `settings.yaml` schema, values in the database, cache, change notifications, typed access from code |
+| **s3** | object storage (MinIO), file uploads, service in docker-compose |
+| **keycloak** | Keycloak integration, authorisation interceptor, service in docker-compose |
+| **rbac** | casbin: roles and policies |
+| **i18n** | translations, locale in context, interceptors, dictionary migration |
+| **enums** | enum catalogue from markers in the domain |
+| **monitoring** | alert thresholds for an external monitoring agent |
 
-## Модуль `admin`
+## The `admin` module
 
-Поднимается вместе с приложением, в том же бинарнике.
+It runs together with the application, inside the same binary.
 
 ```yaml
 modules:
   admin:
-    addr: :8081      # свой порт; "" — вешать на общий порт по хосту admin.<домен>
-    auth: session    # session | basic | none (none слушает только 127.0.0.1)
+    addr: :8081      # own port; "" serves it on the shared port under admin.<domain>
+    auth: session    # session | basic | none (none listens on 127.0.0.1 only)
     totp: true
 ```
 
-Из коробки: страницы бизнес-настроек (генерируются из `settings.yaml`), очереди и задания River, состояние модулей и миграций, журнал действий, пользователи и роли. Шаблоны и статика встроены в бинарник, файлов в проекте не создают.
+Out of the box: business settings pages generated from `settings.yaml`, River queues and jobs, module and migration state, audit log, users and roles. Templates and static files are embedded into the binary and create no files in the project.
 
-Страницы проекта добавляются из его кода:
+Project pages are added from project code:
 
 ```go
 admin.AddPage(app, admin.Page{
-	Title:   "Заказы",
+	Title:   "Orders",
 	Path:    "/orders",
 	Roles:   []string{"support", "admin"},
 	Handler: adminui.NewOrders(orders),
 })
 ```
 
-Убрать админку — удалить секцию и выполнить `apply`; настройки тогда правятся командой `platformgo settings set`.
+Removing the admin UI means deleting the section and running `apply`; settings are then edited with `platformgo settings set`.
 
-## Роли процесса
+## Process roles
 
-Один бинарник, разный набор модулей:
+One binary, different sets of modules:
 
-| Запуск | Что поднимается |
+| Start | What runs |
 |---|---|
-| по умолчанию | все объявленные модули |
-| `--role=worker` | очереди и то, что им нужно; без API и админки |
-| `--role=api` | API и админка; без воркеров |
+| default | every declared module |
+| `--role=worker` | queues and what they need; no API, no admin UI |
+| `--role=api` | API and admin UI; no workers |
 
-## Зависимости между модулями
+## Dependencies between modules
 
-`river` требует `postgres`, `admin` требует `settings` для страницы настроек, `settings` требует `postgres`. `platformgo plan` показывает недостающие модули и предлагает их добавить.
+`river` requires `postgres`, `admin` requires `settings` for the settings pages, `settings` requires `postgres`. `platformgo plan` reports missing modules and offers to add them.

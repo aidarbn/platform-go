@@ -13,15 +13,15 @@ import (
 	"github.com/aidarbn/platform-go/kit/logx"
 )
 
-// Config — параметры запуска приложения. Пустые поля берут значения по умолчанию.
+// Config holds startup parameters. Empty fields fall back to defaults.
 type Config struct {
-	Service         string        // имя сервиса в логах
-	OpsAddr         string        // адрес служебного сервера, по умолчанию :9090
-	ShutdownTimeout time.Duration // общий таймаут остановки, по умолчанию 20s
+	Service         string        // service name in logs
+	OpsAddr         string        // ops server address, :9090 by default
+	ShutdownTimeout time.Duration // overall shutdown timeout, 20s by default
 	Logger          *slog.Logger
 
-	// OnStarted вызывается, когда подняты все модули и служебный сервер.
-	// Пригодится тестам и локальному запуску: сообщает фактический адрес.
+	// OnStarted is called once every module and the ops server are up. Tests and local
+	// runs use it to learn the actual ops address.
 	OnStarted func(opsAddr string)
 }
 
@@ -40,24 +40,23 @@ func (c *Config) setDefaults() {
 	}
 }
 
-// Wire — сборка предметной части проекта: сценарии, обработчики, воркеры.
-// Вызывается между Init и Start всех модулей, поэтому к старту очередей и серверов
-// все обработчики уже зарегистрированы.
+// Wire builds the project domain: use cases, handlers, workers. It runs between Init
+// and Start of every module, so queues and servers begin work with handlers in place.
 type Wire func(app *App) error
 
-// Run поднимает модули и блокируется до SIGINT или SIGTERM.
+// Run starts the modules and blocks until SIGINT or SIGTERM.
 func Run(cfg Config, modules []Module, wire Wire) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return RunContext(ctx, cfg, modules, wire)
 }
 
-// RunContext — то же, но останавливается по завершении ctx. Используется в тестах.
+// RunContext behaves like Run but stops when ctx is done. Tests use it.
 func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) error {
 	cfg.setDefaults()
 	app := newApp(cfg.Logger.With("service", cfg.Service))
 
-	// shutdown останавливает уже поднятое: вызывается на любом пути выхода.
+	// shutdown stops whatever is already up; it runs on every exit path.
 	var inited []Module
 	shutdown := func() error {
 		stopCtx, cancel := shutdownContext(ctx, cfg)
@@ -73,7 +72,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 
 	if wire != nil {
 		if err := wire(app); err != nil {
-			return errors.Join(fmt.Errorf("сборка домена: %w", err), shutdown())
+			return errors.Join(fmt.Errorf("wire domain: %w", err), shutdown())
 		}
 	}
 
@@ -85,21 +84,21 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 	if err != nil {
 		return errors.Join(err, shutdown())
 	}
-	app.log.Info("сервис запущен", "ops", ops.addr(), "модулей", len(modules))
+	app.log.Info("service started", "ops", ops.addr(), "modules", len(modules))
 	if cfg.OnStarted != nil {
 		cfg.OnStarted(ops.addr())
 	}
 
 	<-ctx.Done()
-	app.log.Info("останавливаемся")
+	app.log.Info("shutting down")
 
 	stopCtx, cancel := shutdownContext(ctx, cfg)
 	defer cancel()
 	return errors.Join(ops.stop(stopCtx), stopModules(stopCtx, app, inited))
 }
 
-// shutdownContext даёт остановке собственный таймаут: контекст запуска уже отменён,
-// а модулям нужно время закрыть соединения и дописать задания.
+// shutdownContext gives shutdown its own deadline: the run context is already cancelled,
+// yet modules still need time to close connections and finish in-flight work.
 func shutdownContext(ctx context.Context, cfg Config) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 }
@@ -108,14 +107,14 @@ func initModules(ctx context.Context, app *App, modules []Module) ([]Module, err
 	inited := make([]Module, 0, len(modules))
 	for _, m := range modules {
 		if err := m.Init(ctx, app); err != nil {
-			return inited, fmt.Errorf("модуль %s: инициализация: %w", m.Name(), err)
+			return inited, fmt.Errorf("module %s: init: %w", m.Name(), err)
 		}
 		inited = append(inited, m)
 
 		if hc, ok := m.(HealthChecker); ok {
 			app.AddHealthCheck(m.Name(), hc.Health)
 		}
-		app.log.Info("модуль подготовлен", "модуль", m.Name())
+		app.log.Info("module initialised", "module", m.Name())
 	}
 	return inited, nil
 }
@@ -127,9 +126,9 @@ func startModules(ctx context.Context, app *App, modules []Module) error {
 			continue
 		}
 		if err := s.Start(ctx); err != nil {
-			return fmt.Errorf("модуль %s: запуск: %w", m.Name(), err)
+			return fmt.Errorf("module %s: start: %w", m.Name(), err)
 		}
-		app.log.Info("модуль запущен", "модуль", m.Name())
+		app.log.Info("module started", "module", m.Name())
 	}
 	return nil
 }
@@ -143,10 +142,10 @@ func stopModules(ctx context.Context, app *App, inited []Module) error {
 			continue
 		}
 		if err := s.Stop(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("модуль %s: остановка: %w", m.Name(), err))
+			errs = append(errs, fmt.Errorf("module %s: stop: %w", m.Name(), err))
 			continue
 		}
-		app.log.Info("модуль остановлен", "модуль", m.Name())
+		app.log.Info("module stopped", "module", m.Name())
 	}
 	return errors.Join(errs...)
 }

@@ -1,4 +1,4 @@
-// Package logx собирает slog-логгер с одинаковыми настройками во всех проектах.
+// Package logx builds an slog logger configured the same way in every project.
 package logx
 
 import (
@@ -8,15 +8,15 @@ import (
 	"strings"
 )
 
-// Options настраивает логгер. Пустые поля берут значения по умолчанию:
-// уровень info, формат json, вывод в stdout.
+// Options configures the logger. Empty fields fall back to defaults:
+// info level, json format, stdout.
 type Options struct {
 	Level  string // debug, info, warn, error
 	Format string // json, text
 	Writer io.Writer
 }
 
-// New создаёт логгер.
+// New creates a logger.
 func New(o Options) *slog.Logger {
 	w := o.Writer
 	if w == nil {
@@ -31,7 +31,7 @@ func New(o Options) *slog.Logger {
 	return slog.New(h)
 }
 
-// Level разбирает уровень логирования. Неизвестное значение даёт info.
+// Level parses a log level. Anything unknown becomes info.
 func Level(s string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
@@ -45,8 +45,8 @@ func Level(s string) slog.Level {
 	}
 }
 
-// replaceAttr печатает ошибки текстом: иначе обработчик JSON выводит пустой объект
-// и в логе не остаётся ничего полезного.
+// replaceAttr renders errors as text. Without it the JSON handler writes an empty
+// object and the log line carries nothing useful.
 func replaceAttr(_ []string, a slog.Attr) slog.Attr {
 	if err, ok := a.Value.Any().(error); ok {
 		if err == nil {

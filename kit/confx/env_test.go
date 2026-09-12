@@ -24,12 +24,12 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("Duration = %v", got)
 	}
 	if err := l.Err(); err != nil {
-		t.Errorf("Err = %v, ждали nil", err)
+		t.Errorf("Err = %v, want nil", err)
 	}
 }
 
 func TestReadsValues(t *testing.T) {
-	t.Setenv("APP_HOST", " db ") // пробелы обрезаются
+	t.Setenv("APP_HOST", " db ") // surrounding spaces are trimmed
 	t.Setenv("APP_PORT", "5432")
 	t.Setenv("APP_DEBUG", "false")
 	t.Setenv("APP_TIMEOUT", "1m30s")
@@ -53,7 +53,7 @@ func TestReadsValues(t *testing.T) {
 		t.Errorf("Strings = %q", got)
 	}
 	if err := l.Err(); err != nil {
-		t.Errorf("Err = %v, ждали nil", err)
+		t.Errorf("Err = %v, want nil", err)
 	}
 }
 
@@ -62,13 +62,13 @@ func TestEmptyValueIsAbsent(t *testing.T) {
 
 	l := confx.New("APP")
 	if got := l.String("HOST", "localhost"); got != "localhost" {
-		t.Errorf("пустое значение должно считаться отсутствующим, получили %q", got)
+		t.Errorf("a blank value must count as unset, got %q", got)
 	}
 }
 
 func TestCollectsAllErrors(t *testing.T) {
-	t.Setenv("APP_PORT", "не число")
-	t.Setenv("APP_TIMEOUT", "вечность")
+	t.Setenv("APP_PORT", "not a number")
+	t.Setenv("APP_TIMEOUT", "forever")
 
 	l := confx.New("APP")
 	l.Required("DATABASE_URL")
@@ -77,11 +77,11 @@ func TestCollectsAllErrors(t *testing.T) {
 
 	err := l.Err()
 	if err == nil {
-		t.Fatal("ждали ошибки")
+		t.Fatal("want an error")
 	}
 	for _, want := range []string{"APP_DATABASE_URL", "APP_PORT", "APP_TIMEOUT"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("в ошибке нет %s: %v", want, err)
+			t.Errorf("error does not mention %s: %v", want, err)
 		}
 	}
 }

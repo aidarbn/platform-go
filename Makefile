@@ -1,18 +1,18 @@
 .PHONY: help test lint fmt tidy ci
 
-help: ## список целей
+help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
 
-test: ## тесты с детектором гонок
+test: ## tests with the race detector
 	go test -race ./...
 
 lint: ## go vet
 	go vet ./...
 
-fmt: ## форматирование
+fmt: ## formatting
 	gofmt -l -w .
 
-tidy: ## зависимости
+tidy: ## dependencies
 	go mod tidy
 
-ci: lint test ## то же, что в CI
+ci: lint test ## what CI runs

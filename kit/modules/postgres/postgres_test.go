@@ -64,23 +64,23 @@ func TestInitFailsOnUnreachableDatabase(t *testing.T) {
 	})
 
 	err := m.Init(context.Background(), platform.NewApp(nil))
-	if err == nil || !strings.Contains(err.Error(), "база недоступна") {
+	if err == nil || !strings.Contains(err.Error(), "database is unreachable") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestHealthWithoutInit(t *testing.T) {
 	if err := postgres.New(postgres.Config{}).Health(context.Background()); err == nil {
-		t.Fatal("до Init health должен возвращать ошибку")
+		t.Fatal("health must fail before Init")
 	}
 }
 
-// Полный жизненный цикл на настоящей базе. Запускается, если задан DATABASE_TEST_URL:
-// платформа поднимает модуль, health отвечает ok, метрики пула на месте.
+// Full lifecycle against a real database. Runs when DATABASE_TEST_URL is set: the
+// platform boots the module, health answers ok and pool metrics are present.
 func TestLifecycleWithRealDatabase(t *testing.T) {
 	url := os.Getenv("DATABASE_TEST_URL")
 	if url == "" {
-		t.Skip("DATABASE_TEST_URL не задан")
+		t.Skip("DATABASE_TEST_URL is not set")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,7 +88,7 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	cfg := platform.Config{
-		Service:         "тест",
+		Service:         "test",
 		OpsAddr:         "127.0.0.1:0",
 		ShutdownTimeout: 5 * time.Second,
 		Logger:          logx.New(logx.Options{Writer: io.Discard}),
@@ -103,10 +103,10 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	case addr = <-addrCh:
 	case err := <-errCh:
 		cancel()
-		t.Fatalf("Run завершился до запуска: %v", err)
+		t.Fatalf("Run returned before startup: %v", err)
 	case <-time.After(15 * time.Second):
 		cancel()
-		t.Fatal("приложение не запустилось")
+		t.Fatal("the application did not start")
 	}
 
 	resp, err := http.Get("http://" + addr + "/health")
@@ -120,7 +120,7 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 		Checks map[string]string `json:"checks"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("разбор ответа: %v", err)
+		t.Fatalf("decode response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK || body.Checks["postgres"] != "ok" {
 		t.Errorf("health = %d %+v", resp.StatusCode, body)
@@ -133,7 +133,7 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	defer metrics.Body.Close()
 	raw, _ := io.ReadAll(metrics.Body)
 	if !strings.Contains(string(raw), "pgdb_pool_max_conns") {
-		t.Error("метрик пула нет в /metrics")
+		t.Error("pool metrics are missing from /metrics")
 	}
 
 	cancel()
@@ -143,6 +143,6 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 			t.Fatalf("Run: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal(errors.New("Run не завершился"))
+		t.Fatal(errors.New("Run did not return"))
 	}
 }

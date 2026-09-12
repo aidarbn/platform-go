@@ -12,12 +12,12 @@ import (
 	"github.com/aidarbn/platform-go/internal/spec"
 )
 
-// Сквозная проверка: в пустом каталоге создаётся проект, генерируется подключение
-// модулей, и всё это компилируется. Проект содержит только предметную часть —
-// main.go и сборку домена; остальное сгенерировано.
+// End to end check: a project is created in an empty directory, the module wiring is
+// generated and the whole thing compiles. The project holds only the domain part —
+// main.go and the wiring function; everything else is generated.
 func TestGeneratedProjectCompiles(t *testing.T) {
 	if testing.Short() {
-		t.Skip("сборка проекта занимает время")
+		t.Skip("building a project takes time")
 	}
 
 	root := repoRoot(t)
@@ -41,7 +41,7 @@ require github.com/aidarbn/platform-go v0.0.0
 replace github.com/aidarbn/platform-go => `+root+`
 `)
 
-	// Единственные написанные руками файлы проекта: точка входа и сборка домена.
+	// The only hand written files of the project: entry point and domain wiring.
 	write(t, dir, "cmd/app/main.go", `package main
 
 import (
@@ -68,9 +68,9 @@ import (
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
-// wireDomain — предметная часть проекта.
+// wireDomain is the domain part of the project.
 func wireDomain(app *platform.App) error {
-	_ = postgres.Pool(app) // репозитории проекта берут пул из контейнера
+	_ = postgres.Pool(app) // project repositories take the pool from the container
 	return nil
 }
 `)
@@ -91,9 +91,9 @@ func wireDomain(app *platform.App) error {
 	goCmd(t, dir, "build", "./...")
 	goCmd(t, dir, "vet", "./...")
 
-	// Сгенерированное должно проходить gofmt: в CI проекта это проверяется.
+	// Generated files must pass gofmt: the project CI checks it.
 	if unformatted := gofmtList(t, dir); unformatted != "" {
-		t.Errorf("gofmt нашёл неотформатированные файлы:\n%s", unformatted)
+		t.Errorf("gofmt reported unformatted files:\n%s", unformatted)
 	}
 }
 
@@ -101,7 +101,7 @@ func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("не удалось определить путь к репозиторию")
+		t.Fatal("cannot locate the repository path")
 	}
 	root, err := filepath.Abs(filepath.Join(filepath.Dir(file), "..", ".."))
 	if err != nil {
@@ -134,8 +134,8 @@ func goOutput(t *testing.T, dir string, args ...string) string {
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GOFLAGS=-mod=mod",
-		"GOPROXY=off", // собираем из кэша модулей, без сети
-		"GOPRIVATE=*", // без обращения к базе контрольных сумм
+		"GOPROXY=off", // build from the module cache, no network
+		"GOPRIVATE=*", // skip the checksum database
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -144,7 +144,7 @@ func goOutput(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-// gofmtList возвращает файлы, которые не проходят gofmt.
+// gofmtList returns files that do not pass gofmt.
 func gofmtList(t *testing.T, dir string) string {
 	t.Helper()
 	cmd := exec.Command("gofmt", "-l", ".")

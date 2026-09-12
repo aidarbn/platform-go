@@ -30,7 +30,7 @@ func TestParseMinimal(t *testing.T) {
 	}
 	mods := f.EnabledModules()
 	if len(mods) != 1 || mods[0].Name != "postgres" {
-		t.Errorf("модули = %+v", mods)
+		t.Errorf("modules = %+v", mods)
 	}
 }
 
@@ -53,7 +53,7 @@ func TestRequiresSchema(t *testing.T) {
 
 func TestRejectsNewerSchema(t *testing.T) {
 	_, err := spec.Parse([]byte("schema: 99\nproject:\n  module: github.com/x/y\n"))
-	if err == nil || !strings.Contains(err.Error(), "обновите platformgo") {
+	if err == nil || !strings.Contains(err.Error(), "upgrade platformgo") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -66,16 +66,16 @@ func TestRequiresModulePath(t *testing.T) {
 }
 
 func TestRejectsUnknownModule(t *testing.T) {
-	_, err := spec.Parse([]byte("schema: 1\nproject:\n  module: github.com/x/y\nmodules:\n  редис: {}\n"))
-	if err == nil || !strings.Contains(err.Error(), "неизвестный модуль") {
+	_, err := spec.Parse([]byte("schema: 1\nproject:\n  module: github.com/x/y\nmodules:\n  redis: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "unknown module") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestRejectsUnknownField(t *testing.T) {
-	_, err := spec.Parse([]byte("schema: 1\nproject:\n  модуль: github.com/x/y\n"))
-	if err == nil || !strings.Contains(err.Error(), "разбор") {
-		t.Fatalf("опечатка в имени поля должна быть ошибкой, получили %v", err)
+	_, err := spec.Parse([]byte("schema: 1\nproject:\n  modul: github.com/x/y\n"))
+	if err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("a typo in a field name must be an error, got %v", err)
 	}
 }
 

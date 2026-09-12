@@ -1,26 +1,26 @@
-# Уровни настроек
+# Levels of settings
 
-В проекте четыре вида настроек. Они живут в разных местах, потому что меняются разными людьми и в разное время.
+A project has four kinds of settings. They live in different places because different people change them at different times.
 
-| Уровень | Что | Где | Кто меняет | Когда вступает в силу |
+| Level | What | Where | Who changes it | When it takes effect |
 |---|---|---|---|---|
-| **устройство проекта** | какие модули подключены, их технические параметры: пути, адреса, генерация, вспомогательные сервисы; линтер, CI | `platformgo.yaml` | разработчик | `platformgo apply`, деплой |
-| **окружение** | адреса баз и сервисов, секреты, размеры пулов, число воркеров на окружение | переменные окружения, секреты деплоя; `.env.example` генерируется | эксплуатация | запуск приложения |
-| **бизнес-настройки** | расписания, лимиты, таймауты, флаги, число попыток, параметры сценариев | модуль `settings`: схема `settings.yaml` в проекте, значения в базе, правка из админки | администратор, продукт | на лету, без деплоя |
-| **объявления в коде** | какие задания и очереди есть, какие бакеты, какие интерцепторы и в каком порядке | Go-код проекта: регистрация в `cmd/app/wire.go` и адаптерах | разработчик | сборка |
+| **project layout** | which modules are enabled and their technical parameters: paths, addresses, generation, optional services; linters, CI | `platformgo.yaml` | developer | `platformgo apply`, deploy |
+| **environment** | database and service addresses, secrets, pool sizes, worker counts per environment | environment variables and deployment secrets; `.env.example` is generated | operations | application start |
+| **business settings** | schedules, limits, timeouts, flags, retry counts, use case parameters | the `settings` module: a `settings.yaml` schema in the project, values in the database, edited from the admin UI | administrator, product | immediately, without a deploy |
+| **declarations in code** | which jobs and queues exist, which buckets, which interceptors and in what order | Go code of the project: registration in `cmd/app/wire.go` and adapters | developer | build |
 
-## Бизнес-настройки: модуль `settings`
+## Business settings: the `settings` module
 
-Схема описывает настройки, их типы, значения по умолчанию и ограничения. `platformgo generate` делает из неё типизированный код; значения хранятся в базе и кэшируются, админка их меняет.
+The schema describes the settings, their types, defaults and constraints. `platformgo generate` turns it into typed code; values are stored in the database and cached, and the admin UI edits them.
 
 ```yaml
-# settings.yaml — схема бизнес-настроек проекта
+# settings.yaml — the business settings schema of the project
 settings:
   orders.cleanup:
     enabled:  { type: bool,     default: true }
     schedule: { type: cron,     default: "0 3 * * *" }
   orders.create:
-    max_attempts: { type: int,  default: 5, min: 1, max: 20 }
+    max_attempts: { type: int,      default: 5, min: 1, max: 20 }
     timeout:      { type: duration, default: 30s }
   api.ratelimit:
     rps:   { type: int, default: 50 }
@@ -28,15 +28,15 @@ settings:
 ```
 
 ```go
-// сгенерировано из settings.yaml
+// generated from settings.yaml
 s := settings.From(app)
-s.OrdersCreate().MaxAttempts() // 5, пока в базе не задано иное
+s.OrdersCreate().MaxAttempts() // 5 until the database says otherwise
 s.OrdersCleanup().Schedule()   // "0 3 * * *"
 ```
 
-## Объявления в коде
+## Declarations in code
 
-Задания, очереди и их связь с бизнес-настройками — в коде проекта, а не в конфиге платформы:
+Jobs, queues and their link to business settings live in project code, not in the platform config:
 
 ```go
 // cmd/app/wire.go
@@ -45,16 +45,16 @@ func wireDomain(app *platform.App) error {
 
 	river.AddWorker(app, workers.NewCleanupExpired(repo))
 	river.Periodic(app, jobs.CleanupExpiredArgs{},
-		river.ScheduleFrom(s.OrdersCleanup().Schedule), // расписание из бизнес-настроек
+		river.ScheduleFrom(s.OrdersCleanup().Schedule), // schedule from business settings
 		river.EnabledFrom(s.OrdersCleanup().Enabled))
 	return nil
 }
 ```
 
-Число воркеров на очередь — параметр окружения (`RIVER_QUEUES=default=5,notify=3`): на проде и на стенде оно разное, а смысл заданий один.
+Worker counts per queue are an environment parameter (`RIVER_QUEUES=default=5,notify=3`): production and staging differ in capacity while the meaning of the jobs stays the same.
 
-## Почему так
+## Why this split
 
-- **Платформа не знает о предметной области.** `platformgo.yaml` одинаково устроен у любого проекта; бизнес-логика не протекает в инструмент.
-- **Бизнес-настройки меняются без разработчика и без деплоя.** Администратор правит расписание или лимит в админке — ни `apply`, ни релиз не нужны.
-- **Окружение отдельно от смысла.** Одинаковый код и одинаковые бизнес-настройки работают на разных стендах с разными ресурсами.
+- **The platform knows nothing about the domain.** `platformgo.yaml` looks the same in every project; business logic does not leak into the tool.
+- **Business settings change without a developer and without a deploy.** An administrator edits a schedule or a limit in the admin UI: no `apply`, no release.
+- **Environment is separate from meaning.** The same code and the same business settings run on different environments with different resources.

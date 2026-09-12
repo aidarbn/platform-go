@@ -1,7 +1,7 @@
-// Package confx читает настройки из переменных окружения.
+// Package confx reads settings from environment variables.
 //
-// Все ошибки собираются и возвращаются разом: приложение падает с полным списком
-// проблем, а не по одной за запуск.
+// Every problem is collected instead of returned immediately: the application fails
+// with the full list of bad or missing variables rather than one per restart.
 package confx
 
 import (
@@ -13,16 +13,16 @@ import (
 	"time"
 )
 
-// Loader читает переменные с общим префиксом и накапливает ошибки.
+// Loader reads variables sharing a prefix and accumulates errors.
 type Loader struct {
 	prefix string
 	errs   []error
 }
 
-// New создаёт загрузчик. Префикс может быть пустым.
+// New creates a loader. The prefix may be empty.
 func New(prefix string) *Loader { return &Loader{prefix: prefix} }
 
-// Key возвращает полное имя переменной с префиксом.
+// Key returns the full variable name including the prefix.
 func (l *Loader) Key(name string) string {
 	if l.prefix == "" {
 		return name
@@ -42,7 +42,7 @@ func (l *Loader) lookup(name string) (string, bool) {
 	return v, true
 }
 
-// String возвращает значение или def, если переменная не задана.
+// String returns the value or def when the variable is unset.
 func (l *Loader) String(name, def string) string {
 	if v, ok := l.lookup(name); ok {
 		return v
@@ -50,16 +50,16 @@ func (l *Loader) String(name, def string) string {
 	return def
 }
 
-// Required возвращает значение, а если переменной нет — запоминает ошибку.
+// Required returns the value and records an error when the variable is unset.
 func (l *Loader) Required(name string) string {
 	if v, ok := l.lookup(name); ok {
 		return v
 	}
-	l.errs = append(l.errs, fmt.Errorf("%s: обязательная переменная не задана", l.Key(name)))
+	l.errs = append(l.errs, fmt.Errorf("%s: required variable is not set", l.Key(name)))
 	return ""
 }
 
-// Int читает целое число.
+// Int reads an integer.
 func (l *Loader) Int(name string, def int) int {
 	v, ok := l.lookup(name)
 	if !ok {
@@ -67,13 +67,13 @@ func (l *Loader) Int(name string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		l.invalid(name, v, "целое число")
+		l.invalid(name, v, "an integer")
 		return def
 	}
 	return n
 }
 
-// Bool читает true или false.
+// Bool reads true or false.
 func (l *Loader) Bool(name string, def bool) bool {
 	v, ok := l.lookup(name)
 	if !ok {
@@ -81,13 +81,13 @@ func (l *Loader) Bool(name string, def bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		l.invalid(name, v, "true или false")
+		l.invalid(name, v, "true or false")
 		return def
 	}
 	return b
 }
 
-// Duration читает длительность в формате Go, например 30s или 5m.
+// Duration reads a Go duration such as 30s or 5m.
 func (l *Loader) Duration(name string, def time.Duration) time.Duration {
 	v, ok := l.lookup(name)
 	if !ok {
@@ -95,13 +95,13 @@ func (l *Loader) Duration(name string, def time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		l.invalid(name, v, "длительность, например 30s")
+		l.invalid(name, v, "a duration such as 30s")
 		return def
 	}
 	return d
 }
 
-// Strings читает список через запятую.
+// Strings reads a comma separated list.
 func (l *Loader) Strings(name string, def []string) []string {
 	v, ok := l.lookup(name)
 	if !ok {
@@ -121,8 +121,8 @@ func (l *Loader) Strings(name string, def []string) []string {
 }
 
 func (l *Loader) invalid(name, value, want string) {
-	l.errs = append(l.errs, fmt.Errorf("%s=%q: ожидается %s", l.Key(name), value, want))
+	l.errs = append(l.errs, fmt.Errorf("%s=%q: expected %s", l.Key(name), value, want))
 }
 
-// Err возвращает все накопленные ошибки одной.
+// Err returns every collected error as one.
 func (l *Loader) Err() error { return errors.Join(l.errs...) }
