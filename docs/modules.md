@@ -44,6 +44,19 @@ admin.AddPage(app, admin.Page{
 
 Removing the admin UI means deleting the section and running `apply`; settings are then edited with `platformgo settings set`.
 
+## The `settings` module
+
+Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.
+
+```yaml
+modules:
+  postgres: {}       # required: the values live in the database
+  settings:
+    schema: settings.yaml
+```
+
+The module creates its own table (`SETTINGS_TABLE`, `platform_settings` by default), loads the overrides during startup, refreshes them every `SETTINGS_REFRESH_INTERVAL` and reports through `/health` when it can no longer read them. The levels of settings and the generated API are described in [settings.md](settings.md).
+
 ## Process roles
 
 One binary, different sets of modules:

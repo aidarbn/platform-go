@@ -12,6 +12,7 @@ import (
 
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/registry"
+	"github.com/aidarbn/platform-go/internal/settingsdef"
 	"github.com/aidarbn/platform-go/internal/spec"
 	"github.com/aidarbn/platform-go/internal/version"
 )
@@ -90,6 +91,17 @@ func New(o Options) ([]string, error) {
 		files[path] = content
 	}
 
+	// The settings module starts from an example schema: an empty one would leave the
+	// project with an accessor that has nothing to return.
+	if gen.SettingsEnabled(f) {
+		code, err := gen.SettingsCode([]byte(settingsYAML))
+		if err != nil {
+			return nil, err
+		}
+		files[settingsdef.FileName] = []byte(settingsYAML)
+		files[gen.SettingsPath] = code
+	}
+
 	return gen.Apply(o.Dir, files)
 }
 
@@ -136,6 +148,18 @@ func goMod(o Options) string {
 	}
 	return b.String()
 }
+
+// settingsYAML is the starting business settings schema of the project.
+const settingsYAML = `# Business settings of the project: an administrator changes them from the admin UI,
+# without a developer and without a deploy. Technical parameters of the modules live in
+# ` + spec.FileName + ` and environment variables instead.
+#
+# After editing run: make generate
+
+settings:
+  app:
+    maintenance: { type: bool, default: false, title: Maintenance mode }
+`
 
 const mainGo = `package main
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -33,7 +34,7 @@ package main
 
 import (
 {{- range .Imports}}
-	"{{.}}"
+	{{.}}
 {{- end}}
 )
 
@@ -65,7 +66,7 @@ package main
 
 import (
 {{- range .Imports}}
-	"{{.}}"
+	{{.}}
 {{- end}}
 )
 
@@ -91,7 +92,7 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 
 	config, err := render(configTmpl, templateData{
 		Service: f.Service(),
-		Imports: imports("github.com/aidarbn/platform-go/kit/confx", modules),
+		Imports: configImports(modules),
 		Modules: modules,
 	})
 	if err != nil {
@@ -100,7 +101,7 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 
 	mods, err := render(modulesTmpl, templateData{
 		Service: f.Service(),
-		Imports: imports("github.com/aidarbn/platform-go/kit/platform", modules),
+		Imports: modulesImports(f, modules),
 		Modules: modules,
 	})
 	if err != nil {
@@ -114,23 +115,72 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 	}, nil
 }
 
-func imports(base string, modules []registry.Module) []string {
-	out := []string{base}
+// importSpec is one import of a generated file. An alias is needed when a package
+// generated in the project has the same name as a platform module.
+type importSpec struct {
+	Path  string
+	Alias string
+}
+
+func (i importSpec) String() string {
+	if i.Alias == "" {
+		return strconv.Quote(i.Path)
+	}
+	return i.Alias + " " + strconv.Quote(i.Path)
+}
+
+// configImports are the imports of config.gen.go: the settings types of the modules.
+func configImports(modules []registry.Module) []string {
+	specs := []importSpec{{Path: "github.com/aidarbn/platform-go/kit/confx"}}
 	for _, m := range modules {
-		if !slices.Contains(out, m.Import) {
-			out = append(out, m.Import)
+		specs = append(specs, importSpec{Path: m.Import})
+	}
+	return renderImports(specs)
+}
+
+// modulesImports are the imports of modules.gen.go. Besides the modules themselves it
+// covers the packages generated in the project that a module needs at startup, such as
+// the settings schema.
+func modulesImports(f *spec.File, modules []registry.Module) []string {
+	specs := []importSpec{{Path: "github.com/aidarbn/platform-go/kit/platform"}}
+	for _, m := range modules {
+		specs = append(specs, importSpec{Path: m.Import})
+		if m.ProjectPkg != "" {
+			specs = append(specs, importSpec{
+				Path:  f.Project.Module + "/" + m.ProjectPkg,
+				Alias: m.ProjectAlias,
+			})
 		}
 	}
-	slices.Sort(out)
+	return renderImports(specs)
+}
+
+func renderImports(specs []importSpec) []string {
+	slices.SortFunc(specs, func(a, b importSpec) int { return strings.Compare(a.Path, b.Path) })
+
+	out := make([]string, 0, len(specs))
+	seen := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		if seen[spec.Path] {
+			continue
+		}
+		seen[spec.Path] = true
+		out = append(out, spec.String())
+	}
 	return out
 }
 
 func render(t *template.Template, data templateData) ([]byte, error) {
+	return renderTemplate(t, data)
+}
+
+// renderTemplate formats what a template produced: generated code must pass gofmt in
+// the project CI, and gofmt also orders the imports.
+func renderTemplate(t *template.Template, data any) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
 		return nil, err
 	}
-	// Format here: generated code must pass gofmt in the project CI.
 	out, err := format.Source(buf.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("format: %w", err)
@@ -160,6 +210,33 @@ func env(f *spec.File, modules []registry.Module) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+// Files returns everything platformgo generates for the project: the module wiring and,
+// when the settings module is enabled, the typed access to the business settings.
+//
+// The schema is read from the project directory, so the generated code always matches
+// the file a developer just edited.
+func Files(dir string, f *spec.File) (map[string][]byte, error) {
+	files, err := Wiring(f)
+	if err != nil {
+		return nil, err
+	}
+	if !SettingsEnabled(f) {
+		return files, nil
+	}
+
+	path := SettingsSchemaPath(f)
+	raw, err := os.ReadFile(filepath.Join(dir, path))
+	if err != nil {
+		return nil, fmt.Errorf("module settings: %s: %w", path, err)
+	}
+	code, err := SettingsCode(raw)
+	if err != nil {
+		return nil, err
+	}
+	files[SettingsPath] = code
+	return files, nil
 }
 
 // Changed returns the paths whose content in the project differs from the generated

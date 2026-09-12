@@ -11,7 +11,14 @@ A project has four kinds of settings. They live in different places because diff
 
 ## Business settings: the `settings` module
 
-The schema describes the settings, their types, defaults and constraints. `platformgo generate` turns it into typed code; values are stored in the database and cached, and the admin UI edits them.
+The schema describes the settings, their types, defaults and constraints. `platformgo generate` turns it into typed code in `internal/settings/settings.gen.go`; values are stored in the database and cached, and the admin UI edits them.
+
+```yaml
+# platformgo.yaml — technical side of the module
+modules:
+  settings:
+    schema: settings.yaml   # where the schema lives; this is the default
+```
 
 ```yaml
 # settings.yaml — the business settings schema of the project
@@ -27,11 +34,29 @@ settings:
     burst: { type: int, default: 100 }
 ```
 
+Supported types: `bool`, `int`, `duration`, `string` (with optional `options`) and `cron`. `int` and `duration` accept `min` and `max`; every value is validated against the schema before it is stored, so the admin UI cannot write a limit the code would choke on.
+
 ```go
-// generated from settings.yaml
-s := settings.From(app)
-s.OrdersCreate().MaxAttempts() // 5 until the database says otherwise
-s.OrdersCleanup().Schedule()   // "0 3 * * *"
+// internal/settings/settings.gen.go, generated from settings.yaml
+import appsettings "github.com/me/shop-api/internal/settings"
+
+s := appsettings.From(app)
+s.OrdersCreate().MaxAttempts() // int:           5 until the database says otherwise
+s.OrdersCreate().Timeout()     // time.Duration: 30s
+s.OrdersCleanup().Schedule()   // string:        "0 3 * * *"
+```
+
+Only overrides are stored, so a setting nobody touched keeps following the default from the schema across releases. A value that stopped matching the schema — a removed setting, a limit now out of bounds — is ignored with a warning rather than breaking the application.
+
+Reads never touch the database: values are cached, `SETTINGS_REFRESH_INTERVAL` (15s by default) says how often the cache is refreshed, which is how a change made on one instance reaches the others. `Store().Watch` reports the keys that changed, and that is what lets a schedule or a limit take effect without a restart.
+
+Project tests need no database:
+
+```go
+store := settingsx.NewTestStore(appsettings.Schema, map[string]string{
+	"orders.create.max_attempts": "1",
+})
+s := appsettings.New(store)
 ```
 
 ## Declarations in code
@@ -41,7 +66,7 @@ Jobs, queues and their link to business settings live in project code, not in th
 ```go
 // cmd/app/wire.go
 func wireDomain(app *platform.App) error {
-	s := settings.From(app)
+	s := appsettings.From(app)
 
 	river.AddWorker(app, workers.NewCleanupExpired(repo))
 	river.Periodic(app, jobs.CleanupExpiredArgs{},

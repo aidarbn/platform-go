@@ -155,3 +155,108 @@ func gofmtList(t *testing.T, dir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// A project with business settings must compile too: the generated accessor is the
+// only way domain code reads a setting, so its shape is verified by the compiler.
+func TestProjectWithSettingsCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("building a project takes time")
+	}
+
+	root := repoRoot(t)
+	dir := t.TempDir()
+
+	write(t, dir, spec.FileName, `schema: 1
+platform: v0.1.0
+project:
+  module: example.com/app
+  service: shop-api
+modules:
+  postgres: {}
+  settings: {}
+`)
+
+	write(t, dir, "settings.yaml", `settings:
+  orders.cleanup:
+    enabled:  { type: bool, default: true }
+    schedule: { type: cron, default: "0 3 * * *" }
+  orders.create:
+    max_attempts: { type: int, default: 5, min: 1, max: 20 }
+    timeout:      { type: duration, default: 30s }
+`)
+
+	write(t, dir, "go.mod", `module example.com/app
+
+go 1.27
+
+require github.com/aidarbn/platform-go v0.0.0
+
+replace github.com/aidarbn/platform-go => `+root+`
+`)
+
+	write(t, dir, "cmd/app/main.go", `package main
+
+import (
+	"log"
+
+	"github.com/aidarbn/platform-go/kit/platform"
+)
+
+func main() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := platform.Run(platform.Config{Service: "shop-api"}, platformModules(cfg), wireDomain); err != nil {
+		log.Fatal(err)
+	}
+}
+`)
+
+	// The domain reads business settings as typed method calls, not as string keys.
+	write(t, dir, "cmd/app/wire.go", `package main
+
+import (
+	"time"
+
+	appsettings "example.com/app/internal/settings"
+	"github.com/aidarbn/platform-go/kit/platform"
+)
+
+func wireDomain(app *platform.App) error {
+	s := appsettings.From(app)
+
+	var (
+		attempts int           = s.OrdersCreate().MaxAttempts()
+		timeout  time.Duration = s.OrdersCreate().Timeout()
+		schedule string        = s.OrdersCleanup().Schedule()
+		enabled  bool          = s.OrdersCleanup().Enabled()
+	)
+	_, _, _, _ = attempts, timeout, schedule, enabled
+
+	// A schedule that follows the settings takes effect without a restart.
+	s.Store().Watch(func(changed []string) { _ = changed })
+	return nil
+}
+`)
+
+	f, err := spec.Load(filepath.Join(dir, spec.FileName))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	files, err := gen.Files(dir, f)
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	if _, err := gen.Apply(dir, files); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	goCmd(t, dir, "mod", "tidy")
+	goCmd(t, dir, "build", "./...")
+	goCmd(t, dir, "vet", "./...")
+
+	if unformatted := gofmtList(t, dir); unformatted != "" {
+		t.Errorf("gofmt reported unformatted files:\n%s", unformatted)
+	}
+}

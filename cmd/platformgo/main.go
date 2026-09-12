@@ -4,6 +4,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +25,7 @@ func main() {
 	}
 }
 
-func run(args []string, out *os.File) error {
+func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		usage(out)
 		return nil
@@ -51,7 +52,7 @@ func run(args []string, out *os.File) error {
 	}
 }
 
-func usage(out *os.File) {
+func usage(out io.Writer) {
 	fmt.Fprint(out, `platformgo — a platform for Go projects
 
   platformgo new <module-path>    create a project
@@ -64,21 +65,22 @@ A project is described in `+spec.FileName+`.
 `)
 }
 
-func cmdNew(args []string, out *os.File) error {
+func cmdNew(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)
 	dir := fs.String("dir", "", "project directory; defaults to the service name")
 	service := fs.String("service", "", "service name; defaults to the last element of the module path")
 	with := fs.String("with", "", "comma separated modules: "+strings.Join(registry.Names(), ", "))
-	if err := fs.Parse(args); err != nil {
+	module, err := parsePositional(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if module == "" {
 		return fmt.Errorf("pass a Go module path, for example platformgo new github.com/me/shop-api")
 	}
 
 	opts := scaffold.Options{
 		Dir:     *dir,
-		Module:  fs.Arg(0),
+		Module:  module,
 		Service: *service,
 	}
 	if *with != "" {
@@ -103,15 +105,15 @@ func cmdNew(args []string, out *os.File) error {
 	return nil
 }
 
-func cmdGenerate(args []string, out *os.File) error {
+func cmdGenerate(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
 	check := fs.Bool("check", false, "do not write files, fail on differences: for CI")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	files, err := wiring(*dir)
+	files, err := projectFiles(*dir)
 	if err != nil {
 		return err
 	}
@@ -138,10 +140,10 @@ func cmdGenerate(args []string, out *os.File) error {
 	return nil
 }
 
-func cmdPlan(args []string, out *os.File) error {
+func cmdPlan(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -149,7 +151,7 @@ func cmdPlan(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	files, err := gen.Wiring(f)
+	files, err := gen.Files(*dir, f)
 	if err != nil {
 		return err
 	}
@@ -179,9 +181,9 @@ func cmdPlan(args []string, out *os.File) error {
 	return nil
 }
 
-func cmdDoctor(args []string, out *os.File) error {
+func cmdDoctor(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -205,12 +207,43 @@ func cmdDoctor(args []string, out *os.File) error {
 	return nil
 }
 
-func wiring(dir string) (map[string][]byte, error) {
+// parseFlags parses a command that takes no arguments of its own.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	return nil
+}
+
+// parsePositional parses a command with one argument of its own, letting it stand
+// before or after the flags: the flag package stops at the first positional argument,
+// so what follows it is parsed in a second pass.
+func parsePositional(fs *flag.FlagSet, args []string) (string, error) {
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return "", nil
+	}
+	if err := fs.Parse(rest[1:]); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 {
+		return "", fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	return rest[0], nil
+}
+
+func projectFiles(dir string) (map[string][]byte, error) {
 	f, err := spec.Load(filepath.Join(dir, spec.FileName))
 	if err != nil {
 		return nil, err
 	}
-	return gen.Wiring(f)
+	return gen.Files(dir, f)
 }
 
 func version() string {

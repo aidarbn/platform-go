@@ -71,6 +71,34 @@ func TestNewCreatesProject(t *testing.T) {
 	}
 }
 
+// Enabling the settings module gives the project a schema file and typed access to it.
+func TestNewCreatesSettings(t *testing.T) {
+	dir := t.TempDir()
+
+	created, err := scaffold.New(scaffold.Options{
+		Dir:     dir,
+		Module:  "example.com/shop-api",
+		Modules: []string{"postgres", "settings"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, want := range []string{"settings.yaml", "internal/settings/settings.gen.go"} {
+		if !contains(created, want) {
+			t.Errorf("%s was not created (created: %v)", want, created)
+		}
+	}
+
+	code, err := os.ReadFile(filepath.Join(dir, "internal/settings/settings.gen.go"))
+	if err != nil {
+		t.Fatalf("read the generated file: %v", err)
+	}
+	if !strings.Contains(string(code), "func (g AppSettings) Maintenance() bool") {
+		t.Errorf("the example schema did not reach the generated code:\n%s", code)
+	}
+}
+
 // A created project must compile right away, without a single manual edit.
 func TestNewProjectCompiles(t *testing.T) {
 	if testing.Short() {
@@ -81,7 +109,7 @@ func TestNewProjectCompiles(t *testing.T) {
 	if _, err := scaffold.New(scaffold.Options{
 		Dir:     dir,
 		Module:  "example.com/shop-api",
-		Modules: []string{"postgres"},
+		Modules: []string{"postgres", "settings"},
 		Require: "v0.0.0",
 		Replace: repoRoot(t),
 	}); err != nil {

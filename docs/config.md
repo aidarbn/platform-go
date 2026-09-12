@@ -35,7 +35,6 @@ modules:
 
   settings:
     schema: settings.yaml
-    storage: postgres
 
   admin:
     addr: :8081
