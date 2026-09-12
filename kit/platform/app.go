@@ -30,6 +30,15 @@ type healthCheck struct {
 	check func(context.Context) error
 }
 
+// NewApp создаёт контейнер без запуска модулей: нужен тестам модулей и инструментам
+// платформы, которым не требуется полный жизненный цикл. Логгер можно не передавать.
+func NewApp(log *slog.Logger) *App {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return newApp(log)
+}
+
 func newApp(log *slog.Logger) *App {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))

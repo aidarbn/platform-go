@@ -15,7 +15,7 @@ type riverQueue struct{}
 func (riverQueue) Kind() string { return "river" }
 
 func TestProvideAndGet(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	platform.Provide(app, &pool{dsn: "postgres://"})
 	got := platform.Get[*pool](app)
@@ -26,7 +26,7 @@ func TestProvideAndGet(t *testing.T) {
 }
 
 func TestProvideInterface(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	platform.Provide[queue](app, riverQueue{})
 
@@ -37,7 +37,7 @@ func TestProvideInterface(t *testing.T) {
 }
 
 func TestLookupMissing(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	if _, ok := platform.Lookup[*pool](app); ok {
 		t.Error("в пустом контейнере ничего не должно находиться")
@@ -45,7 +45,7 @@ func TestLookupMissing(t *testing.T) {
 }
 
 func TestGetMissingPanics(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	defer func() {
 		r := recover()
@@ -57,7 +57,7 @@ func TestGetMissingPanics(t *testing.T) {
 }
 
 func TestProvideReplaces(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	platform.Provide(app, &pool{dsn: "первый"})
 	platform.Provide(app, &pool{dsn: "второй"})
@@ -68,7 +68,7 @@ func TestProvideReplaces(t *testing.T) {
 }
 
 func TestMetricsRegistry(t *testing.T) {
-	app := platform.NewForTest(t)
+	app := platform.NewApp(nil)
 
 	if app.Metrics() == nil {
 		t.Fatal("реестр метрик не создан")
