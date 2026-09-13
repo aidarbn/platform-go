@@ -139,6 +139,38 @@ var all = []Module{
 		},
 	},
 	{
+		Name:    "s3",
+		Import:  "github.com/aidarbn/platform-go/kit/modules/s3",
+		Package: "s3",
+		Field:   "S3",
+		Env: []EnvVar{
+			{Key: "S3_ENDPOINT", Example: "127.0.0.1:9000", Comment: "storage address, host:port", Required: true},
+			{Key: "S3_ACCESS_KEY", Example: "minioadmin", Comment: "access key", Required: true},
+			{Key: "S3_SECRET_KEY", Example: "minioadmin", Comment: "secret key", Required: true},
+			{Key: "S3_USE_SSL", Example: "false", Comment: "https to the storage"},
+			{Key: "S3_REGION", Example: "", Comment: "region, when the storage needs one"},
+			{Key: "S3_PUBLIC_URL", Example: "", Comment: "where public buckets are served, for example https://example.com/storage"},
+		},
+		// The MinIO release taply runs.
+		Compose: `  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 30`,
+		Volumes: []string{"minio-data"},
+	},
+	{
 		Name:     "river",
 		Requires: []string{"postgres"},
 		Import:   "github.com/aidarbn/platform-go/kit/modules/riverx",

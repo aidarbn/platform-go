@@ -182,6 +182,27 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
 
+## The `s3` module
+
+Object storage for the files of the project: MinIO locally (the release taply runs, with its console on `127.0.0.1:9001`), any S3 compatible storage in production. The variables and the storage API are taply's.
+
+```go
+st := s3.From(app)
+
+// Public bucket: created on first use with an anonymous read policy, so nginx serves
+// the file without signing. An existing bucket keeps the policy it has.
+path, err := st.Put(ctx, "images", true, "restaurants/42/logo.png", "image/png", data)
+link := st.PublicURL("images", path) // S3_PUBLIC_URL, or the endpoint
+
+// Private bucket: read through the service or a signed link.
+_, err = st.PutStream(ctx, "receipts", false, "2026/09/1.pdf", "application/pdf", file, size)
+signed, err := st.SignedURL(ctx, "receipts", "2026/09/1.pdf", 15*time.Minute)
+r, err := st.Get(ctx, "receipts", "2026/09/1.pdf") // s3.ErrNotFound when missing
+err = st.Delete(ctx, "images", path)
+```
+
+The module connects during startup and checks the keys, so a wrong address stops the start instead of the first upload; `/health` keeps checking. `S3_ENDPOINT`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` are required; `S3_USE_SSL`, `S3_REGION` and `S3_PUBLIC_URL` are optional.
+
 ## The `settings` module
 
 Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.

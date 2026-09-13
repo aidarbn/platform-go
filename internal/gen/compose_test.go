@@ -73,3 +73,17 @@ func TestComposeWithoutServices(t *testing.T) {
 		t.Errorf("the project name must be what docker compose accepts: %q", c.Name)
 	}
 }
+
+func TestComposeWithSeveralServices(t *testing.T) {
+	files, err := gen.Wiring(mustParse(t, "schema: 1\nproject:\n  module: github.com/x/app\nmodules:\n  postgres: {}\n  s3: {}\n"))
+	if err != nil {
+		t.Fatalf("Wiring: %v", err)
+	}
+	c := parseCompose(t, files[gen.ComposePath])
+	if _, ok := c.Services["minio"]; !ok {
+		t.Errorf("no minio service: %v", c.Services)
+	}
+	if _, ok := c.Volumes["minio-data"]; !ok || len(c.Volumes) != 2 {
+		t.Errorf("volumes = %v", c.Volumes)
+	}
+}
