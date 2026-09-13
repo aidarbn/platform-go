@@ -82,6 +82,7 @@ func TestChecksAndRun(t *testing.T) {
 
 	dir := t.TempDir()
 	write(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "proto/shop/v1/orders.proto", `syntax = "proto3";`)
 
 	checks := lint.Checks(lint.Options{Modules: []string{"api", "postgres"}, ProtoAgainst: "dev", Skip: []string{"security"}}, run, verify)
 	var names []string
@@ -130,5 +131,25 @@ func TestProtoOnlyWithAPI(t *testing.T) {
 	}
 	if checks[len(checks)-1].Name != "security" {
 		t.Errorf("the vulnerability scan must run last: %v", checks[len(checks)-1].Name)
+	}
+}
+
+// A fresh project with the api module and no proto files yet passes its own lint.
+func TestProtoWithoutFilesPasses(t *testing.T) {
+	var ran []string
+	run := func(_ context.Context, _ string, _ io.Writer, _ []string, name string, args ...string) error {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		return errors.New("buf: module had no .proto files")
+	}
+	for _, c := range lint.Checks(lint.Options{Modules: []string{"api"}}, run, nil) {
+		if c.Name != "proto" {
+			continue
+		}
+		if err := c.Run(context.Background(), t.TempDir()); err != nil {
+			t.Fatalf("proto: %v", err)
+		}
+	}
+	if len(ran) != 0 {
+		t.Errorf("buf ran without proto files: %v", ran)
 	}
 }

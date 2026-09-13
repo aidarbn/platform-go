@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/aidarbn/platform-go/internal/codegen"
 )
 
 // Linters run with go run at a pinned version instead of as tools in go.mod: their
@@ -69,6 +71,12 @@ func Checks(opts Options, run Runner, verify func(ctx context.Context, dir strin
 	}
 	if slices.Contains(opts.Modules, "api") {
 		checks = append(checks, Check{"proto", func(ctx context.Context, dir string) error {
+			// A project that enabled the api module before writing its first proto file
+			// has nothing to check, and buf refuses an empty module.
+			protos, err := codegen.Protos(dir)
+			if err != nil || len(protos) == 0 {
+				return err
+			}
 			if err := run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "lint"); err != nil {
 				return err
 			}
