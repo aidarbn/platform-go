@@ -27,6 +27,13 @@ type Tool struct {
 	Version string
 }
 
+// Option is a technical setting of a module in platformgo.yaml.
+type Option struct {
+	Name        string
+	Description string
+	Default     string
+}
+
 // Module describes a platform module.
 type Module struct {
 	Name     string   // section name in platformgo.yaml
@@ -49,6 +56,18 @@ type Module struct {
 	Volumes []string
 
 	Tools []Tool
+
+	Options []Option // what the module section of platformgo.yaml may contain
+}
+
+// Option returns an option of the module by name.
+func (m Module) Option(name string) (Option, bool) {
+	for _, o := range m.Options {
+		if o.Name == name {
+			return o, true
+		}
+	}
+	return Option{}, false
 }
 
 // ConfigType is the settings type of the module, for example postgres.Config.
@@ -186,11 +205,14 @@ var all = []Module{
 		},
 	},
 	{
-		Name:         "settings",
-		Requires:     []string{"postgres"},
-		Import:       "github.com/aidarbn/platform-go/kit/modules/settings",
-		Package:      "settings",
-		Field:        "Settings",
+		Name:     "settings",
+		Requires: []string{"postgres"},
+		Import:   "github.com/aidarbn/platform-go/kit/modules/settings",
+		Package:  "settings",
+		Field:    "Settings",
+		Options: []Option{
+			{Name: "schema", Description: "business settings schema file, relative to the project root", Default: "settings.yaml"},
+		},
 		ProjectPkg:   "internal/settings",
 		ProjectAlias: "appsettings",
 		ExtraArgs:    []string{"appsettings.Schema"},

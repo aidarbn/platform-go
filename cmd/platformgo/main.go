@@ -57,6 +57,13 @@ func run(args []string, out io.Writer) error {
 		return cmdDB(args[1:], out)
 	case "lint":
 		return cmdLint(args[1:], out)
+	case "schema":
+		raw, err := spec.JSONSchema()
+		if err != nil {
+			return err
+		}
+		_, err = out.Write(raw)
+		return err
 	case "doctor":
 		return cmdDoctor(args[1:], out)
 	case "version":
@@ -83,6 +90,7 @@ func usage(out io.Writer) {
                                   file length, golangci-lint, proto, govulncheck
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo db generate          migrate the database and generate the jet query builder
+  platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor               check the development environment
   platformgo version              print the version
 

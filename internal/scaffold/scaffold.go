@@ -122,6 +122,8 @@ func ensureEmpty(dir string) error {
 
 func specFile(o Options) string {
 	var b strings.Builder
+	// The editor reads the schema of this platform version from the first line.
+	fmt.Fprintf(&b, "# yaml-language-server: $schema=%s\n", spec.SchemaURL(o.Require))
 	fmt.Fprintf(&b, "schema: %d\n", spec.SchemaVersion)
 	fmt.Fprintf(&b, "platform: %s\n\n", o.Require)
 	b.WriteString("project:\n")

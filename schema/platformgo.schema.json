@@ -1,0 +1,96 @@
+{
+  "$id": "https://github.com/aidarbn/platform-go/schema/platformgo.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "How a project on platform-go is put together: modules and their technical options. Business settings live in settings.yaml.",
+  "properties": {
+    "modules": {
+      "additionalProperties": false,
+      "description": "enabled modules; a module is enabled by its section and removed by deleting it",
+      "properties": {
+        "admin": {
+          "additionalProperties": false,
+          "description": "platform module admin; requires postgres",
+          "properties": {},
+          "type": "object"
+        },
+        "api": {
+          "additionalProperties": false,
+          "description": "platform module api",
+          "properties": {},
+          "type": "object"
+        },
+        "postgres": {
+          "additionalProperties": false,
+          "description": "platform module postgres",
+          "properties": {},
+          "type": "object"
+        },
+        "river": {
+          "additionalProperties": false,
+          "description": "platform module river; requires postgres",
+          "properties": {},
+          "type": "object"
+        },
+        "s3": {
+          "additionalProperties": false,
+          "description": "platform module s3",
+          "properties": {},
+          "type": "object"
+        },
+        "settings": {
+          "additionalProperties": false,
+          "description": "platform module settings; requires postgres",
+          "properties": {
+            "schema": {
+              "default": "settings.yaml",
+              "description": "business settings schema file, relative to the project root",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "platform": {
+      "description": "platform version the project is on",
+      "pattern": "^v\\d+\\.\\d+\\.\\d+",
+      "type": "string"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "go": {
+          "description": "Go version",
+          "type": "string"
+        },
+        "module": {
+          "description": "Go module path",
+          "type": "string"
+        },
+        "service": {
+          "description": "service name in logs; the last element of the module path by default",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": 1,
+      "description": "format version of this file"
+    }
+  },
+  "required": [
+    "schema",
+    "project"
+  ],
+  "title": "platformgo.yaml",
+  "type": "object"
+}

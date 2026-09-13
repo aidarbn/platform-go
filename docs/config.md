@@ -16,9 +16,9 @@ Same split as `go.mod` and `go.sum`: intent in one file, the recorded result in 
 ## Example
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.2.0/schema/platformgo.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.2.1/schema/platformgo.schema.json
 schema: 1
-platform: v0.2.0
+platform: v0.2.1
 
 project:
   module: github.com/aidarbn/shop-api
@@ -27,47 +27,27 @@ project:
 
 modules:
   postgres: {}
-
-  river:
-    ui: true
-
   settings:
-    schema: settings.yaml
-
+    schema: settings.yaml   # the default
   admin: {}
-
-  api:
-    grpc_addr: 127.0.0.1:9090
-    rest_prefix: /api/v1
-    proto: proto
-    openapi:
-      base: api/base.openapi.yaml
-      out: api/shop.openapi.yaml
-
+  api: {}
+  river: {}
   s3: {}
-
-generate:
-  extra:
-    - go run ./tools/mygen
-
-lint:
-  depguard:
-    - deny: github.com/riverqueue/river
-      except: [internal/adapters/dbqueue/**]
-
-ci:
-  e2e: false
-  security_scan: true
 ```
 
 ## Rules
 
-- **No secrets in the file.** Only structure and settings; values come from environment variables. `.env.example` is generated from the file.
-- **A JSON schema** is published for every platform version; the link on the first line turns on completion and validation in editors.
-- **`schema`** is the file format version. `platformgo upgrade` migrates the file to a newer schema, see [upgrades.md](upgrades.md).
-- **A module is enabled** by adding its section under `modules` and disabled by removing it. Owned files stay behind when a module is removed, and the platform says so.
-- **Technical settings only.** Paths, addresses, generation tools, optional services. Schedules, limits, timeouts, flags, retry counts, queue and bucket names are business settings and project code, see [settings.md](settings.md).
-- **The platform installs dependencies**: required modules (river needs postgres, and `plan` says so), Go modules and Go tools at pinned versions, local infrastructure services in `docker-compose.yml`. System programs such as Docker are checked by `platformgo doctor`.
+- **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones: a typo fails `plan` instead of being ignored.
+- **A JSON schema** is published for every platform version (`schema/platformgo.schema.json`, also printed by `platformgo schema`); the first line of a new project points editors at it, which turns on completion and validation.
+- **No secrets in the file.** Only structure and technical options; values come from environment variables, and `.env.example` is generated from the enabled modules.
+- **A module is enabled** by adding its section under `modules` and removed by deleting it. `apply` removes what generation produced for it and the tools it added to `go.mod`; files that belong to the project stay.
+- **Technical options only.** Paths and switches of the tooling. Schedules, limits, timeouts, flags and retry counts are business settings, see [settings.md](settings.md); addresses, secrets and capacity are environment variables.
+- **Dependencies between modules are checked**: `settings`, `admin` and `river` require `postgres`, and `plan` says so.
+
+| Module | Options |
+|---|---|
+| `postgres`, `admin`, `api`, `river`, `s3` | none: everything else is environment variables, see [modules.md](modules.md) |
+| `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 
 ## Commands
 

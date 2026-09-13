@@ -16,8 +16,7 @@ project:
   module: github.com/aidarbn/shop-api
   service: shop-api
 modules:
-  postgres:
-    migrations: db/migrations
+  postgres: {}
 `
 
 func TestParseMinimal(t *testing.T) {
