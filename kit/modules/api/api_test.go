@@ -24,6 +24,9 @@ import (
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
+// extraWire lets a test add registrations to the shared test service.
+var extraWire func(app *platform.App)
+
 // echo is the project handler of the test service.
 type echo struct {
 	testv1.UnimplementedEchoServiceServer
@@ -46,6 +49,8 @@ func (echo) Fail(ctx context.Context, req *testv1.FailRequest) (*testv1.FailResp
 		return nil, errors.New("pq: password authentication failed for user secret")
 	case "not_found":
 		return nil, status.Error(codes.NotFound, "no such order")
+	case "unavailable":
+		return nil, status.Error(codes.Unavailable, "the payment system is down")
 	case "slow":
 		select {
 		case <-time.After(2 * time.Second):
@@ -88,6 +93,9 @@ func start(t *testing.T, cfg api.Config, opts ...api.Option) *service {
 		api.HandleHTTP(app, "GET /webhooks/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("pong"))
 		}))
+		if extraWire != nil {
+			extraWire(app)
+		}
 		return nil
 	}
 

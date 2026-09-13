@@ -21,6 +21,8 @@ import (
 
 	"buf.build/go/protovalidate"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
@@ -43,6 +45,14 @@ type Config struct {
 	Docs        bool     // serve /openapi.yaml and the /docs page
 	Reflection  bool     // gRPC server reflection, for grpcurl and similar tools
 
+	// RateLimit per client address; zero rates turn it off.
+	RateLimit RateLimit
+
+	// Idempotency: how long a finished call is remembered, and how long a running one
+	// holds its key before a repeat may take over.
+	IdempotencyRetention time.Duration
+	IdempotencyLock      time.Duration
+
 	AccessLog       bool // log every HTTP request, as taply does
 	LogBodies       bool // put the bodies of failed requests into the access log
 	SecurityHeaders bool // taply's security response headers
@@ -58,6 +68,15 @@ func Load(l *confx.Loader) Config {
 		CORSOrigins: l.Strings("API_CORS_ORIGINS", nil),
 		Docs:        l.Bool("API_DOCS", true),
 		Reflection:  l.Bool("API_REFLECTION", false),
+
+		RateLimit: RateLimit{
+			RPS:         float64(l.Int("API_RATE_RPS", 50)),
+			Burst:       l.Int("API_RATE_BURST", 100),
+			PublicRPS:   float64(l.Int("API_PUBLIC_RATE_RPS", 30)),
+			PublicBurst: l.Int("API_PUBLIC_RATE_BURST", 60),
+		},
+		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
+		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
 
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
@@ -77,6 +96,12 @@ func (c *Config) setDefaults() {
 	}
 	if c.MaxSendSize <= 0 {
 		c.MaxSendSize = 32 << 20
+	}
+	if c.IdempotencyRetention <= 0 {
+		c.IdempotencyRetention = 24 * time.Hour
+	}
+	if c.IdempotencyLock <= 0 {
+		c.IdempotencyLock = time.Minute
 	}
 }
 
@@ -104,8 +129,12 @@ type Registry struct {
 	authUnary  []grpc.UnaryServerInterceptor
 	authStream []grpc.StreamServerInterceptor
 	methods    []string
-	routes     []route
-	middleware []func(http.Handler) http.Handler
+
+	public       func(method string) bool
+	idemRequired []string
+	idemUser     func(context.Context) string
+	routes       []route
+	middleware   []func(http.Handler) http.Handler
 }
 
 type route struct {
@@ -167,6 +196,27 @@ func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc
 	})
 }
 
+// PublicMethods tells the API which methods are public, for their separate rate limit.
+// The rbac module sets it from its policy.
+func PublicMethods(app *platform.App, public func(method string) bool) {
+	r := registry(app)
+	r.add(func() { r.public = public })
+}
+
+// RequireIdempotency makes the methods refuse a call without an Idempotency-Key header,
+// as taply does for every method that creates something.
+func RequireIdempotency(app *platform.App, methods ...string) {
+	r := registry(app)
+	r.add(func() { r.idemRequired = append(r.idemRequired, methods...) })
+}
+
+// IdempotencyUser scopes idempotency keys to the caller: two users may use the same key.
+// The project's authentication supplies the user.
+func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
+	r := registry(app)
+	r.add(func() { r.idemUser = user })
+}
+
 // Methods returns the full names of every registered gRPC method, such as
 // /shop.v1.OrdersService/CreateOrder. It is filled when the module starts.
 func Methods(app *platform.App) []string {
@@ -192,19 +242,31 @@ func UseHTTP(app *platform.App, mw func(http.Handler) http.Handler) {
 // Option configures the module.
 type Option func(*Module)
 
+// WithIdempotencyStore sets where idempotency records are kept. Without it the module
+// uses the database of the postgres module; tests pass a memory store.
+func WithIdempotencyStore(store IdempotencyStore) Option {
+	return func(m *Module) { m.idemStore = store }
+}
+
 // WithOpenAPI gives the module the generated OpenAPI description: a directory holding
 // openapi.yaml. The generated wiring passes the embedded api/openapi directory.
 func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys } }
 
 // Module implements platform.Module.
 type Module struct {
-	cfg      Config
-	skipped  bool
-	http     *httpMetrics
-	openapi  fs.FS
-	registry *Registry
-	log      *slog.Logger
-	metrics  *metrics
+	cfg     Config
+	skipped bool
+	http    *httpMetrics
+	app     *platform.App
+
+	idemStore  IdempotencyStore
+	limiter    *rateLimiter
+	deprecated *prometheus.CounterVec
+	cleanup    chan struct{}
+	openapi    fs.FS
+	registry   *Registry
+	log        *slog.Logger
+	metrics    *metrics
 
 	grpcSrv  *grpc.Server
 	grpcLn   net.Listener
@@ -239,6 +301,13 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 		return err
 	}
 	m.skipped = !app.Serves(platform.RoleAPI)
+	m.app = app
+	m.deprecated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "api", Name: "deprecated_calls_total", Help: "calls to methods marked deprecated in the proto files",
+	}, []string{"method"})
+	if err := app.Metrics().Register(m.deprecated); err != nil {
+		return fmt.Errorf("api metrics: %w", err)
+	}
 	platform.Provide(app, m.registry)
 	return nil
 }
@@ -258,14 +327,32 @@ func (m *Module) Start(ctx context.Context) error {
 		return fmt.Errorf("api: request validator: %w", err)
 	}
 
+	idem, err := m.idempotency(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Build the server first: the deprecated methods are read from the registered
+	// services, and the chain below refers to them.
+	deprecated := map[string]bool{}
+
 	// Metrics and logging are outermost, so they see a recovered panic and a hidden
-	// internal error as the Internal status the client gets.
-	unary := slices.Concat(
-		[]grpc.UnaryServerInterceptor{m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)},
-		m.registry.unary,
-		m.registry.authUnary,
-		[]grpc.UnaryServerInterceptor{validateUnary(validator)},
-	)
+	// internal error as the Internal status the client gets. The rate limit comes before
+	// project interceptors, so a flood never reaches token validation; idempotency comes
+	// last, so a rejected call is not remembered.
+	platformUnary := []grpc.UnaryServerInterceptor{m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
+	if m.cfg.RateLimit.RPS > 0 {
+		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {
+			return fmt.Errorf("api: rate limit: %w", err)
+		}
+		platformUnary = append(platformUnary, m.limiter.unary)
+	}
+	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.log, m.deprecated))
+	tail := []grpc.UnaryServerInterceptor{validateUnary(validator)}
+	if idem != nil {
+		tail = append(tail, idem.unary)
+	}
+	unary := slices.Concat(platformUnary, m.registry.unary, m.registry.authUnary, tail)
 	stream := slices.Concat(
 		[]grpc.StreamServerInterceptor{m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
 		m.registry.stream,
@@ -287,6 +374,9 @@ func (m *Module) Start(ctx context.Context) error {
 		s.GRPC(m.grpcSrv)
 	}
 	m.recordMethods()
+	for method := range deprecatedMethods(m.grpcSrv) {
+		deprecated[method] = true
+	}
 
 	if m.grpcLn, err = net.Listen("tcp", m.cfg.GRPCAddr); err != nil {
 		return fmt.Errorf("api: gRPC on %s: %w", m.cfg.GRPCAddr, err)
@@ -336,6 +426,57 @@ func (m *Module) Start(ctx context.Context) error {
 	m.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	m.log.Info("the API is listening", "grpc", m.GRPCAddr(), "http", m.HTTPAddr(), "services", len(m.registry.services))
 	return nil
+}
+
+// idempotency builds the idempotency check: the given store, or the database of the
+// postgres module. Without either, keys are ignored, which is refused when a method
+// requires one.
+func (m *Module) idempotency(ctx context.Context) (*idempotency, error) {
+	store := m.idemStore
+	if store == nil {
+		if pool, ok := platform.Lookup[*pgxpool.Pool](m.app); ok {
+			pg, err := newPGIdempotencyStore(ctx, pool)
+			if err != nil {
+				return nil, err
+			}
+			store = pg
+		}
+	}
+	if store == nil {
+		if len(m.registry.idemRequired) > 0 {
+			return nil, errors.New("api: idempotency needs the postgres module")
+		}
+		m.log.Info("idempotency is off: enable the postgres module to remember Idempotency-Key calls")
+		return nil, nil
+	}
+
+	required := map[string]bool{}
+	for _, method := range m.registry.idemRequired {
+		required[method] = true
+	}
+	m.cleanup = make(chan struct{})
+	done := m.cleanup // the goroutine keeps its own reference: Stop clears the field
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case now := <-ticker.C:
+				if n, err := store.DeleteExpired(context.Background(), now); err != nil {
+					m.log.Error("idempotency cleanup failed", "err", err)
+				} else if n > 0 {
+					m.log.Info("expired idempotency records removed", "count", n)
+				}
+			}
+		}
+	}()
+	return &idempotency{
+		store: store, required: required, user: m.registry.idemUser,
+		retention: m.cfg.IdempotencyRetention, lock: m.cfg.IdempotencyLock,
+		log: m.log, now: time.Now,
+	}, nil
 }
 
 func (m *Module) recordMethods() {
@@ -411,8 +552,13 @@ var hopByHop = []string{
 
 func forwardHeader(key string) (string, bool) {
 	lower := strings.ToLower(key)
-	if slices.Contains(hopByHop, lower) {
+	switch {
+	case slices.Contains(hopByHop, lower):
 		return "", false
+	case lower == "user-agent":
+		// gRPC sets its own user-agent on the gateway's connection; the client's travels
+		// under the key grpc-gateway uses for it.
+		return "grpcgateway-user-agent", true
 	}
 	return lower, true
 }
@@ -465,6 +611,13 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 	if m.gwCancel != nil {
 		m.gwCancel()
+	}
+	if m.limiter != nil {
+		m.limiter.stop()
+	}
+	if m.cleanup != nil {
+		close(m.cleanup)
+		m.cleanup = nil
 	}
 	if m.conn != nil {
 		errs = append(errs, m.conn.Close())

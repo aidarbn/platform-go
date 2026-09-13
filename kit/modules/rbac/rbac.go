@@ -228,6 +228,7 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 
 	platform.Provide(app, enforcer)
 	api.Authorize(app, m.unary, m.stream)
+	api.PublicMethods(app, enforcer.Public)
 	return nil
 }
 

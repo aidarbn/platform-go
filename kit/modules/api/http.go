@@ -74,6 +74,21 @@ func ClientIP(ctx context.Context) string {
 	return ""
 }
 
+// userAgent returns the user agent of a call; the gateway forwards the one of the HTTP
+// client under its own metadata key.
+func userAgent(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, key := range []string{"grpcgateway-user-agent", "user-agent"} {
+		if v := md.Get(key); len(v) > 0 {
+			return v[0]
+		}
+	}
+	return ""
+}
+
 func resolveClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")

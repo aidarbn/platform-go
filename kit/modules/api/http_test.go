@@ -3,11 +3,13 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
@@ -46,9 +48,16 @@ func (echo) Upload(_ context.Context, req *testv1.UploadRequest) (*testv1.Upload
 	return resp, nil
 }
 
+// thingCalls counts how often CreateThing really ran.
+var thingCalls atomic.Int32
+
 // CreateThing answers with what the gRPC handler sees of the HTTP request.
 func (echo) CreateThing(ctx context.Context, req *testv1.CreateThingRequest) (*testv1.CreateThingResponse, error) {
-	return &testv1.CreateThingResponse{Id: api.RequestID(ctx) + "|" + api.ClientIP(ctx)}, nil
+	return &testv1.CreateThingResponse{Id: api.RequestID(ctx) + "|" + api.ClientIP(ctx), Calls: thingCalls.Add(1)}, nil
+}
+
+func (e echo) OldEcho(ctx context.Context, req *testv1.EchoRequest) (*testv1.EchoResponse, error) {
+	return e.Echo(ctx, req)
 }
 
 func multipartBody(t *testing.T, build func(w *multipart.Writer)) (*bytes.Buffer, string) {
@@ -91,13 +100,24 @@ func TestMultipartUpload(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("code = %d\n%s", code, got)
 	}
-	for _, want := range []string{
-		`"title":"Menu"`, `"avatar_name":"logo.png"`, `"avatar_type":"image/png"`, `"avatar_size":7`,
-		`"author":"aidar"`, `"images":["a.png:A","b.png:B",":","d.png:D"]`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("response lacks %s:\n%s", want, got)
-		}
+	// protojson spaces its output at random on purpose, so the answer is decoded, not
+	// compared as text.
+	var resp struct {
+		Title      string   `json:"title"`
+		AvatarName string   `json:"avatar_name"`
+		AvatarType string   `json:"avatar_type"`
+		AvatarSize int      `json:"avatar_size"`
+		Author     string   `json:"author"`
+		Images     []string `json:"images"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("decode: %v\n%s", err, got)
+	}
+	if resp.Title != "Menu" || resp.AvatarName != "logo.png" || resp.AvatarType != "image/png" || resp.AvatarSize != 7 || resp.Author != "aidar" {
+		t.Errorf("response = %+v", resp)
+	}
+	if strings.Join(resp.Images, ",") != "a.png:A,b.png:B,:,d.png:D" {
+		t.Errorf("images = %v", resp.Images)
 	}
 
 	// A huge index is refused instead of allocating a list of empty files.
@@ -127,7 +147,7 @@ func TestRequestIDAndClientIP(t *testing.T) {
 		"X-Forwarded-For": "6.6.6.6, 10.0.0.9", // the last hop is the one the proxy saw
 		"X-Client-IP":     "1.2.3.4",           // forged
 	})
-	if code != http.StatusOK || !strings.Contains(body, `"id":"req-42|10.0.0.9"`) {
+	if code != http.StatusOK || thingID(t, body) != "req-42|10.0.0.9" {
 		t.Fatalf("code = %d\n%s", code, body)
 	}
 	if h.Get("X-Request-ID") != "req-42" {
@@ -136,7 +156,7 @@ func TestRequestIDAndClientIP(t *testing.T) {
 
 	_, body, h = s.do("POST", "/v1/things", `{"name":"x"}`, nil)
 	id := h.Get("X-Request-ID")
-	if len(id) != 16 || !strings.Contains(body, `"id":"`+id+`|127.0.0.1"`) {
+	if len(id) != 16 || thingID(t, body) != id+"|127.0.0.1" {
 		t.Errorf("generated id %q, body %s", id, body)
 	}
 }
@@ -198,4 +218,15 @@ func TestHTTPMetricsAndAccessLog(t *testing.T) {
 	if code, body, _ := s.do("GET", "/v1/nothing", "", nil); code != http.StatusNotFound || !strings.Contains(body, "GET /v1/nothing: route not found") {
 		t.Errorf("unknown route: %d %s", code, body)
 	}
+}
+
+func thingID(t *testing.T, body string) string {
+	t.Helper()
+	var resp struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode: %v\n%s", err, body)
+	}
+	return resp.ID
 }

@@ -135,6 +135,12 @@ The HTTP side, following taply's gateway:
 - **Metrics and access log**: `api_http_requests_total{method,route,status}` and a duration histogram labelled by the route template — `/v1/orders/{id}`, never the concrete path — with unmatched paths as `unknown`; an access log line per request with the route, status, duration, client address and request id, plus the bodies of failed requests with binary and multipart bodies summarised instead of dumped.
 - **Routing errors** name the method and the path: `GET /v1/nothing: route not found`.
 
+And on every call, following taply's interceptors:
+
+- **Rate limit** — a token bucket per client address, 50 calls a second with a burst of 100, and a separate 30/60 for public methods (the ones `rbac` marks public, or `api.PublicMethods`). A refused call answers `ResourceExhausted`, 429 over REST, and is counted in `api_rate_limited_total`. It runs before project interceptors, so a flood never reaches token validation.
+- **Deprecated methods** — `option deprecated = true` in the proto file is enough: calls are counted in `api_deprecated_calls_total{method}` and logged with the caller's address and user agent, so the method can go once nobody calls it. taply keeps this list in code.
+- **Idempotency** — a call with an `Idempotency-Key` header is remembered in the database of the `postgres` module, with taply's semantics: a repeat gets the saved answer without running the handler again, the same key with a different payload answers `AlreadyExists`, a repeat while the first call runs answers `Aborted`, a final failure is remembered and a failure that says try again (a `RetryableError`, or `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`) lets the next repeat run. `api.RequireIdempotency(app, methods...)` makes a key mandatory, as taply does for every create method; `api.IdempotencyUser` scopes keys to the caller. Unlike taply, taking over a retry is an atomic compare and set, and a call that died while holding its key can be repeated once its lock expires. Without the `postgres` module keys are ignored, and a required key stops the start.
+
 The description marks messages with `additionalProperties: false`: that is the contract for clients, while the gateway is more forgiving and ignores unknown fields.
 
 | Variable | Default | |
@@ -145,6 +151,9 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_DOCS` | `true` | `/openapi.yaml` and `/docs` |
 | `API_REFLECTION` | `false` | gRPC reflection |
 | `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits; the request limit also caps HTTP bodies |
+| `API_RATE_RPS`, `API_RATE_BURST` | 50, 100 | per client; `0` turns the limit off |
+| `API_PUBLIC_RATE_RPS`, `API_PUBLIC_RATE_BURST` | 30, 60 | per client, public methods |
+| `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LOCK` | `24h`, `1m` | |
 | `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
 
 ## The `river` module
