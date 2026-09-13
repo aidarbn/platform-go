@@ -19,17 +19,20 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 
 ## The `admin` module
 
-It runs together with the application, inside the same binary.
+It runs together with the application, inside the same binary, on its own port.
 
 ```yaml
 modules:
-  admin:
-    addr: :8081      # own port; "" serves it on the shared port under admin.<domain>
-    auth: session    # session | basic | none (none listens on 127.0.0.1 only)
-    totp: true
+  postgres: {}   # required: accounts, sessions and the log live in the database
+  settings: {}   # optional: adds the business settings pages
+  admin: {}
 ```
 
-Out of the box: business settings pages generated from `settings.yaml`, River queues and jobs, module and migration state, audit log, users and roles. Templates and static files are embedded into the binary and create no files in the project.
+Everything else is an environment parameter: `ADMIN_ADDR` (`127.0.0.1:8081` by default, so the panel is not on the public network), `ADMIN_SESSION_TTL`, `ADMIN_INSECURE_COOKIES` for local development over plain HTTP, and `ADMIN_BOOTSTRAP_EMAIL` with `ADMIN_BOOTSTRAP_PASSWORD`, which create the first account while there are none.
+
+Out of the box: sign in with a password and an optional one time code, roles, accounts, an append-only audit log, business settings pages built from the schema, and an overview. The panel is server rendered HTML with no external assets — it opens on a locked down network — and it creates no files in the project.
+
+Security of the panel: passwords are PBKDF2-HMAC-SHA256, only the hash of a session token is stored, a used one time code cannot be used again, forms are protected by a double submit token, the cookie is `HttpOnly` and `SameSite=Strict`, and disabling an account revokes its sessions at once.
 
 Project pages are added from project code:
 
@@ -42,7 +45,7 @@ admin.AddPage(app, admin.Page{
 })
 ```
 
-Removing the admin UI means deleting the section and running `apply`; settings are then edited with `platformgo settings set`.
+Removing the admin panel means deleting the section and running `apply`.
 
 ## The `settings` module
 

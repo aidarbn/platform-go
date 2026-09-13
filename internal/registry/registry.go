@@ -61,6 +61,20 @@ var all = []Module{
 		},
 	},
 	{
+		Name:     "admin",
+		Requires: []string{"postgres"},
+		Import:   "github.com/aidarbn/platform-go/kit/modules/admin",
+		Package:  "admin",
+		Field:    "Admin",
+		Env: []EnvVar{
+			{Key: "ADMIN_ADDR", Example: "127.0.0.1:8081", Comment: "address of the admin panel"},
+			{Key: "ADMIN_SESSION_TTL", Example: "12h", Comment: "how long a session lives"},
+			{Key: "ADMIN_INSECURE_COOKIES", Example: "false", Comment: "allow the cookie over plain http: local development only"},
+			{Key: "ADMIN_BOOTSTRAP_EMAIL", Example: "admin@example.com", Comment: "first account, created while there are none"},
+			{Key: "ADMIN_BOOTSTRAP_PASSWORD", Example: "", Comment: "password of the first account"},
+		},
+	},
+	{
 		Name:         "settings",
 		Requires:     []string{"postgres"},
 		Import:       "github.com/aidarbn/platform-go/kit/modules/settings",

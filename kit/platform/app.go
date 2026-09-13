@@ -17,6 +17,7 @@ import (
 // Modules find each other through the container instead of through edits in main.go,
 // which is why adding or removing a module needs no manual changes in project code.
 type App struct {
+	service string
 	log     *slog.Logger
 	metrics *prometheus.Registry
 
@@ -36,19 +37,23 @@ func NewApp(log *slog.Logger) *App {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return newApp(log)
+	return newApp("app", log)
 }
 
-func newApp(log *slog.Logger) *App {
+func newApp(service string, log *slog.Logger) *App {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	return &App{
+		service: service,
 		log:     log,
 		metrics: reg,
 		values:  make(map[reflect.Type]any),
 	}
 }
+
+// Service returns the service name. Modules put it in page titles and messages.
+func (a *App) Service() string { return a.service }
 
 // Logger returns the application logger.
 func (a *App) Logger() *slog.Logger { return a.log }

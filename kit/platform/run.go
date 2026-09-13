@@ -54,7 +54,7 @@ func Run(cfg Config, modules []Module, wire Wire) error {
 // RunContext behaves like Run but stops when ctx is done. Tests use it.
 func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) error {
 	cfg.setDefaults()
-	app := newApp(cfg.Logger.With("service", cfg.Service))
+	app := newApp(cfg.Service, cfg.Logger.With("service", cfg.Service))
 
 	// shutdown stops whatever is already up; it runs on every exit path.
 	var inited []Module

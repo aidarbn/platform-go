@@ -156,8 +156,9 @@ func gofmtList(t *testing.T, dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// A project with business settings must compile too: the generated accessor is the
-// only way domain code reads a setting, so its shape is verified by the compiler.
+// A project with business settings and an admin panel must compile too: the generated
+// accessor is the only way domain code reads a setting, and a project page is the
+// extension point of the panel, so the compiler verifies both shapes.
 func TestProjectWithSettingsCompiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("building a project takes time")
@@ -174,6 +175,7 @@ project:
 modules:
   postgres: {}
   settings: {}
+  admin: {}
 `)
 
 	write(t, dir, "settings.yaml", `settings:
@@ -217,14 +219,28 @@ func main() {
 	write(t, dir, "cmd/app/wire.go", `package main
 
 import (
+	"net/http"
 	"time"
 
 	appsettings "example.com/app/internal/settings"
+	"github.com/aidarbn/platform-go/kit/modules/admin"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
 func wireDomain(app *platform.App) error {
 	s := appsettings.From(app)
+
+	// A project page in the admin panel: the platform gives the layout, the sign in
+	// and the roles, the project gives the content.
+	admin.AddPage(app, admin.Page{
+		Title: "Orders",
+		Path:  "/orders",
+		Roles: []string{"support"},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, _ := admin.UserFrom(r.Context())
+			_, _ = w.Write([]byte(user.Email))
+		}),
+	})
 
 	var (
 		attempts int           = s.OrdersCreate().MaxAttempts()

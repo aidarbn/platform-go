@@ -36,10 +36,7 @@ modules:
   settings:
     schema: settings.yaml
 
-  admin:
-    addr: :8081
-    auth: session
-    totp: true
+  admin: {}
 
   api:
     grpc_addr: 127.0.0.1:9090
