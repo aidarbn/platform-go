@@ -200,6 +200,26 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
 
+## The `enums` module
+
+The catalog of the enums of the project — every allowed status, provider or type with its description — for clients and for validation, after taply's enumsgen. Requires `api`.
+
+Enums are declared in the domain package (`internal/domain`, or the `domain` option) with taply's marker above a const block:
+
+```go
+type PaymentStatus string
+
+// go-enum: payment.status "Payment status" entity="Payments" order=20
+const (
+	PaymentPending PaymentStatus = "pending" // waiting for the customer
+	PaymentPaid    PaymentStatus = "paid"    // money received
+)
+```
+
+`platformgo generate` builds `internal/enums/enums.gen.go` from the markers; entities are sorted by `order`, values keep their order in the code, the comment after a value is its description. An entity whose markers disagree on its description or order, a duplicate enum and a const block with several names on one line are generation errors. Unlike taply, a project without markers gets an empty catalog, so enabling the module never breaks the build.
+
+The module serves the catalog at `ENUMS_PATH` (`/v1/enums`); with `i18n` enabled the descriptions come in the language of the request from the keys `enum.<entity>`, `enum.<entity>.<enum>` and `enum.<entity>.<enum>.<value>`. `enums.From(app).Valid("payment", "status", value)` checks input.
+
 ## The `i18n` module
 
 Translations of the API, ported from taply's i18n package. Requires `postgres` and `api`.

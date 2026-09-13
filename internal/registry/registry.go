@@ -153,6 +153,22 @@ var all = []Module{
 		},
 	},
 	{
+		Name:     "enums",
+		Requires: []string{"api"},
+		Import:   "github.com/aidarbn/platform-go/kit/modules/enums",
+		Package:  "enums",
+		Field:    "Enums",
+		Options: []Option{
+			{Name: "domain", Description: "Go package scanned for go-enum markers, relative to the project root", Default: "internal/domain"},
+		},
+		ProjectPkg:   "internal/enums",
+		ProjectAlias: "enumcatalog",
+		ExtraArgs:    []string{"enums.WithCatalog(enumcatalog.Catalog)"},
+		Env: []EnvVar{
+			{Key: "ENUMS_PATH", Example: "/v1/enums", Comment: "where the enum catalog is served"},
+		},
+	},
+	{
 		Name:         "i18n",
 		Requires:     []string{"postgres", "api"},
 		Import:       "github.com/aidarbn/platform-go/kit/modules/i18n",

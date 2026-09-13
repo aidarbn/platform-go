@@ -34,7 +34,8 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 | `s3` — object storage with taply's storage API: public and private buckets, streaming uploads, signed links, MinIO in compose | ready |
 | `rbac` — access to gRPC and REST methods by role, taply's casbin model and policy, embedded policy file | ready |
 | `i18n` — translated entity fields and error messages by Accept-Language, taply's proto option, table and error translation | ready |
-| enums, monitoring and the rest of [docs/modules.md](docs/modules.md) | planned |
+| `enums` — catalog of enums from taply's go-enum markers, served translated and used for validation | ready |
+| monitoring and tracing | planned |
 
 ## Layout
 

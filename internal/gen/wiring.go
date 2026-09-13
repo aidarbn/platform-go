@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -346,32 +347,37 @@ func composeName(service string) string {
 // The schema is read from the project directory, so the generated code always matches
 // the file a developer just edited.
 func Files(dir string, f *spec.File) (map[string][]byte, error) {
-	return FilesFrom(f, func(path string) ([]byte, error) {
-		return os.ReadFile(filepath.Join(dir, path))
-	})
+	return FilesFrom(f, os.DirFS(dir))
 }
 
-// FilesFrom is Files with the project files read through read. apply uses it to
-// generate from files it is about to create, before they are on disk.
-func FilesFrom(f *spec.File, read func(path string) ([]byte, error)) (map[string][]byte, error) {
+// FilesFrom is Files with the project read through project. apply passes the disk with
+// the files it is about to create laid over it.
+func FilesFrom(f *spec.File, project fs.FS) (map[string][]byte, error) {
 	files, err := Wiring(f)
 	if err != nil {
 		return nil, err
 	}
-	if !SettingsEnabled(f) {
-		return files, nil
+
+	if SettingsEnabled(f) {
+		path := SettingsSchemaPath(f)
+		raw, err := fs.ReadFile(project, path)
+		if err != nil {
+			return nil, fmt.Errorf("module settings: %s: %w", path, err)
+		}
+		code, err := SettingsCode(raw)
+		if err != nil {
+			return nil, err
+		}
+		files[SettingsPath] = code
 	}
 
-	path := SettingsSchemaPath(f)
-	raw, err := read(path)
-	if err != nil {
-		return nil, fmt.Errorf("module settings: %s: %w", path, err)
+	if _, ok := f.Modules["enums"]; ok {
+		code, err := EnumsCode(f, project)
+		if err != nil {
+			return nil, err
+		}
+		files[EnumsPath] = code
 	}
-	code, err := SettingsCode(raw)
-	if err != nil {
-		return nil, err
-	}
-	files[SettingsPath] = code
 	return files, nil
 }
 

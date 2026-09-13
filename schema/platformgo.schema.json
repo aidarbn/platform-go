@@ -20,6 +20,18 @@
           "properties": {},
           "type": "object"
         },
+        "enums": {
+          "additionalProperties": false,
+          "description": "platform module enums; requires api",
+          "properties": {
+            "domain": {
+              "default": "internal/domain",
+              "description": "Go package scanned for go-enum markers, relative to the project root",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "i18n": {
           "additionalProperties": false,
           "description": "platform module i18n; requires postgres, api",

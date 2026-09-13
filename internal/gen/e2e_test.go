@@ -178,6 +178,18 @@ modules:
   river: {}
   s3: {}
   rbac: {}
+  enums: {}
+`)
+
+	write(t, dir, "internal/domain/order.go", `package domain
+
+type PaymentStatus string
+
+// go-enum: payment.status "Payment status" entity="Payments" order=20
+const (
+	PaymentPending PaymentStatus = "pending" // waiting for the customer
+	PaymentPaid    PaymentStatus = "paid"    // money received
+)
 `)
 
 	write(t, dir, gen.PolicyPath, gen.PolicyExample)

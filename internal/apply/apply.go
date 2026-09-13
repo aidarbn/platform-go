@@ -10,11 +10,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"testing/fstest"
 
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/gomod"
@@ -59,12 +61,7 @@ func Build(dir string) (*Plan, error) {
 		return nil, err
 	}
 
-	files, err := gen.FilesFrom(f, func(path string) ([]byte, error) {
-		if content, ok := creates[path]; ok {
-			return content, nil
-		}
-		return os.ReadFile(filepath.Join(dir, path))
-	})
+	files, err := gen.FilesFrom(f, overlay{base: os.DirFS(dir), extra: creates})
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +270,19 @@ func removeEmptyParents(root, dir string) {
 		}
 		dir = filepath.Dir(dir)
 	}
+}
+
+// overlay reads the files apply is about to create before the disk.
+type overlay struct {
+	base  fs.FS
+	extra map[string][]byte
+}
+
+func (o overlay) Open(name string) (fs.File, error) {
+	if content, ok := o.extra[name]; ok {
+		return fstest.MapFS{name: {Data: content}}.Open(name)
+	}
+	return o.base.Open(name)
 }
 
 func notExists(path string) (bool, error) {
