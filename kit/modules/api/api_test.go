@@ -343,3 +343,45 @@ func scrape(t *testing.T, ops string) string {
 	raw, _ := io.ReadAll(resp.Body)
 	return string(raw)
 }
+
+// A worker process registers the same services but serves no API.
+func TestWorkerRoleServesNothing(t *testing.T) {
+	m := api.New(api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: "127.0.0.1:0"})
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan string, 1)
+	errCh := make(chan error, 1)
+	cfg := platform.Config{
+		Service: "worker", Role: platform.RoleWorker, OpsAddr: "127.0.0.1:0", ShutdownTimeout: time.Second,
+		Logger: logx.New(logx.Options{Writer: io.Discard}), OnStarted: func(a string) { started <- a },
+	}
+	wire := func(app *platform.App) error {
+		api.Register(app, api.Service{GRPC: func(g *grpc.Server) { testv1.RegisterEchoServiceServer(g, echo{}) }, Gateway: testv1.RegisterEchoServiceHandler})
+		return nil
+	}
+	go func() { errCh <- platform.RunContext(ctx, cfg, []platform.Module{m}, wire) }()
+
+	var ops string
+	select {
+	case ops = <-started:
+	case err := <-errCh:
+		t.Fatalf("Run: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("did not start")
+	}
+	if m.HTTPAddr() != "127.0.0.1:0" {
+		t.Errorf("a worker listens for the API on %s", m.HTTPAddr())
+	}
+	resp, err := http.Get("http://" + ops + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"api":"ok"`) {
+		t.Errorf("health of a worker = %d %s", resp.StatusCode, raw)
+	}
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Errorf("Run: %v", err)
+	}
+}

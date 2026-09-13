@@ -164,6 +164,7 @@ func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys 
 // Module implements platform.Module.
 type Module struct {
 	cfg      Config
+	skipped  bool
 	openapi  fs.FS
 	registry *Registry
 	log      *slog.Logger
@@ -198,6 +199,7 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 		return err
 	}
 	m.metrics = met
+	m.skipped = !app.Serves(platform.RoleAPI)
 	platform.Provide(app, m.registry)
 	return nil
 }
@@ -205,6 +207,12 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 // Start builds the servers from what the project registered and starts serving.
 func (m *Module) Start(ctx context.Context) error {
 	m.registry.seal()
+	// A worker process does not serve the API; services are still registered, so the
+	// same wireDomain works for every role.
+	if m.skipped {
+		m.log.Info("the API is not served in this role")
+		return nil
+	}
 
 	validator, err := protovalidate.New()
 	if err != nil {
@@ -369,6 +377,9 @@ func (m *Module) HTTPAddr() string {
 
 // Health reports whether both servers are serving.
 func (m *Module) Health(context.Context) error {
+	if m.skipped {
+		return nil
+	}
 	if m.grpcLn == nil || m.httpLn == nil {
 		return errors.New("the API is not started")
 	}

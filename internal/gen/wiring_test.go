@@ -85,7 +85,7 @@ func TestEnvExample(t *testing.T) {
 	}
 
 	got := string(files[gen.EnvPath])
-	for _, want := range []string{"# module postgres", "DATABASE_URL=postgres://", "(required)"} {
+	for _, want := range []string{"# platform", "APP_ROLE=all", "LOG_LEVEL=info", "# module postgres", "DATABASE_URL=postgres://", "(required)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf(".env.example lacks %q:\n%s", want, got)
 		}

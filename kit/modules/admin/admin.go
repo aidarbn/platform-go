@@ -194,6 +194,12 @@ func (m *Module) bootstrap(ctx context.Context) error {
 
 // Start serves the panel and begins removing expired sessions.
 func (m *Module) Start(context.Context) error {
+	// A worker process does not serve the panel.
+	if !m.app.Serves(platform.RoleAPI) {
+		m.log.Info("the admin panel is not served in this role")
+		return nil
+	}
+
 	// The settings are looked up here rather than in Init: modules initialise in
 	// dependency order, and the settings module may come after the panel. By Start every
 	// module has been initialised. Without the settings module the panel works, just
@@ -250,6 +256,9 @@ func (m *Module) Addr() string {
 
 // Health reports whether the panel is serving.
 func (m *Module) Health(context.Context) error {
+	if m.app != nil && !m.app.Serves(platform.RoleAPI) {
+		return nil
+	}
 	if m.ln == nil {
 		return errors.New("the admin panel is not started")
 	}

@@ -197,13 +197,17 @@ The module creates its own table (`SETTINGS_TABLE`, `platform_settings` by defau
 
 ## Process roles
 
-One binary, different sets of modules:
+One binary, split by `APP_ROLE`, the way taply runs API and worker instances:
 
-| Start | What runs |
+| `APP_ROLE` | What runs |
 |---|---|
-| default | every declared module |
-| `--role=worker` | queues and what they need; no API, no admin UI |
-| `--role=api` | API and admin UI; no workers |
+| `all` (default) | everything |
+| `api` | the API and the admin panel; River only inserts jobs |
+| `worker` | River works jobs and runs periodic jobs; the API and the admin panel are not served |
+
+Every role runs the same `wireDomain`: services, pages and workers are registered everywhere, and each module decides what to start. `/health` and `/metrics` are served in every role.
+
+Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
 
 ## Dependencies between modules
 

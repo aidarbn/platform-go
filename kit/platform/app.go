@@ -18,6 +18,7 @@ import (
 // which is why adding or removing a module needs no manual changes in project code.
 type App struct {
 	service string
+	role    string
 	log     *slog.Logger
 	metrics *prometheus.Registry
 
@@ -46,6 +47,7 @@ func newApp(service string, log *slog.Logger) *App {
 
 	return &App{
 		service: service,
+		role:    RoleAll,
 		log:     log,
 		metrics: reg,
 		values:  make(map[reflect.Type]any),
@@ -54,6 +56,14 @@ func newApp(service string, log *slog.Logger) *App {
 
 // Service returns the service name. Modules put it in page titles and messages.
 func (a *App) Service() string { return a.service }
+
+// Role returns what this process does: all, api or worker.
+func (a *App) Role() string { return a.role }
+
+// Serves reports whether this process takes the given role: a process in role all
+// takes every role. A module that serves requests checks api, one that works jobs
+// checks worker.
+func (a *App) Serves(role string) bool { return a.role == RoleAll || a.role == role }
 
 // Logger returns the application logger.
 func (a *App) Logger() *slog.Logger { return a.log }

@@ -238,11 +238,16 @@ type running struct {
 
 func run(t *testing.T, modules []platform.Module, wire platform.Wire) *running {
 	t.Helper()
+	return runAs(t, platform.RoleAll, modules, wire)
+}
+
+func runAs(t *testing.T, role string, modules []platform.Module, wire platform.Wire) *running {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &running{app: make(chan *platform.App, 1), cancel: cancel, errCh: make(chan error, 1)}
 	started := make(chan string, 1)
 	cfg := platform.Config{
-		Service: "river-test", OpsAddr: "127.0.0.1:0", ShutdownTimeout: 5 * time.Second,
+		Service: "river-test", Role: role, OpsAddr: "127.0.0.1:0", ShutdownTimeout: 5 * time.Second,
 		Logger:    logx.New(logx.Options{Writer: io.Discard}),
 		OnStarted: func(addr string) { started <- addr },
 	}
@@ -349,24 +354,36 @@ func TestWorkerProcessesJobs(t *testing.T) {
 }
 
 func TestInsertOnly(t *testing.T) {
-	dsn := database(t)
-	worker := &pingWorker{seen: make(chan string, 1)}
+	// Work turned off in the configuration, or a process in the api role: both insert
+	// jobs for the worker instances and work none.
+	for name, tc := range map[string]struct {
+		role string
+		work bool
+	}{
+		"RIVER_WORK=false": {platform.RoleAll, false},
+		"APP_ROLE=api":     {platform.RoleAPI, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dsn := database(t)
+			worker := &pingWorker{seen: make(chan string, 1)}
 
-	var queue *riverx.Queue
-	run(t, []platform.Module{postgres.New(postgres.Config{URL: dsn}), riverx.New(riverx.Config{Work: false})},
-		func(app *platform.App) error {
-			riverx.AddWorker(app, worker)
-			queue = riverx.QueueFrom(app)
-			return nil
+			var queue *riverx.Queue
+			runAs(t, tc.role, []platform.Module{postgres.New(postgres.Config{URL: dsn}), riverx.New(riverx.Config{Work: tc.work})},
+				func(app *platform.App) error {
+					riverx.AddWorker(app, worker)
+					queue = riverx.QueueFrom(app)
+					return nil
+				})
+
+			if _, err := queue.Insert(context.Background(), PingArgs{Text: "for another instance"}, nil); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+			select {
+			case text := <-worker.seen:
+				t.Fatalf("an insert only instance worked a job: %q", text)
+			case <-time.After(2 * time.Second):
+			}
 		})
-
-	if _, err := queue.Insert(context.Background(), PingArgs{Text: "for another instance"}, nil); err != nil {
-		t.Fatalf("Insert: %v", err)
-	}
-	select {
-	case text := <-worker.seen:
-		t.Fatalf("an insert only instance worked a job: %q", text)
-	case <-time.After(2 * time.Second):
 	}
 }
 

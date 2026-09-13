@@ -351,7 +351,7 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	// A client without workers or with work turned off only inserts: River refuses
 	// queues it has nobody to run for.
-	working := m.cfg.Work && workerCount > 0
+	working := m.cfg.Work && workerCount > 0 && m.app.Serves(platform.RoleWorker)
 	if working {
 		cfg.Workers = m.registry.workers
 		cfg.Queues = make(map[string]river.QueueConfig, len(m.cfg.Queues))
@@ -370,7 +370,7 @@ func (m *Module) Start(ctx context.Context) error {
 	m.queue.mu.Unlock()
 
 	if !working {
-		m.log.Info("river inserts only", "work", m.cfg.Work, "workers", workerCount)
+		m.log.Info("river inserts only", "work", m.cfg.Work, "workers", workerCount, "role", m.app.Role())
 		m.runAtStart(ctx, atStart)
 		return nil
 	}

@@ -7,15 +7,18 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
+	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/logx"
 )
 
 // Config holds startup parameters. Empty fields fall back to defaults.
 type Config struct {
 	Service         string        // service name in logs
+	Role            string        // what this process does: all, api or worker; all by default
 	OpsAddr         string        // ops server address, :9090 by default
 	ShutdownTimeout time.Duration // overall shutdown timeout, 20s by default
 	Logger          *slog.Logger
@@ -25,19 +28,38 @@ type Config struct {
 	OnStarted func(opsAddr string)
 }
 
-func (c *Config) setDefaults() {
+// Roles a process can run in. One binary serves them all: an API instance and a worker
+// instance differ only in APP_ROLE.
+const (
+	RoleAll    = "all"
+	RoleAPI    = "api"
+	RoleWorker = "worker"
+)
+
+// setDefaults fills what the code left empty from the environment, then from defaults,
+// so existing projects gain these variables without touching main.go. Every bad
+// variable is reported at once.
+func (c *Config) setDefaults() error {
+	l := confx.New("")
 	if c.Service == "" {
 		c.Service = "app"
 	}
+	if c.Role == "" {
+		c.Role = l.String("APP_ROLE", RoleAll)
+	}
+	if !slices.Contains([]string{RoleAll, RoleAPI, RoleWorker}, c.Role) {
+		l.Fail(fmt.Errorf("APP_ROLE=%q: expected all, api or worker", c.Role))
+	}
 	if c.OpsAddr == "" {
-		c.OpsAddr = ":9090"
+		c.OpsAddr = l.String("OPS_ADDR", ":9090")
 	}
 	if c.ShutdownTimeout == 0 {
-		c.ShutdownTimeout = 20 * time.Second
+		c.ShutdownTimeout = l.Duration("SHUTDOWN_TIMEOUT", 20*time.Second)
 	}
 	if c.Logger == nil {
-		c.Logger = logx.New(logx.Options{})
+		c.Logger = logx.New(logx.Options{Level: l.String("LOG_LEVEL", "info"), Format: l.String("LOG_FORMAT", "json")})
 	}
+	return l.Err()
 }
 
 // Wire builds the project domain: use cases, handlers, workers. It runs between Init
@@ -53,8 +75,11 @@ func Run(cfg Config, modules []Module, wire Wire) error {
 
 // RunContext behaves like Run but stops when ctx is done. Tests use it.
 func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) error {
-	cfg.setDefaults()
+	if err := cfg.setDefaults(); err != nil {
+		return err
+	}
 	app := newApp(cfg.Service, cfg.Logger.With("service", cfg.Service))
+	app.role = cfg.Role
 
 	// shutdown stops whatever is already up; it runs on every exit path.
 	var inited []Module
@@ -84,7 +109,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 	if err != nil {
 		return errors.Join(err, shutdown())
 	}
-	app.log.Info("service started", "ops", ops.addr(), "modules", len(modules))
+	app.log.Info("service started", "role", cfg.Role, "ops", ops.addr(), "modules", len(modules))
 	if cfg.OnStarted != nil {
 		cfg.OnStarted(ops.addr())
 	}
