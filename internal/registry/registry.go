@@ -139,6 +139,21 @@ var all = []Module{
 		},
 	},
 	{
+		Name:     "river",
+		Requires: []string{"postgres"},
+		Import:   "github.com/aidarbn/platform-go/kit/modules/riverx",
+		Package:  "riverx",
+		Field:    "River",
+		Env: []EnvVar{
+			{Key: "RIVER_QUEUES", Example: "default=10", Comment: "queues and how many jobs each works at once"},
+			{Key: "RIVER_WORK", Example: "true", Comment: "work jobs; false leaves this instance inserting only"},
+			{Key: "RIVER_JOB_TIMEOUT", Example: "1m", Comment: "how long one job may run"},
+			{Key: "RIVER_COMPLETED_RETENTION", Example: "24h", Comment: "how long completed jobs are kept"},
+			{Key: "RIVER_CANCELLED_RETENTION", Example: "24h", Comment: "how long cancelled jobs are kept"},
+			{Key: "RIVER_DISCARDED_RETENTION", Example: "168h", Comment: "how long discarded jobs are kept"},
+		},
+	},
+	{
 		Name:         "settings",
 		Requires:     []string{"postgres"},
 		Import:       "github.com/aidarbn/platform-go/kit/modules/settings",

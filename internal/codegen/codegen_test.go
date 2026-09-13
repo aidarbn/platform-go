@@ -186,7 +186,7 @@ func TestJet(t *testing.T) {
 		}
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"tool jet", "-dsn=postgres://app:app@localhost/devdb", "-schema=public", "-ignore-tables=goose_db_version,platform_*"} {
+	for _, want := range []string{"tool jet", "-dsn=postgres://app:app@localhost/devdb", "-schema=public", "-ignore-tables=goose_db_version,platform_*,river_*"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("jet args lack %q: %s", want, joined)
 		}

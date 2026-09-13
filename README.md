@@ -29,7 +29,8 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 | `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
 | `admin` — admin panel: sign in with one time codes, roles, accounts, audit log, settings pages, project pages | ready |
 | `api` — gRPC and REST gateway from proto files, OpenAPI 3.1 with validation rules, interceptors, health, CORS, docs | ready |
-| `river` and the rest of [docs/modules.md](docs/modules.md) | planned |
+| `river` — background jobs, periodic jobs scheduled from business settings, job options carried by the job as in taply | ready |
+| s3, keycloak, rbac, i18n and the rest of [docs/modules.md](docs/modules.md) | planned |
 
 ## Layout
 

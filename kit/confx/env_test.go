@@ -1,6 +1,7 @@
 package confx_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +96,17 @@ func TestNoPrefix(t *testing.T) {
 	}
 	if got := l.String("HOST", ""); got != "db" {
 		t.Errorf("String = %q", got)
+	}
+}
+
+func TestFailIsReportedWithTheRest(t *testing.T) {
+	l := confx.New("")
+	l.Required("CONFX_MISSING_FOR_FAIL")
+	l.Fail(errors.New("RIVER_QUEUES: bad entry"))
+	l.Fail(nil)
+
+	err := l.Err()
+	if err == nil || !strings.Contains(err.Error(), "RIVER_QUEUES: bad entry") || !strings.Contains(err.Error(), "CONFX_MISSING_FOR_FAIL") {
+		t.Fatalf("err = %v", err)
 	}
 }

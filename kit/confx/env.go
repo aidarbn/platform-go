@@ -124,5 +124,13 @@ func (l *Loader) invalid(name, value, want string) {
 	l.errs = append(l.errs, fmt.Errorf("%s=%q: expected %s", l.Key(name), value, want))
 }
 
+// Fail records a problem found while interpreting a variable, such as a list with a bad
+// entry, so it is reported together with the rest.
+func (l *Loader) Fail(err error) {
+	if err != nil {
+		l.errs = append(l.errs, err)
+	}
+}
+
 // Err returns every collected error as one.
 func (l *Loader) Err() error { return errors.Join(l.errs...) }

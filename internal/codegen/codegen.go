@@ -114,7 +114,7 @@ func SqlcCheck(ctx context.Context, dir string) error {
 }
 
 // Jet regenerates the dynamic query builder from the database at dsn. The schema must
-// already be migrated; the tables of goose and of platform modules are left out.
+// already be migrated; the tables of goose, River and platform modules are left out.
 //
 // jet writes into <path>/<database>/<schema>. The database name differs between
 // developers, and it would end up in import paths, so the output is generated into a
@@ -134,7 +134,7 @@ func Jet(ctx context.Context, dir, dsn string, out io.Writer) error {
 		"-dsn="+dsn,
 		"-schema=public",
 		"-path="+filepath.ToSlash(rel),
-		"-ignore-tables=goose_db_version,platform_*",
+		"-ignore-tables=goose_db_version,platform_*,river_*",
 	); err != nil {
 		return err
 	}

@@ -138,6 +138,50 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_REFLECTION` | `false` | gRPC reflection |
 | `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits |
 
+## The `river` module
+
+Background jobs on River, in the database of the `postgres` module. The module applies River's migrations on start, runs the client, removes finished jobs after their retention period and exports `river_jobs_total{kind,outcome}` and `river_job_duration_seconds`.
+
+Jobs follow the conventions of taply: the arguments carry their own insert options, so every place that queues a job gets the same queue, priority and attempts.
+
+```go
+type OrderCleanupArgs struct{}
+
+func (OrderCleanupArgs) Kind() string { return "order_cleanup" }
+
+func (OrderCleanupArgs) InsertOpts() *river.InsertOpts {
+	return &river.InsertOpts{Queue: "maintenance", MaxAttempts: 1}
+}
+```
+
+Declared from `wire.go`:
+
+```go
+s := appsettings.From(app)
+q := riverx.QueueFrom(app) // domain services keep it; inserts work once the module has started
+
+riverx.AddWorker(app, workers.NewOrderCleanup(repo))
+riverx.Periodic(app, riverx.PeriodicJob{
+	Name:     "order_cleanup",
+	Schedule: s.OrdersCleanup().Schedule, // business settings: changed in the admin panel,
+	Enabled:  s.OrdersCleanup().Enabled,  // rescheduled without a restart
+	Args:     func() river.JobArgs { return jobs.OrderCleanupArgs{} },
+})
+riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
+	_, err := q.Insert(ctx, jobs.BootstrapArgs{}, nil) // queued on every start
+	return err
+})
+```
+
+`Queue` has `Insert`, `InsertTx` (the job exists exactly when the domain change commits), `InsertAt` and `InsertMany`; `Client()` gives the River client for the rest. Periodic jobs run on the elected leader only, so several instances do not run them twice.
+
+| Variable | Default | |
+|---|---|---|
+| `RIVER_QUEUES` | `default=10` | queues and their capacity: an environment parameter, staging and production differ in it |
+| `RIVER_WORK` | `true` | `false` makes an instance insert only, for splitting API and worker instances |
+| `RIVER_JOB_TIMEOUT` | `1m` | |
+| `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
+
 ## The `settings` module
 
 Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.
