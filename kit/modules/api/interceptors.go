@@ -134,6 +134,9 @@ func logStream(log *slog.Logger) grpc.StreamServerInterceptor {
 func logCall(ctx context.Context, log *slog.Logger, method string, err error, took time.Duration) {
 	code := status.Code(err)
 	attrs := []any{"method", method, "code", code.String(), "duration", took}
+	if id := RequestID(ctx); id != "" {
+		attrs = append(attrs, "request_id", id)
+	}
 	switch code {
 	case codes.OK:
 		log.DebugContext(ctx, "call handled", attrs...)

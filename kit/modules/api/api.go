@@ -42,6 +42,10 @@ type Config struct {
 	CORSOrigins []string // origins allowed to call the REST API from a browser; "*" allows any
 	Docs        bool     // serve /openapi.yaml and the /docs page
 	Reflection  bool     // gRPC server reflection, for grpcurl and similar tools
+
+	AccessLog       bool // log every HTTP request, as taply does
+	LogBodies       bool // put the bodies of failed requests into the access log
+	SecurityHeaders bool // taply's security response headers
 }
 
 // Load reads the module settings from environment variables.
@@ -54,6 +58,10 @@ func Load(l *confx.Loader) Config {
 		CORSOrigins: l.Strings("API_CORS_ORIGINS", nil),
 		Docs:        l.Bool("API_DOCS", true),
 		Reflection:  l.Bool("API_REFLECTION", false),
+
+		AccessLog:       l.Bool("API_ACCESS_LOG", true),
+		LogBodies:       l.Bool("API_LOG_BODIES", true),
+		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
 	}
 }
 
@@ -192,6 +200,7 @@ func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys 
 type Module struct {
 	cfg      Config
 	skipped  bool
+	http     *httpMetrics
 	openapi  fs.FS
 	registry *Registry
 	log      *slog.Logger
@@ -226,6 +235,9 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 		return err
 	}
 	m.metrics = met
+	if m.http, err = newHTTPMetrics(app.Metrics()); err != nil {
+		return err
+	}
 	m.skipped = !app.Serves(platform.RoleAPI)
 	platform.Provide(app, m.registry)
 	return nil
@@ -342,40 +354,52 @@ func (m *Module) recordMethods() {
 func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	mux := http.NewServeMux()
 	for _, r := range m.registry.routes {
-		mux.Handle(r.pattern, r.handler)
+		mux.Handle(r.pattern, withRoute(r.pattern, r.handler))
 	}
 	if m.cfg.Docs && m.openapi != nil {
 		if spec, err := fs.ReadFile(m.openapi, "openapi.yaml"); err == nil {
-			mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
+			mux.Handle("GET /openapi.yaml", withRoute("/openapi.yaml", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/yaml")
 				_, _ = w.Write(spec)
-			})
-			mux.HandleFunc("GET /docs", docsPage)
+			})))
+			mux.Handle("GET /docs", withRoute("/docs", http.HandlerFunc(docsPage)))
 		}
 	}
 	mux.Handle("/", gateway)
 
+	// From the inside out: project middleware and the body limit around the routes,
+	// recovery inside the metrics and the access log so a panic is counted as a 500,
+	// then CORS, security headers, and the request id and client address outermost.
 	var h http.Handler = mux
 	for i := len(m.registry.middleware) - 1; i >= 0; i-- {
 		h = m.registry.middleware[i](h)
 	}
+	h = limitBody(int64(m.cfg.MaxRecvSize), h)
 	h = recoverHTTP(m.log, m.metrics, h)
+	h = m.http.observe(m.log, m.cfg.AccessLog, m.cfg.LogBodies, h)
 	if len(m.cfg.CORSOrigins) > 0 {
 		h = cors(m.cfg.CORSOrigins, h)
 	}
-	return h
+	if m.cfg.SecurityHeaders {
+		h = securityHeaders(h)
+	}
+	return identify(h)
 }
 
 // newGateway configures the REST side: snake_case JSON as in the proto files, every
 // field present in responses, unknown request fields ignored so old clients keep
 // working, and request headers forwarded to the gRPC handlers as metadata.
 func newGateway() *runtime.ServeMux {
+	json := &runtime.JSONPb{
+		MarshalOptions:   protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true},
+		UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
+	}
 	return runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
-			MarshalOptions:   protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true},
-			UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
-		}),
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, json),
+		runtime.WithMarshalerOption("multipart/form-data", newMultipartMarshaler(json)),
 		runtime.WithIncomingHeaderMatcher(forwardHeader),
+		runtime.WithRoutingErrorHandler(routingError),
+		runtime.WithMetadata(annotateRoute),
 	)
 }
 

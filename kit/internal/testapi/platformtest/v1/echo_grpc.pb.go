@@ -22,8 +22,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EchoService_Echo_FullMethodName = "/platformtest.v1.EchoService/Echo"
-	EchoService_Fail_FullMethodName = "/platformtest.v1.EchoService/Fail"
+	EchoService_Echo_FullMethodName        = "/platformtest.v1.EchoService/Echo"
+	EchoService_Fail_FullMethodName        = "/platformtest.v1.EchoService/Fail"
+	EchoService_Upload_FullMethodName      = "/platformtest.v1.EchoService/Upload"
+	EchoService_OldEcho_FullMethodName     = "/platformtest.v1.EchoService/OldEcho"
+	EchoService_CreateThing_FullMethodName = "/platformtest.v1.EchoService/CreateThing"
 )
 
 // EchoServiceClient is the client API for EchoService service.
@@ -32,6 +35,13 @@ const (
 type EchoServiceClient interface {
 	Echo(ctx context.Context, in *EchoRequest, opts ...grpc.CallOption) (*EchoResponse, error)
 	Fail(ctx context.Context, in *FailRequest, opts ...grpc.CallOption) (*FailResponse, error)
+	// Files over multipart/form-data through the gateway.
+	Upload(ctx context.Context, in *UploadRequest, opts ...grpc.CallOption) (*UploadResponse, error)
+	// Deprecated: Do not use.
+	// A method kept for old clients.
+	OldEcho(ctx context.Context, in *EchoRequest, opts ...grpc.CallOption) (*EchoResponse, error)
+	// A method that creates something, for idempotency.
+	CreateThing(ctx context.Context, in *CreateThingRequest, opts ...grpc.CallOption) (*CreateThingResponse, error)
 }
 
 type echoServiceClient struct {
@@ -62,12 +72,50 @@ func (c *echoServiceClient) Fail(ctx context.Context, in *FailRequest, opts ...g
 	return out, nil
 }
 
+func (c *echoServiceClient) Upload(ctx context.Context, in *UploadRequest, opts ...grpc.CallOption) (*UploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UploadResponse)
+	err := c.cc.Invoke(ctx, EchoService_Upload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
+func (c *echoServiceClient) OldEcho(ctx context.Context, in *EchoRequest, opts ...grpc.CallOption) (*EchoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EchoResponse)
+	err := c.cc.Invoke(ctx, EchoService_OldEcho_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *echoServiceClient) CreateThing(ctx context.Context, in *CreateThingRequest, opts ...grpc.CallOption) (*CreateThingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateThingResponse)
+	err := c.cc.Invoke(ctx, EchoService_CreateThing_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EchoServiceServer is the server API for EchoService service.
 // All implementations must embed UnimplementedEchoServiceServer
 // for forward compatibility.
 type EchoServiceServer interface {
 	Echo(context.Context, *EchoRequest) (*EchoResponse, error)
 	Fail(context.Context, *FailRequest) (*FailResponse, error)
+	// Files over multipart/form-data through the gateway.
+	Upload(context.Context, *UploadRequest) (*UploadResponse, error)
+	// Deprecated: Do not use.
+	// A method kept for old clients.
+	OldEcho(context.Context, *EchoRequest) (*EchoResponse, error)
+	// A method that creates something, for idempotency.
+	CreateThing(context.Context, *CreateThingRequest) (*CreateThingResponse, error)
 	mustEmbedUnimplementedEchoServiceServer()
 }
 
@@ -83,6 +131,15 @@ func (UnimplementedEchoServiceServer) Echo(context.Context, *EchoRequest) (*Echo
 }
 func (UnimplementedEchoServiceServer) Fail(context.Context, *FailRequest) (*FailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Fail not implemented")
+}
+func (UnimplementedEchoServiceServer) Upload(context.Context, *UploadRequest) (*UploadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Upload not implemented")
+}
+func (UnimplementedEchoServiceServer) OldEcho(context.Context, *EchoRequest) (*EchoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OldEcho not implemented")
+}
+func (UnimplementedEchoServiceServer) CreateThing(context.Context, *CreateThingRequest) (*CreateThingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateThing not implemented")
 }
 func (UnimplementedEchoServiceServer) mustEmbedUnimplementedEchoServiceServer() {}
 func (UnimplementedEchoServiceServer) testEmbeddedByValue()                     {}
@@ -141,6 +198,60 @@ func _EchoService_Fail_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EchoService_Upload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EchoServiceServer).Upload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EchoService_Upload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EchoServiceServer).Upload(ctx, req.(*UploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EchoService_OldEcho_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EchoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EchoServiceServer).OldEcho(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EchoService_OldEcho_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EchoServiceServer).OldEcho(ctx, req.(*EchoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EchoService_CreateThing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateThingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EchoServiceServer).CreateThing(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EchoService_CreateThing_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EchoServiceServer).CreateThing(ctx, req.(*CreateThingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EchoService_ServiceDesc is the grpc.ServiceDesc for EchoService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -155,6 +266,18 @@ var EchoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Fail",
 			Handler:    _EchoService_Fail_Handler,
+		},
+		{
+			MethodName: "Upload",
+			Handler:    _EchoService_Upload_Handler,
+		},
+		{
+			MethodName: "OldEcho",
+			Handler:    _EchoService_OldEcho_Handler,
+		},
+		{
+			MethodName: "CreateThing",
+			Handler:    _EchoService_CreateThing_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

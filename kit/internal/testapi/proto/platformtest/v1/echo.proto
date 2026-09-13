@@ -20,6 +20,66 @@ service EchoService {
   rpc Fail(FailRequest) returns (FailResponse) {
     option (google.api.http) = {get: "/v1/fail/{kind}"};
   }
+
+  // Files over multipart/form-data through the gateway.
+  rpc Upload(UploadRequest) returns (UploadResponse) {
+    option (google.api.http) = {
+      post: "/v1/upload"
+      body: "*"
+    };
+  }
+
+  // A method kept for old clients.
+  rpc OldEcho(EchoRequest) returns (EchoResponse) {
+    option deprecated = true;
+    option (google.api.http) = {
+      post: "/v1/old-echo"
+      body: "*"
+    };
+  }
+
+  // A method that creates something, for idempotency.
+  rpc CreateThing(CreateThingRequest) returns (CreateThingResponse) {
+    option (google.api.http) = {
+      post: "/v1/things"
+      body: "*"
+    };
+  }
+}
+
+message File {
+  string filename = 1;
+  string content_type = 2;
+  bytes content = 3;
+}
+
+message Meta {
+  string author = 1;
+}
+
+message UploadRequest {
+  string title = 1;
+  File avatar = 2;
+  repeated File images = 3;
+  Meta meta = 4;
+}
+
+message UploadResponse {
+  string title = 1;
+  string avatar_name = 2;
+  int32 avatar_size = 3;
+  repeated string images = 4;
+  string author = 5;
+  string avatar_type = 6;
+}
+
+message CreateThingRequest {
+  string name = 1;
+}
+
+message CreateThingResponse {
+  string id = 1;
+  int32 calls = 2;
 }
 
 message EchoRequest {

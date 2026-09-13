@@ -26,6 +26,358 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type File struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Filename      string                 `protobuf:"bytes,1,opt,name=filename,proto3" json:"filename,omitempty"`
+	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Content       []byte                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *File) Reset() {
+	*x = File{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *File) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*File) ProtoMessage() {}
+
+func (x *File) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use File.ProtoReflect.Descriptor instead.
+func (*File) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *File) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *File) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *File) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+type Meta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Author        string                 `protobuf:"bytes,1,opt,name=author,proto3" json:"author,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Meta) Reset() {
+	*x = Meta{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Meta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Meta) ProtoMessage() {}
+
+func (x *Meta) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Meta.ProtoReflect.Descriptor instead.
+func (*Meta) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Meta) GetAuthor() string {
+	if x != nil {
+		return x.Author
+	}
+	return ""
+}
+
+type UploadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
+	Avatar        *File                  `protobuf:"bytes,2,opt,name=avatar,proto3" json:"avatar,omitempty"`
+	Images        []*File                `protobuf:"bytes,3,rep,name=images,proto3" json:"images,omitempty"`
+	Meta          *Meta                  `protobuf:"bytes,4,opt,name=meta,proto3" json:"meta,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadRequest) Reset() {
+	*x = UploadRequest{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadRequest) ProtoMessage() {}
+
+func (x *UploadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadRequest.ProtoReflect.Descriptor instead.
+func (*UploadRequest) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *UploadRequest) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *UploadRequest) GetAvatar() *File {
+	if x != nil {
+		return x.Avatar
+	}
+	return nil
+}
+
+func (x *UploadRequest) GetImages() []*File {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *UploadRequest) GetMeta() *Meta {
+	if x != nil {
+		return x.Meta
+	}
+	return nil
+}
+
+type UploadResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
+	AvatarName    string                 `protobuf:"bytes,2,opt,name=avatar_name,json=avatarName,proto3" json:"avatar_name,omitempty"`
+	AvatarSize    int32                  `protobuf:"varint,3,opt,name=avatar_size,json=avatarSize,proto3" json:"avatar_size,omitempty"`
+	Images        []string               `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
+	Author        string                 `protobuf:"bytes,5,opt,name=author,proto3" json:"author,omitempty"`
+	AvatarType    string                 `protobuf:"bytes,6,opt,name=avatar_type,json=avatarType,proto3" json:"avatar_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadResponse) Reset() {
+	*x = UploadResponse{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadResponse) ProtoMessage() {}
+
+func (x *UploadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadResponse.ProtoReflect.Descriptor instead.
+func (*UploadResponse) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *UploadResponse) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *UploadResponse) GetAvatarName() string {
+	if x != nil {
+		return x.AvatarName
+	}
+	return ""
+}
+
+func (x *UploadResponse) GetAvatarSize() int32 {
+	if x != nil {
+		return x.AvatarSize
+	}
+	return 0
+}
+
+func (x *UploadResponse) GetImages() []string {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *UploadResponse) GetAuthor() string {
+	if x != nil {
+		return x.Author
+	}
+	return ""
+}
+
+func (x *UploadResponse) GetAvatarType() string {
+	if x != nil {
+		return x.AvatarType
+	}
+	return ""
+}
+
+type CreateThingRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateThingRequest) Reset() {
+	*x = CreateThingRequest{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateThingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateThingRequest) ProtoMessage() {}
+
+func (x *CreateThingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateThingRequest.ProtoReflect.Descriptor instead.
+func (*CreateThingRequest) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CreateThingRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type CreateThingResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Calls         int32                  `protobuf:"varint,2,opt,name=calls,proto3" json:"calls,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateThingResponse) Reset() {
+	*x = CreateThingResponse{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateThingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateThingResponse) ProtoMessage() {}
+
+func (x *CreateThingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateThingResponse.ProtoReflect.Descriptor instead.
+func (*CreateThingResponse) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CreateThingResponse) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CreateThingResponse) GetCalls() int32 {
+	if x != nil {
+		return x.Calls
+	}
+	return 0
+}
+
 type EchoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageText   string                 `protobuf:"bytes,1,opt,name=message_text,json=messageText,proto3" json:"message_text,omitempty"`
@@ -35,7 +387,7 @@ type EchoRequest struct {
 
 func (x *EchoRequest) Reset() {
 	*x = EchoRequest{}
-	mi := &file_platformtest_v1_echo_proto_msgTypes[0]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -47,7 +399,7 @@ func (x *EchoRequest) String() string {
 func (*EchoRequest) ProtoMessage() {}
 
 func (x *EchoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platformtest_v1_echo_proto_msgTypes[0]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -60,7 +412,7 @@ func (x *EchoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EchoRequest.ProtoReflect.Descriptor instead.
 func (*EchoRequest) Descriptor() ([]byte, []int) {
-	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{0}
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EchoRequest) GetMessageText() string {
@@ -81,7 +433,7 @@ type EchoResponse struct {
 
 func (x *EchoResponse) Reset() {
 	*x = EchoResponse{}
-	mi := &file_platformtest_v1_echo_proto_msgTypes[1]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -93,7 +445,7 @@ func (x *EchoResponse) String() string {
 func (*EchoResponse) ProtoMessage() {}
 
 func (x *EchoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platformtest_v1_echo_proto_msgTypes[1]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -106,7 +458,7 @@ func (x *EchoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EchoResponse.ProtoReflect.Descriptor instead.
 func (*EchoResponse) Descriptor() ([]byte, []int) {
-	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{1}
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *EchoResponse) GetMessageText() string {
@@ -140,7 +492,7 @@ type FailRequest struct {
 
 func (x *FailRequest) Reset() {
 	*x = FailRequest{}
-	mi := &file_platformtest_v1_echo_proto_msgTypes[2]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -152,7 +504,7 @@ func (x *FailRequest) String() string {
 func (*FailRequest) ProtoMessage() {}
 
 func (x *FailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platformtest_v1_echo_proto_msgTypes[2]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -165,7 +517,7 @@ func (x *FailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FailRequest.ProtoReflect.Descriptor instead.
 func (*FailRequest) Descriptor() ([]byte, []int) {
-	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{2}
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *FailRequest) GetKind() string {
@@ -183,7 +535,7 @@ type FailResponse struct {
 
 func (x *FailResponse) Reset() {
 	*x = FailResponse{}
-	mi := &file_platformtest_v1_echo_proto_msgTypes[3]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -195,7 +547,7 @@ func (x *FailResponse) String() string {
 func (*FailResponse) ProtoMessage() {}
 
 func (x *FailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platformtest_v1_echo_proto_msgTypes[3]
+	mi := &file_platformtest_v1_echo_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -208,14 +560,40 @@ func (x *FailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FailResponse.ProtoReflect.Descriptor instead.
 func (*FailResponse) Descriptor() ([]byte, []int) {
-	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{3}
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{9}
 }
 
 var File_platformtest_v1_echo_proto protoreflect.FileDescriptor
 
 const file_platformtest_v1_echo_proto_rawDesc = "" +
 	"\n" +
-	"\x1aplatformtest/v1/echo.proto\x12\x0fplatformtest.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\";\n" +
+	"\x1aplatformtest/v1/echo.proto\x12\x0fplatformtest.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\"_\n" +
+	"\x04File\x12\x1a\n" +
+	"\bfilename\x18\x01 \x01(\tR\bfilename\x12!\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\fR\acontent\"\x1e\n" +
+	"\x04Meta\x12\x16\n" +
+	"\x06author\x18\x01 \x01(\tR\x06author\"\xae\x01\n" +
+	"\rUploadRequest\x12\x14\n" +
+	"\x05title\x18\x01 \x01(\tR\x05title\x12-\n" +
+	"\x06avatar\x18\x02 \x01(\v2\x15.platformtest.v1.FileR\x06avatar\x12-\n" +
+	"\x06images\x18\x03 \x03(\v2\x15.platformtest.v1.FileR\x06images\x12)\n" +
+	"\x04meta\x18\x04 \x01(\v2\x15.platformtest.v1.MetaR\x04meta\"\xb9\x01\n" +
+	"\x0eUploadResponse\x12\x14\n" +
+	"\x05title\x18\x01 \x01(\tR\x05title\x12\x1f\n" +
+	"\vavatar_name\x18\x02 \x01(\tR\n" +
+	"avatarName\x12\x1f\n" +
+	"\vavatar_size\x18\x03 \x01(\x05R\n" +
+	"avatarSize\x12\x16\n" +
+	"\x06images\x18\x04 \x03(\tR\x06images\x12\x16\n" +
+	"\x06author\x18\x05 \x01(\tR\x06author\x12\x1f\n" +
+	"\vavatar_type\x18\x06 \x01(\tR\n" +
+	"avatarType\"(\n" +
+	"\x12CreateThingRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\";\n" +
+	"\x13CreateThingResponse\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05calls\x18\x02 \x01(\x05R\x05calls\";\n" +
 	"\vEchoRequest\x12,\n" +
 	"\fmessage_text\x18\x01 \x01(\tB\t\xbaH\x06r\x04\x10\x01\x18\x14R\vmessageText\"c\n" +
 	"\fEchoResponse\x12!\n" +
@@ -224,10 +602,15 @@ const file_platformtest_v1_echo_proto_rawDesc = "" +
 	"\ashouted\x18\x03 \x01(\bR\ashouted\"!\n" +
 	"\vFailRequest\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\"\x0e\n" +
-	"\fFailResponse2\xc5\x01\n" +
+	"\fFailResponse2\xfc\x03\n" +
 	"\vEchoService\x12X\n" +
 	"\x04Echo\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x13\x82\xd3\xe4\x93\x02\r:\x01*\"\b/v1/echo\x12\\\n" +
-	"\x04Fail\x12\x1c.platformtest.v1.FailRequest\x1a\x1d.platformtest.v1.FailResponse\"\x17\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/fail/{kind}BTZRgithub.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1b\x06proto3"
+	"\x04Fail\x12\x1c.platformtest.v1.FailRequest\x1a\x1d.platformtest.v1.FailResponse\"\x17\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/fail/{kind}\x12`\n" +
+	"\x06Upload\x12\x1e.platformtest.v1.UploadRequest\x1a\x1f.platformtest.v1.UploadResponse\"\x15\x82\xd3\xe4\x93\x02\x0f:\x01*\"\n" +
+	"/v1/upload\x12b\n" +
+	"\aOldEcho\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x1a\x82\xd3\xe4\x93\x02\x11:\x01*\"\f/v1/old-echo\x88\x02\x01\x12o\n" +
+	"\vCreateThing\x12#.platformtest.v1.CreateThingRequest\x1a$.platformtest.v1.CreateThingResponse\"\x15\x82\xd3\xe4\x93\x02\x0f:\x01*\"\n" +
+	"/v1/thingsBTZRgithub.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1b\x06proto3"
 
 var (
 	file_platformtest_v1_echo_proto_rawDescOnce sync.Once
@@ -241,23 +624,38 @@ func file_platformtest_v1_echo_proto_rawDescGZIP() []byte {
 	return file_platformtest_v1_echo_proto_rawDescData
 }
 
-var file_platformtest_v1_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_platformtest_v1_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_platformtest_v1_echo_proto_goTypes = []any{
-	(*EchoRequest)(nil),  // 0: platformtest.v1.EchoRequest
-	(*EchoResponse)(nil), // 1: platformtest.v1.EchoResponse
-	(*FailRequest)(nil),  // 2: platformtest.v1.FailRequest
-	(*FailResponse)(nil), // 3: platformtest.v1.FailResponse
+	(*File)(nil),                // 0: platformtest.v1.File
+	(*Meta)(nil),                // 1: platformtest.v1.Meta
+	(*UploadRequest)(nil),       // 2: platformtest.v1.UploadRequest
+	(*UploadResponse)(nil),      // 3: platformtest.v1.UploadResponse
+	(*CreateThingRequest)(nil),  // 4: platformtest.v1.CreateThingRequest
+	(*CreateThingResponse)(nil), // 5: platformtest.v1.CreateThingResponse
+	(*EchoRequest)(nil),         // 6: platformtest.v1.EchoRequest
+	(*EchoResponse)(nil),        // 7: platformtest.v1.EchoResponse
+	(*FailRequest)(nil),         // 8: platformtest.v1.FailRequest
+	(*FailResponse)(nil),        // 9: platformtest.v1.FailResponse
 }
 var file_platformtest_v1_echo_proto_depIdxs = []int32{
-	0, // 0: platformtest.v1.EchoService.Echo:input_type -> platformtest.v1.EchoRequest
-	2, // 1: platformtest.v1.EchoService.Fail:input_type -> platformtest.v1.FailRequest
-	1, // 2: platformtest.v1.EchoService.Echo:output_type -> platformtest.v1.EchoResponse
-	3, // 3: platformtest.v1.EchoService.Fail:output_type -> platformtest.v1.FailResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: platformtest.v1.UploadRequest.avatar:type_name -> platformtest.v1.File
+	0, // 1: platformtest.v1.UploadRequest.images:type_name -> platformtest.v1.File
+	1, // 2: platformtest.v1.UploadRequest.meta:type_name -> platformtest.v1.Meta
+	6, // 3: platformtest.v1.EchoService.Echo:input_type -> platformtest.v1.EchoRequest
+	8, // 4: platformtest.v1.EchoService.Fail:input_type -> platformtest.v1.FailRequest
+	2, // 5: platformtest.v1.EchoService.Upload:input_type -> platformtest.v1.UploadRequest
+	6, // 6: platformtest.v1.EchoService.OldEcho:input_type -> platformtest.v1.EchoRequest
+	4, // 7: platformtest.v1.EchoService.CreateThing:input_type -> platformtest.v1.CreateThingRequest
+	7, // 8: platformtest.v1.EchoService.Echo:output_type -> platformtest.v1.EchoResponse
+	9, // 9: platformtest.v1.EchoService.Fail:output_type -> platformtest.v1.FailResponse
+	3, // 10: platformtest.v1.EchoService.Upload:output_type -> platformtest.v1.UploadResponse
+	7, // 11: platformtest.v1.EchoService.OldEcho:output_type -> platformtest.v1.EchoResponse
+	5, // 12: platformtest.v1.EchoService.CreateThing:output_type -> platformtest.v1.CreateThingResponse
+	8, // [8:13] is the sub-list for method output_type
+	3, // [3:8] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_platformtest_v1_echo_proto_init() }
@@ -271,7 +669,7 @@ func file_platformtest_v1_echo_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_platformtest_v1_echo_proto_rawDesc), len(file_platformtest_v1_echo_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

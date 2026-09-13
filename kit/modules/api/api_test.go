@@ -59,6 +59,7 @@ func (echo) Fail(ctx context.Context, req *testv1.FailRequest) (*testv1.FailResp
 
 type service struct {
 	t       *testing.T
+	logs    *syncBuffer
 	module  *api.Module
 	ops     string
 	seen    chan string
@@ -71,7 +72,7 @@ func start(t *testing.T, cfg api.Config, opts ...api.Option) *service {
 
 	cfg.GRPCAddr, cfg.HTTPAddr = "127.0.0.1:0", "127.0.0.1:0"
 	module := api.New(cfg, opts...)
-	s := &service{t: t, module: module, seen: make(chan string, 16), errCh: make(chan error, 1)}
+	s := &service{t: t, module: module, seen: make(chan string, 16), errCh: make(chan error, 1), logs: &syncBuffer{}}
 
 	wire := func(app *platform.App) error {
 		api.Register(app, api.Service{
@@ -95,7 +96,7 @@ func start(t *testing.T, cfg api.Config, opts ...api.Option) *service {
 	started := make(chan string, 1)
 	cfgRun := platform.Config{
 		Service: "echo", OpsAddr: "127.0.0.1:0", ShutdownTimeout: 3 * time.Second,
-		Logger:    logx.New(logx.Options{Writer: io.Discard}),
+		Logger:    logx.New(logx.Options{Writer: s.logs}),
 		OnStarted: func(addr string) { started <- addr },
 	}
 	go func() { s.errCh <- platform.RunContext(ctx, cfgRun, []platform.Module{module}, wire) }()

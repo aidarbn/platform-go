@@ -127,6 +127,14 @@ api.HandleHTTP(app, "POST /webhooks/kaspi", kaspi.WebhookHandler) // routes that
 
 What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: metrics (`api_grpc_requests_total`, `api_grpc_request_duration_seconds`), logging of failed calls, panic recovery, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
 
+The HTTP side, following taply's gateway:
+
+- **File uploads**: a `multipart/form-data` request fills the request message. A part named after a field of a message with `filename`, `content_type` and `content` becomes a file; a repeated field takes several parts in order (`images`, `images`) or by index (`images[0]`, `images[3]`, with empty entries for skipped ones); a JSON part fills a message field; other parts set scalar fields.
+- **Request id and client address**: `X-Request-ID` is taken from the request or generated, returned in the response and passed to gRPC handlers — `api.RequestID(ctx)`; the client address is the last `X-Forwarded-For` hop (the one the proxy saw) or the connection address — `api.ClientIP(ctx)`, which the client cannot forge through the gateway.
+- **Limits and headers**: a body over `API_MAX_RECV_MB` answers 413; taply's security headers (`nosniff`, `DENY`, `no-store`, HSTS); CORS origins accept `https://*.example.com` and `http://localhost:*`.
+- **Metrics and access log**: `api_http_requests_total{method,route,status}` and a duration histogram labelled by the route template — `/v1/orders/{id}`, never the concrete path — with unmatched paths as `unknown`; an access log line per request with the route, status, duration, client address and request id, plus the bodies of failed requests with binary and multipart bodies summarised instead of dumped.
+- **Routing errors** name the method and the path: `GET /v1/nothing: route not found`.
+
 The description marks messages with `additionalProperties: false`: that is the contract for clients, while the gateway is more forgiving and ignores unknown fields.
 
 | Variable | Default | |
@@ -136,7 +144,8 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_CORS_ORIGINS` | none | allowed browser origins, `*` for any |
 | `API_DOCS` | `true` | `/openapi.yaml` and `/docs` |
 | `API_REFLECTION` | `false` | gRPC reflection |
-| `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits |
+| `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits; the request limit also caps HTTP bodies |
+| `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
 
 ## The `river` module
 
