@@ -142,12 +142,21 @@ func cmdGenerate(args []string, out io.Writer) error {
 	return runSqlc(plan, *dir, out)
 }
 
-// runSqlc regenerates the static queries of a project with the postgres module.
+// runSqlc runs the external generators of the enabled modules: sqlc for postgres, buf
+// for api.
 func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
-	if !slices.Contains(plan.Modules, "postgres") {
-		return nil
+	ctx := context.Background()
+	if slices.Contains(plan.Modules, "postgres") {
+		if err := codegen.Sqlc(ctx, dir, out); err != nil {
+			return err
+		}
 	}
-	return codegen.Sqlc(context.Background(), dir, out)
+	if slices.Contains(plan.Modules, "api") {
+		if err := codegen.Buf(ctx, dir, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cmdVerify(args []string, out io.Writer) error {
@@ -171,6 +180,11 @@ func verify(dir string, out io.Writer) error {
 	}
 	if slices.Contains(plan.Modules, "postgres") {
 		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(plan.Modules, "api") {
+		if err := codegen.BufCheck(context.Background(), dir); err != nil {
 			return err
 		}
 	}

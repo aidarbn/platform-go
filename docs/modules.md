@@ -83,6 +83,61 @@ err := stmt.QueryContext(ctx, postgres.SQL(app), &orders)
 
 jet writes its output under the database name; platformgo moves the packages straight under `internal/db/jetgen`, so import paths are the same for every developer.
 
+## The `api` module
+
+A gRPC server and a REST gateway in front of it, generated from the proto files of the project.
+
+```yaml
+modules:
+  api: {}
+```
+
+Proto files go into `proto/`; `go_package` is set by buf managed mode, so a file needs only its package, imports and HTTP annotations:
+
+```proto
+syntax = "proto3";
+package shop.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+
+service OrdersService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
+    option (google.api.http) = {post: "/v1/orders", body: "*"};
+  }
+}
+
+message CreateOrderRequest {
+  string customer_name = 1 [(buf.validate.field).string.min_len = 1];
+}
+```
+
+`make generate` runs buf with the plugins pinned in `go.mod` by `apply` (buf, protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway, protoc-gen-connect-openapi): Go code into `internal/api/gen`, an OpenAPI 3.1 description with the protovalidate rules into `api/openapi/openapi.yaml`. `verify` generates into a scratch directory and fails when the committed code is stale.
+
+The handler is registered from `wire.go`:
+
+```go
+api.Register(app, api.Service{
+	GRPC:    func(s *grpc.Server) { shopv1.RegisterOrdersServiceServer(s, orders.NewHandler(repo)) },
+	Gateway: shopv1.RegisterOrdersServiceHandler,
+})
+api.AddUnaryInterceptor(app, auth.Interceptor(tokens))           // authentication and the like
+api.HandleHTTP(app, "POST /webhooks/kaspi", kaspi.WebhookHandler) // routes that are not gRPC
+```
+
+What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: metrics (`api_grpc_requests_total`, `api_grpc_request_duration_seconds`), logging of failed calls, panic recovery, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
+
+The description marks messages with `additionalProperties: false`: that is the contract for clients, while the gateway is more forgiving and ignores unknown fields.
+
+| Variable | Default | |
+|---|---|---|
+| `API_HTTP_ADDR` | `:8080` | REST gateway |
+| `API_GRPC_ADDR` | `127.0.0.1:9091` | gRPC |
+| `API_CORS_ORIGINS` | none | allowed browser origins, `*` for any |
+| `API_DOCS` | `true` | `/openapi.yaml` and `/docs` |
+| `API_REFLECTION` | `false` | gRPC reflection |
+| `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits |
+
 ## The `settings` module
 
 Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.

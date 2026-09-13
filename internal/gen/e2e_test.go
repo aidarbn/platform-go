@@ -174,6 +174,7 @@ modules:
   postgres: {}
   settings: {}
   admin: {}
+  api: {}
 `)
 
 	write(t, dir, "settings.yaml", `settings:
@@ -222,6 +223,7 @@ import (
 
 	appsettings "example.com/app/internal/settings"
 	"github.com/aidarbn/platform-go/kit/modules/admin"
+	"github.com/aidarbn/platform-go/kit/modules/api"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
@@ -230,6 +232,11 @@ func wireDomain(app *platform.App) error {
 
 	// A project page in the admin panel: the platform gives the layout, the sign in
 	// and the roles, the project gives the content.
+	// A plain HTTP route next to the gateway.
+	api.HandleHTTP(app, "GET /webhooks/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("pong"))
+	}))
+
 	admin.AddPage(app, admin.Page{
 		Title: "Orders",
 		Path:  "/orders",

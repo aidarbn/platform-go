@@ -139,6 +139,11 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 		files[MigrationsPath] = []byte(migrationsGo)
 		files[SqlcPath] = []byte(sqlcYAML)
 	}
+	if _, ok := f.Modules["api"]; ok {
+		for path, content := range apiFiles(f) {
+			files[path] = content
+		}
+	}
 	return files, nil
 }
 

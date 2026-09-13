@@ -233,3 +233,5 @@ func TestDSN(t *testing.T) {
 		t.Errorf("flag: %q", got)
 	}
 }
+
+func readRaw(path string) ([]byte, error) { return os.ReadFile(path) }
