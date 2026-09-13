@@ -14,6 +14,19 @@ import (
 // project so that domain code reads a setting as a method call rather than a string key.
 const SettingsPath = "internal/settings/settings.gen.go"
 
+// SettingsExample is the schema a project starts from when it enables the settings
+// module: an empty schema would leave an accessor with nothing to return.
+const SettingsExample = `# Business settings of the project: an administrator changes them from the admin UI,
+# without a developer and without a deploy. Technical parameters of the modules live in
+# platformgo.yaml and environment variables instead.
+#
+# After editing run: make generate
+
+settings:
+  app:
+    maintenance: { type: bool, default: false, title: Maintenance mode }
+`
+
 // SettingsModule is the module name whose schema drives the generation.
 const SettingsModule = "settings"
 

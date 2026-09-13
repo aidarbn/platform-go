@@ -179,3 +179,60 @@ func TestUsageAndVersion(t *testing.T) {
 		t.Error("version printed nothing")
 	}
 }
+
+// Removing a module is a one line edit of platformgo.yaml: CI catches the leftover until
+// apply runs, and apply takes the module's generated code away.
+func TestRemovingModuleThroughApply(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	mustRun(t, "new", "example.com/shop-api", "--with", "postgres,settings,admin", "--dir", dir)
+
+	description := filepath.Join(dir, spec.FileName)
+	raw, err := os.ReadFile(description)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(raw), "  settings: {}\n", "", 1)
+	if edited == string(raw) {
+		t.Fatalf("the settings module is not in the description:\n%s", raw)
+	}
+	if err := os.WriteFile(description, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := mustRun(t, "plan", "--dir", dir)
+	for _, want := range []string{"- module settings", "- " + gen.SettingsPath} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plan lacks %q:\n%s", want, out)
+		}
+	}
+
+	if _, err := output(t, "verify", "--dir", dir); err == nil || !strings.Contains(err.Error(), gen.SettingsPath) {
+		t.Fatalf("verify: %v", err)
+	}
+
+	out = mustRun(t, "apply", "--no-tidy", "--dir", dir)
+	if !strings.Contains(out, "deleted "+gen.SettingsPath) {
+		t.Errorf("apply:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, gen.SettingsPath)); !os.IsNotExist(err) {
+		t.Errorf("the generated settings code is still there: %v", err)
+	}
+	if out := mustRun(t, "verify", "--dir", dir); !strings.Contains(out, "up to date") {
+		t.Errorf("verify after apply:\n%s", out)
+	}
+}
+
+func TestNewWritesLock(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	out := mustRun(t, "new", "example.com/shop-api", "--with", "postgres", "--dir", dir)
+	if !strings.Contains(out, "platformgo.lock") {
+		t.Errorf("new did not report the lock:\n%s", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "platformgo.lock"))
+	if err != nil {
+		t.Fatalf("no lock: %v", err)
+	}
+	if !strings.Contains(string(raw), "postgres") || !strings.Contains(string(raw), gen.ModulesPath) {
+		t.Errorf("lock:\n%s", raw)
+	}
+}

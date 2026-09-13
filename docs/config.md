@@ -75,26 +75,27 @@ ci:
 
 | Command | What it does |
 |---|---|
-| `platformgo new <name>` | creates a project with `platformgo.yaml` and the core |
+| `platformgo new <module-path>` | creates a project with `platformgo.yaml`, the core files and the lock |
 | `platformgo plan` | shows how the project differs from `platformgo.yaml`; changes nothing |
-| `platformgo apply` | brings the project in line: dependencies, managed files, scaffolds, generation, `go build`, `go test`; updates `platformgo.lock` |
-| `platformgo generate` | generation only; `--check` fails in CI when something is stale |
-| `platformgo verify` | for CI: the project matches the file, managed files are untouched, generation is fresh |
-| `platformgo upgrade` | moves the project to a new platform version |
-| `platformgo doctor` | checks tools and system dependencies; `--fix` offers to install them |
-| `platformgo setup` | shell completion and the `pgo` alias |
+| `platformgo apply` | writes the generated files, creates the files an enabled module needs (such as `settings.yaml`), deletes the generated files of removed modules, updates `platformgo.lock` and runs `go mod tidy` |
+| `platformgo generate` | the same without `go mod tidy`; `--check` fails in CI when anything is stale |
+| `platformgo verify` | for CI: the project matches the file, generation is fresh, nothing is left over |
+| `platformgo doctor` | checks tools and system dependencies |
+
+Planned: `upgrade` (moving to a new platform version), `doctor --fix`, `setup`.
+
+A generated file of a removed module is deleted only while it still carries the generated mark on its first line. A file taken over by hand stays, and `plan` says so. Files that belong to the project — `settings.yaml`, `main.go`, `wire.go`, the Makefile — are never deleted.
 
 ## Example plan
 
 ```
 $ platformgo plan
-+ module s3
-    go get github.com/minio/minio-go/v7@v7.0.69
-    docker-compose.yml: minio service
-    config.gen.go: S3Config; .env.example: S3_*
-~ module river
-    ui enabled — docker-compose.yml: riverui service
-- module keycloak
-    remove from modules.gen.go, docker-compose.yml, linter rules
-    owned files stay: internal/adapters/out/keycloak/…
+service  shop-api
+modules  admin, postgres
+  - module settings
+~ cmd/app/config.gen.go
+~ cmd/app/modules.gen.go
+~ .env.example
+- internal/settings/settings.gen.go
+~ platformgo.lock
 ```

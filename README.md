@@ -9,11 +9,11 @@
 | Command | What it does | State |
 |---|---|---|
 | `platformgo new <module-path>` | creates a project: wiring, compose, Dockerfile, Makefile, CI | ready |
-| `platformgo generate [--check]` | regenerates wiring, `.env.example`, `docker-compose.yml`, typed settings; `--check` fails when stale | ready |
-| `platformgo plan` | shows which generated files would change | ready |
+| `platformgo plan` | shows what `apply` would do: modules added and removed, files to create, rewrite and delete | ready |
+| `platformgo apply` | brings the project in line with `platformgo.yaml`: generated files, files a module needs, removal of what a removed module left, `platformgo.lock`, `go mod tidy` | ready |
+| `platformgo generate [--check]` | `apply` without `go mod tidy`; `--check` fails when anything is stale | ready |
+| `platformgo verify` | the check for CI, same as `generate --check` | ready |
 | `platformgo doctor` | checks the tools a project needs | ready |
-| `platformgo apply` | brings dependencies and managed files in line with `platformgo.yaml` | planned |
-| `platformgo verify` | CI check that managed files are untouched | planned |
 | `platformgo upgrade` | moves a project to a new platform version | planned |
 | `platformgo setup` | shell completion and the short `pgo` alias | planned |
 

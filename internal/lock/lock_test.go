@@ -14,7 +14,7 @@ func TestReadMissingLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if l.Platform != "" || len(l.Modules) != 0 || len(l.Generated) != 0 {
+	if len(l.Modules) != 0 || len(l.Generated) != 0 {
 		t.Errorf("lock = %+v", l)
 	}
 }
@@ -22,7 +22,6 @@ func TestReadMissingLock(t *testing.T) {
 func TestWriteAndRead(t *testing.T) {
 	dir := t.TempDir()
 	want := lock.Lock{
-		Platform:  "v0.1.0",
 		Modules:   []string{"settings", "postgres", "postgres"},
 		Generated: []string{"cmd/app/modules.gen.go", ".env.example"},
 	}
@@ -49,12 +48,9 @@ func TestWriteAndRead(t *testing.T) {
 	if strings.Join(got.Generated, ",") != ".env.example,cmd/app/modules.gen.go" {
 		t.Errorf("generated = %v", got.Generated)
 	}
-	if got.Platform != "v0.1.0" {
-		t.Errorf("platform = %q", got.Platform)
-	}
 
 	// Writing the same lock twice gives the same bytes.
-	again, err := lock.Marshal(lock.Lock{Platform: "v0.1.0", Modules: []string{"postgres", "settings"}, Generated: got.Generated})
+	again, err := lock.Marshal(lock.Lock{Modules: []string{"postgres", "settings"}, Generated: got.Generated})
 	if err != nil {
 		t.Fatal(err)
 	}

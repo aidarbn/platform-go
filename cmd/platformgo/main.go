@@ -12,7 +12,8 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/aidarbn/platform-go/internal/gen"
+	"github.com/aidarbn/platform-go/internal/apply"
+	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/scaffold"
 	"github.com/aidarbn/platform-go/internal/spec"
@@ -38,6 +39,10 @@ func run(args []string, out io.Writer) error {
 		return cmdGenerate(args[1:], out)
 	case "plan":
 		return cmdPlan(args[1:], out)
+	case "apply":
+		return cmdApply(args[1:], out)
+	case "verify":
+		return cmdVerify(args[1:], out)
 	case "doctor":
 		return cmdDoctor(args[1:], out)
 	case "version":
@@ -56,8 +61,10 @@ func usage(out io.Writer) {
 	fmt.Fprint(out, `platformgo — a platform for Go projects
 
   platformgo new <module-path>    create a project
-  platformgo generate [--check]   generate module wiring and the environment example
-  platformgo plan                 show what generate would change
+  platformgo plan                 show what apply would change
+  platformgo apply [--no-tidy]    bring the project in line with platformgo.yaml
+  platformgo generate [--check]   apply without go mod tidy; --check fails when stale
+  platformgo verify               the same check as generate --check, for CI
   platformgo doctor               check the development environment
   platformgo version              print the version
 
@@ -108,40 +115,79 @@ func cmdNew(args []string, out io.Writer) error {
 func cmdGenerate(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
-	check := fs.Bool("check", false, "do not write files, fail on differences: for CI")
+	check := fs.Bool("check", false, "do not write files, fail when anything is stale: for CI")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *check {
+		return verify(*dir, out)
+	}
+	_, err := runApply(*dir, out)
+	return err
+}
+
+func cmdVerify(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	return verify(*dir, out)
+}
+
+// verify fails when the project does not match platformgo.yaml: a stale generated file,
+// a leftover of a removed module or a lock out of date.
+func verify(dir string, out io.Writer) error {
+	plan, err := apply.Build(dir)
+	if err != nil {
+		return err
+	}
+	if !plan.UpToDate() {
+		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
+	}
+	fmt.Fprintln(out, "generation is up to date")
+	return nil
+}
+
+func cmdApply(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	noTidy := fs.Bool("no-tidy", false, "skip go mod tidy")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	files, err := projectFiles(*dir)
-	if err != nil {
+	if _, err := runApply(*dir, out); err != nil {
 		return err
 	}
-
-	if *check {
-		changed, err := gen.Changed(*dir, files)
-		if err != nil {
-			return err
-		}
-		if len(changed) > 0 {
-			return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(changed, ", "))
-		}
-		fmt.Fprintln(out, "generation is up to date")
+	if *noTidy {
 		return nil
 	}
+	// Enabling or removing a module changes the Go dependencies of the project.
+	if _, err := os.Stat(filepath.Join(*dir, "go.mod")); err != nil {
+		return nil
+	}
+	fmt.Fprintln(out, "go mod tidy")
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = *dir
+	cmd.Stdout, cmd.Stderr = out, os.Stderr
+	return cmd.Run()
+}
 
-	written, err := gen.Apply(*dir, files)
+func runApply(dir string, out io.Writer) (*apply.Plan, error) {
+	plan, err := apply.Build(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(written) == 0 {
+	if plan.UpToDate() {
 		fmt.Fprintln(out, "generation is up to date")
-		return nil
+		return plan, nil
 	}
-	for _, path := range written {
-		fmt.Fprintln(out, "wrote", path)
+	if err := plan.Execute(); err != nil {
+		return nil, err
 	}
-	return nil
+	printChanges(out, plan, "created", "wrote", "deleted")
+	return plan, nil
 }
 
 func cmdPlan(args []string, out io.Writer) error {
@@ -151,38 +197,48 @@ func cmdPlan(args []string, out io.Writer) error {
 		return err
 	}
 
-	f, err := spec.Load(filepath.Join(*dir, spec.FileName))
-	if err != nil {
-		return err
-	}
-	files, err := gen.Files(*dir, f)
-	if err != nil {
-		return err
-	}
-	changed, err := gen.Changed(*dir, files)
+	plan, err := apply.Build(*dir)
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(out, "service  %s\n", f.Service())
-	names := make([]string, 0, len(f.EnabledModules()))
-	for _, m := range f.EnabledModules() {
-		names = append(names, m.Name)
+	fmt.Fprintf(out, "service  %s\n", plan.Service)
+	modules := strings.Join(plan.Modules, ", ")
+	if modules == "" {
+		modules = "none"
 	}
-	if len(names) == 0 {
-		names = append(names, "none")
+	fmt.Fprintf(out, "modules  %s\n", modules)
+	for _, m := range plan.Diff.AddedModules {
+		fmt.Fprintf(out, "  + module %s\n", m)
 	}
-	fmt.Fprintf(out, "modules  %s\n", strings.Join(names, ", "))
+	for _, m := range plan.Diff.RemovedModules {
+		fmt.Fprintf(out, "  - module %s\n", m)
+	}
 
-	if len(changed) == 0 {
+	if plan.UpToDate() && len(plan.Kept) == 0 {
 		fmt.Fprintln(out, "no changes")
 		return nil
 	}
-	fmt.Fprintln(out, "will be rewritten:")
-	for _, path := range changed {
-		fmt.Fprintln(out, "  ~", path)
-	}
+	printChanges(out, plan, "+", "~", "-")
 	return nil
+}
+
+func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
+	for _, path := range plan.Create {
+		fmt.Fprintln(out, create, path)
+	}
+	for _, path := range plan.Write {
+		fmt.Fprintln(out, write, path)
+	}
+	for _, path := range plan.Delete {
+		fmt.Fprintln(out, del, path)
+	}
+	for _, path := range plan.Kept {
+		fmt.Fprintf(out, "kept %s: it belonged to a removed module but was edited by hand\n", path)
+	}
+	if plan.LockStale {
+		fmt.Fprintln(out, write, lock.FileName)
+	}
 }
 
 func cmdDoctor(args []string, out io.Writer) error {
@@ -240,14 +296,6 @@ func parsePositional(fs *flag.FlagSet, args []string) (string, error) {
 		return "", fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
 	return rest[0], nil
-}
-
-func projectFiles(dir string) (map[string][]byte, error) {
-	f, err := spec.Load(filepath.Join(dir, spec.FileName))
-	if err != nil {
-		return nil, err
-	}
-	return gen.Files(dir, f)
 }
 
 func version() string {
