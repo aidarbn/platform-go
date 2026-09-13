@@ -120,6 +120,7 @@ type Module struct {
 	audit    adminx.AuditRepo
 	settings *settingsx.Store // nil when the settings module is off
 	registry *Registry
+	app      *platform.App
 
 	srv *http.Server
 	ln  net.Listener
@@ -155,11 +156,7 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 	m.audit = NewAuditRepo(pool)
 	m.auth = adminx.NewAuth(m.users, NewSessionRepo(pool), m.cfg.SessionTTL)
 
-	// The settings pages appear when the settings module is enabled; without it the
-	// panel still works, just without them.
-	if store, ok := platform.Lookup[*settingsx.Store](app); ok {
-		m.settings = store
-	}
+	m.app = app
 
 	if err := m.bootstrap(ctx); err != nil {
 		return err
@@ -197,6 +194,14 @@ func (m *Module) bootstrap(ctx context.Context) error {
 
 // Start serves the panel and begins removing expired sessions.
 func (m *Module) Start(context.Context) error {
+	// The settings are looked up here rather than in Init: modules initialise in
+	// dependency order, and the settings module may come after the panel. By Start every
+	// module has been initialised. Without the settings module the panel works, just
+	// without the settings pages.
+	if store, ok := platform.Lookup[*settingsx.Store](m.app); ok {
+		m.settings = store
+	}
+
 	ln, err := net.Listen("tcp", m.cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("admin panel on %s: %w", m.cfg.Addr, err)

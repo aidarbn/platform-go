@@ -53,10 +53,19 @@ func TestNewCreatesProject(t *testing.T) {
 	for _, want := range []string{
 		spec.FileName, "go.mod", "cmd/app/main.go", "cmd/app/wire.go",
 		"cmd/app/config.gen.go", "cmd/app/modules.gen.go", ".env.example", "Makefile", "README.md",
+		"docker-compose.yml", "Dockerfile", ".dockerignore", ".gitignore", ".github/workflows/ci.yml",
 	} {
 		if !contains(created, want) {
 			t.Errorf("%s was not created (created: %v)", want, created)
 		}
+	}
+
+	goMod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(goMod), "tool github.com/aidarbn/platform-go/cmd/platformgo") {
+		t.Errorf("go.mod does not pin platformgo as a tool:\n%s", goMod)
 	}
 
 	f, err := spec.Load(filepath.Join(dir, spec.FileName))
@@ -119,6 +128,20 @@ func TestNewProjectCompiles(t *testing.T) {
 	goRun(t, dir, "mod", "tidy")
 	goRun(t, dir, "build", "./...")
 	goRun(t, dir, "vet", "./...")
+
+	// The pinned generator runs inside the project and agrees with what was created.
+	goRun(t, dir, "tool", "platformgo", "generate", "--check")
+
+	// The Makefile parses and its targets resolve: a space instead of a tab breaks it.
+	if _, err := exec.LookPath("make"); err == nil {
+		for _, target := range []string{"help", "build", "lint", "run", "up"} {
+			cmd := exec.Command("make", "-n", target)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("make -n %s: %v\n%s", target, err, out)
+			}
+		}
+	}
 
 	cmd := exec.Command("gofmt", "-l", ".")
 	cmd.Dir = dir

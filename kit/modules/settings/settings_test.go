@@ -16,6 +16,7 @@ import (
 	"github.com/aidarbn/platform-go/kit/logx"
 	"github.com/aidarbn/platform-go/kit/modules/postgres"
 	"github.com/aidarbn/platform-go/kit/modules/settings"
+	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
 	"github.com/aidarbn/platform-go/kit/settingsx"
 )
@@ -105,6 +106,24 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	defer cancel()
 
 	table := "platform_settings_test"
+
+	// The test owns its table and drops it before and after through its own pool: the
+	// application pool is closed by the time cleanup runs, so a leftover value would
+	// otherwise break the next run.
+	own, err := pgdb.Open(context.Background(), pgdb.Config{URL: url})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	dropTable := func() {
+		if _, err := own.Exec(context.Background(), "DROP TABLE IF EXISTS "+table); err != nil {
+			t.Errorf("drop %s: %v", table, err)
+		}
+	}
+	dropTable()
+	t.Cleanup(func() {
+		dropTable()
+		own.Close()
+	})
 	addrCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 	storeCh := make(chan *settingsx.Store, 1)
@@ -139,10 +158,6 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	}
 
 	store, pool := <-storeCh, <-poolCh
-	t.Cleanup(func() {
-		_ = store.Reset(context.Background(), "api.ratelimit.rps", "test")
-	})
-
 	if got := store.Int("api.ratelimit.rps"); got != 50 {
 		t.Errorf("rps = %d", got)
 	}

@@ -134,6 +134,10 @@ func cmdGenerate(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if len(written) == 0 {
+		fmt.Fprintln(out, "generation is up to date")
+		return nil
+	}
 	for _, path := range written {
 		fmt.Fprintln(out, "wrote", path)
 	}

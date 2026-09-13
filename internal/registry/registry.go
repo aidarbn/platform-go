@@ -34,6 +34,11 @@ type Module struct {
 	ProjectPkg   string
 	ProjectAlias string   // name of that import in generated code
 	ExtraArgs    []string // arguments passed to New after the settings
+
+	// Compose is the local development service of the module in docker-compose.yml,
+	// indented as an entry under services. Volumes lists the named volumes it uses.
+	Compose string
+	Volumes []string
 }
 
 // ConfigType is the settings type of the module, for example postgres.Config.
@@ -59,6 +64,22 @@ var all = []Module{
 			{Key: "DATABASE_MAX_CONNS", Example: "10", Comment: "connection limit"},
 			{Key: "DATABASE_MIN_CONNS", Example: "0", Comment: "connections kept open"},
 		},
+		Compose: `  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 5s
+      retries: 30`,
+		Volumes: []string{"postgres-data"},
 	},
 	{
 		Name:     "admin",

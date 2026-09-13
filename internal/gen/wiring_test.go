@@ -43,6 +43,9 @@ import (
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
+// serviceName is the service name from platformgo.yaml.
+const serviceName = "shop-api"
+
 // platformModules returns the project modules in dependency order.
 func platformModules(cfg *Config) []platform.Module {
 	return []platform.Module{
@@ -145,6 +148,11 @@ func TestApplyAndChanged(t *testing.T) {
 	}
 	if len(changed) != 0 {
 		t.Errorf("after Apply there must be no differences: %v", changed)
+	}
+
+	// Applying again writes nothing.
+	if written, err := gen.Apply(dir, files); err != nil || len(written) != 0 {
+		t.Errorf("a second Apply wrote %v, %v", written, err)
 	}
 
 	// A manual edit of a generated file is detected.

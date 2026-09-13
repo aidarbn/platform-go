@@ -6,18 +6,27 @@
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `platformgo new <module-path>` | creates a project: core, build, tests, linters, CI |
-| `platformgo plan` | shows how the project differs from `platformgo.yaml` |
-| `platformgo apply` | brings the project in line with `platformgo.yaml` |
-| `platformgo generate` | runs every generator of the project |
-| `platformgo verify` | check for CI |
-| `platformgo doctor` | checks tools and their versions |
-| `platformgo upgrade` | moves the project to a new platform version |
-| `platformgo setup` | shell completion and the short `pgo` alias |
+| Command | What it does | State |
+|---|---|---|
+| `platformgo new <module-path>` | creates a project: wiring, compose, Dockerfile, Makefile, CI | ready |
+| `platformgo generate [--check]` | regenerates wiring, `.env.example`, `docker-compose.yml`, typed settings; `--check` fails when stale | ready |
+| `platformgo plan` | shows which generated files would change | ready |
+| `platformgo doctor` | checks the tools a project needs | ready |
+| `platformgo apply` | brings dependencies and managed files in line with `platformgo.yaml` | planned |
+| `platformgo verify` | CI check that managed files are untouched | planned |
+| `platformgo upgrade` | moves a project to a new platform version | planned |
+| `platformgo setup` | shell completion and the short `pgo` alias | planned |
 
 A project is described declaratively in `platformgo.yaml` — see [docs/config.md](docs/config.md).
+
+## Modules
+
+| Module | State |
+|---|---|
+| `postgres` — pool, health, pool metrics, transactions, local database in compose | ready |
+| `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
+| `admin` — admin panel: sign in with one time codes, roles, accounts, audit log, settings pages, project pages | ready |
+| migrations and query generation, `river`, `api` and the rest of [docs/modules.md](docs/modules.md) | planned |
 
 ## Layout
 

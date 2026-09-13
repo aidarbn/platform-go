@@ -20,8 +20,10 @@ import (
 	"github.com/aidarbn/platform-go/kit/logx"
 	"github.com/aidarbn/platform-go/kit/modules/admin"
 	"github.com/aidarbn/platform-go/kit/modules/postgres"
+	"github.com/aidarbn/platform-go/kit/modules/settings"
 	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
+	"github.com/aidarbn/platform-go/kit/settingsx"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -195,7 +197,17 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 		OnStarted: func(addr string) { opsCh <- addr },
 	}
 	go func() {
-		errCh <- platform.RunContext(ctx, cfg, []platform.Module{postgres.New(postgres.Config{URL: dsn}), panel}, nil)
+		// The panel comes before settings, the way generation orders them: the settings
+		// pages must still appear.
+		schema := settingsx.MustSchema(settingsx.Definition{
+			Key: "app.maintenance", Group: "app", Name: "maintenance", Kind: settingsx.KindBool, Default: "false",
+		})
+		modules := []platform.Module{
+			postgres.New(postgres.Config{URL: dsn}),
+			panel,
+			settings.New(settings.Config{Table: "platform_settings_admin_test"}, schema),
+		}
+		errCh <- platform.RunContext(ctx, cfg, modules, nil)
 	}()
 
 	var ops string
@@ -218,6 +230,19 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "shop-api") || !strings.Contains(string(body), "Overview") {
 		t.Fatalf("login: %d\n%s", resp.StatusCode, body)
 	}
+
+	page, err := client.Get("http://" + panel.Addr() + "/settings")
+	if err != nil {
+		t.Fatalf("settings page: %v", err)
+	}
+	pageBody, _ := io.ReadAll(page.Body)
+	page.Body.Close()
+	if page.StatusCode != http.StatusOK || !strings.Contains(string(pageBody), "maintenance") {
+		t.Errorf("the settings page does not show the settings: %d\n%s", page.StatusCode, pageBody)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DROP TABLE IF EXISTS platform_settings_admin_test")
+	})
 
 	health, err := http.Get("http://" + ops + "/health")
 	if err != nil {

@@ -75,7 +75,11 @@ func New(o Options) ([]string, error) {
 		"cmd/app/wire.go": []byte(wireGo),
 		"Makefile":        []byte(makefile),
 		".gitignore":      []byte(gitignore),
+		".dockerignore":   []byte(dockerignore),
+		"Dockerfile":      []byte(dockerfile(o)),
 		"README.md":       []byte(readme(o)),
+
+		".github/workflows/ci.yml": []byte(ciWorkflow),
 	}
 
 	// The wiring is generated right away so the project compiles from the first minute.
@@ -143,6 +147,9 @@ func specFile(o Options) string {
 func goMod(o Options) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "module %s\n\ngo %s\n\nrequire %s %s\n", o.Module, o.GoVersion, PlatformModule, o.Require)
+	// The tool directive pins platformgo to the platform version of the project, so
+	// every developer and CI run generate with the same generator.
+	fmt.Fprintf(&b, "\ntool %s/cmd/platformgo\n", PlatformModule)
 	if o.Replace != "" {
 		fmt.Fprintf(&b, "\nreplace %s => %s\n", PlatformModule, o.Replace)
 	}
@@ -175,7 +182,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := platform.Run(platform.Config{}, platformModules(cfg), wireDomain); err != nil {
+	if err := platform.Run(platform.Config{Service: serviceName}, platformModules(cfg), wireDomain); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -194,51 +201,5 @@ func wireDomain(app *platform.App) error {
 }
 `
 
-const makefile = `.PHONY: help generate build run test lint
-
-help: ## list targets
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
-
-generate: ## regenerate module wiring
-	go tool platformgo generate
-
-build: generate ## build
-	go build ./...
-
-run: generate ## run
-	go run ./cmd/app
-
-test: ## tests
-	go test -race ./...
-
-lint: ## checks, including generation freshness
-	gofmt -l .
-	go vet ./...
-	go tool platformgo generate --check
-`
-
-const gitignore = `/bin/
-/dist/
-*.test
-.env
-.DS_Store
-`
-
-func readme(o Options) string {
-	return fmt.Sprintf(`# %s
-
-A project built on platform-go.
-
-## Usage
-
-	make run      # run
-	make test     # tests
-	make lint     # checks, including generation freshness
-
-## Layout
-
-- %s lists the enabled modules and their settings; run `+"`make generate`"+` after editing it
-- cmd/app/main.go and cmd/app/wire.go are the only hand written files
-- cmd/app/*.gen.go and .env.example are generated, do not edit them
-`, o.Service, spec.FileName)
-}
+// specFileName keeps templates.go free of the spec import.
+const specFileName = spec.FileName
