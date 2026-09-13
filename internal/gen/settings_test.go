@@ -196,3 +196,31 @@ func keys(m map[string][]byte) []string {
 	}
 	return out
 }
+
+func TestSettingsCodeTaplyTypesAndDescriptions(t *testing.T) {
+	code, err := gen.SettingsCode([]byte(`configs:
+  payments:
+    _description: "Payments"
+    max_amount:
+      type: int64
+      default: 5000000000
+      description: "Largest payment, tiyn"
+      requires_restart: true
+    fee_percent: { type: float, default: 0.95 }
+`))
+	if err != nil {
+		t.Fatalf("SettingsCode: %v", err)
+	}
+	got := string(code)
+	for _, want := range []string{
+		`func (g PaymentsSettings) MaxAmount() int64 { return g.store.Int64("payments.max_amount") }`,
+		`func (g PaymentsSettings) FeePercent() float64 { return g.store.Float("payments.fee_percent") }`,
+		`// MaxAmount returns "payments.max_amount". Largest payment, tiyn`,
+		`Description: "Largest payment, tiyn", GroupDescription: "Payments", RequiresRestart: true`,
+		"settingsx.KindInt64", "settingsx.KindFloat",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("settings.gen.go lacks %q:\n%s", want, got)
+		}
+	}
+}

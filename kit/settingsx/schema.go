@@ -19,16 +19,26 @@ import (
 // constraints apply and which control the admin UI shows.
 type Kind string
 
+// The kinds are the types of taply's configuration schema.
 const (
 	KindBool     Kind = "bool"
 	KindInt      Kind = "int"
+	KindInt64    Kind = "int64"
+	KindFloat    Kind = "float"
 	KindDuration Kind = "duration"
 	KindString   Kind = "string"
 	KindCron     Kind = "cron"
 )
 
 // Kinds returns every supported kind.
-func Kinds() []Kind { return []Kind{KindBool, KindInt, KindDuration, KindString, KindCron} }
+func Kinds() []Kind {
+	return []Kind{KindBool, KindInt, KindInt64, KindFloat, KindDuration, KindString, KindCron}
+}
+
+// bounded reports whether min and max apply to the kind.
+func (k Kind) bounded() bool {
+	return k == KindInt || k == KindInt64 || k == KindFloat || k == KindDuration
+}
 
 func (k Kind) valid() bool { return slices.Contains(Kinds(), k) }
 
@@ -44,11 +54,16 @@ type Definition struct {
 	Max     string   // upper bound for int and duration
 	Options []string // allowed values for string
 	Title   string   // human readable name for the admin UI
+
+	Description      string // what the setting does, shown in the admin UI
+	GroupDescription string // what the group is about; the same for every setting of a group
+	RequiresRestart  bool   // the value is read once at start, so a change needs a restart
 }
 
 // Group is a set of settings shown together in the admin UI.
 type Group struct {
 	Name        string
+	Description string
 	Definitions []Definition
 }
 
@@ -113,8 +128,8 @@ func validateDefinition(def Definition) error {
 	if len(def.Options) > 0 && def.Kind != KindString {
 		return fmt.Errorf("%s: options are only allowed for type string", def.Key)
 	}
-	if (def.Min != "" || def.Max != "") && def.Kind != KindInt && def.Kind != KindDuration {
-		return fmt.Errorf("%s: min and max are only allowed for types int and duration", def.Key)
+	if (def.Min != "" || def.Max != "") && !def.Kind.bounded() {
+		return fmt.Errorf("%s: min and max are only allowed for types int, int64, float and duration", def.Key)
 	}
 	for _, bound := range []struct {
 		name string
@@ -159,9 +174,12 @@ func (s Schema) Groups() []Group {
 	for _, def := range s.defs {
 		if n := len(groups); n > 0 && groups[n-1].Name == def.Group {
 			groups[n-1].Definitions = append(groups[n-1].Definitions, def)
+			if groups[n-1].Description == "" {
+				groups[n-1].Description = def.GroupDescription
+			}
 			continue
 		}
-		groups = append(groups, Group{Name: def.Group, Definitions: []Definition{def}})
+		groups = append(groups, Group{Name: def.Group, Description: def.GroupDescription, Definitions: []Definition{def}})
 	}
 	slices.SortFunc(groups, func(a, b Group) int { return strings.Compare(a.Name, b.Name) })
 	return groups
@@ -181,7 +199,7 @@ func (s Schema) Validate(key, raw string) error {
 
 func validateValue(def Definition, raw string) error {
 	switch def.Kind {
-	case KindBool, KindInt, KindDuration:
+	case KindBool, KindInt, KindInt64, KindFloat, KindDuration:
 		if err := parseScalar(def.Kind, raw); err != nil {
 			return err
 		}
@@ -210,6 +228,14 @@ func parseScalar(kind Kind, raw string) error {
 		if _, err := strconv.Atoi(raw); err != nil {
 			return fmt.Errorf("expected an integer, got %q", raw)
 		}
+	case KindInt64:
+		if _, err := strconv.ParseInt(raw, 10, 64); err != nil {
+			return fmt.Errorf("expected an integer, got %q", raw)
+		}
+	case KindFloat:
+		if _, err := strconv.ParseFloat(raw, 64); err != nil {
+			return fmt.Errorf("expected a number, got %q", raw)
+		}
 	case KindDuration:
 		if _, err := time.ParseDuration(raw); err != nil {
 			return fmt.Errorf("expected a duration such as 30s, got %q", raw)
@@ -230,6 +256,30 @@ func checkBounds(def Definition, raw string) error {
 		if def.Max != "" {
 			if high, _ := strconv.Atoi(def.Max); n > high {
 				return fmt.Errorf("%d is above the maximum %d", n, high)
+			}
+		}
+	case KindInt64:
+		n, _ := strconv.ParseInt(raw, 10, 64)
+		if def.Min != "" {
+			if low, _ := strconv.ParseInt(def.Min, 10, 64); n < low {
+				return fmt.Errorf("%d is below the minimum %d", n, low)
+			}
+		}
+		if def.Max != "" {
+			if high, _ := strconv.ParseInt(def.Max, 10, 64); n > high {
+				return fmt.Errorf("%d is above the maximum %d", n, high)
+			}
+		}
+	case KindFloat:
+		f, _ := strconv.ParseFloat(raw, 64)
+		if def.Min != "" {
+			if low, _ := strconv.ParseFloat(def.Min, 64); f < low {
+				return fmt.Errorf("%v is below the minimum %v", f, low)
+			}
+		}
+		if def.Max != "" {
+			if high, _ := strconv.ParseFloat(def.Max, 64); f > high {
+				return fmt.Errorf("%v is above the maximum %v", f, high)
 			}
 		}
 	case KindDuration:

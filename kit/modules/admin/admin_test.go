@@ -50,7 +50,8 @@ func newPanel(t *testing.T, pages ...admin.Page) *panel {
 	}
 
 	schema := settingsx.MustSchema(
-		settingsx.Definition{Key: "api.ratelimit.rps", Group: "api.ratelimit", Name: "rps", Kind: settingsx.KindInt, Default: "50", Min: "1", Max: "1000"},
+		settingsx.Definition{Key: "api.ratelimit.rps", Group: "api.ratelimit", Name: "rps", Kind: settingsx.KindInt, Default: "50", Min: "1", Max: "1000",
+			Description: "Requests per second per client", GroupDescription: "Limits of the public API", RequiresRestart: true},
 		settingsx.Definition{Key: "app.maintenance", Group: "app", Name: "maintenance", Kind: settingsx.KindBool, Default: "false"},
 		settingsx.Definition{Key: "app.mode", Group: "app", Name: "mode", Kind: settingsx.KindString, Default: "fast", Options: []string{"fast", "slow"}},
 	)
@@ -232,7 +233,7 @@ func TestSettingsPage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("code = %d", code)
 	}
-	for _, want := range []string{"api.ratelimit", "app.maintenance", "app.mode"} {
+	for _, want := range []string{"api.ratelimit", "app.maintenance", "app.mode", "Requests per second per client", "Limits of the public API", "applies after a restart"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page lacks %q", want)
 		}

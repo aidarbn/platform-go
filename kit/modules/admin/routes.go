@@ -221,8 +221,9 @@ func (s *server) showIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsGroupView struct {
-	Name   string
-	Values []settingsx.Value
+	Name        string
+	Description string
+	Values      []settingsx.Value
 }
 
 func (s *server) showSettings(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +239,7 @@ func (s *server) showSettings(w http.ResponseWriter, r *http.Request) {
 			groups[n-1].Values = append(groups[n-1].Values, v)
 			continue
 		}
-		groups = append(groups, settingsGroupView{Name: v.Group, Values: []settingsx.Value{v}})
+		groups = append(groups, settingsGroupView{Name: v.Group, Description: v.GroupDescription, Values: []settingsx.Value{v}})
 	}
 	s.render(w, r, user, "settings", "Business settings", map[string]any{"Groups": groups})
 }

@@ -143,6 +143,18 @@ func (s *Store) Int(key string) int {
 	return v
 }
 
+// Int64 returns an int64 setting.
+func (s *Store) Int64(key string) int64 {
+	v, _ := strconv.ParseInt(s.raw(key, KindInt64), 10, 64)
+	return v
+}
+
+// Float returns a float setting.
+func (s *Store) Float(key string) float64 {
+	v, _ := strconv.ParseFloat(s.raw(key, KindFloat), 64)
+	return v
+}
+
 // Duration returns a duration setting.
 func (s *Store) Duration(key string) time.Duration {
 	v, _ := time.ParseDuration(s.raw(key, KindDuration))

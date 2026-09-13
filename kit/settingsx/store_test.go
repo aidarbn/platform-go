@@ -319,3 +319,26 @@ func TestStoreConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestInt64AndFloat(t *testing.T) {
+	schema := settingsx.MustSchema(
+		settingsx.Definition{Key: "pay.max", Group: "pay", Name: "max", Kind: settingsx.KindInt64, Default: "5000000000", Max: "9000000000"},
+		settingsx.Definition{Key: "pay.fee", Group: "pay", Name: "fee", Kind: settingsx.KindFloat, Default: "0.95", Min: "0", Max: "100"},
+	)
+	s := settingsx.NewTestStore(schema, map[string]string{"pay.fee": "1.5"})
+
+	if got := s.Int64("pay.max"); got != 5_000_000_000 {
+		t.Errorf("max = %d", got)
+	}
+	if got := s.Float("pay.fee"); got != 1.5 {
+		t.Errorf("fee = %v", got)
+	}
+	for key, raw := range map[string]string{"pay.max": "9000000001", "pay.fee": "100.01"} {
+		if err := schema.Validate(key, raw); err == nil {
+			t.Errorf("%s=%s passed the maximum", key, raw)
+		}
+	}
+	if err := schema.Validate("pay.fee", "ninety"); err == nil {
+		t.Error("a word passed as a float")
+	}
+}

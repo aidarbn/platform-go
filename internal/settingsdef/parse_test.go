@@ -147,3 +147,115 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("want an error")
 	}
 }
+
+// The configuration schema of taply is read as is: the configs root, a description per
+// group and per setting, requires_restart, nested groups and every taply type.
+const taplyFormat = `
+configs:
+  sync:
+    _description: "Menu synchronisation with external systems"
+
+    queue_workers:
+      type: int
+      default: 3
+      description: "Workers of the sync queue"
+      requires_restart: true
+
+    enabled:
+      type: bool
+      default: true
+      description: "Run the sync worker"
+      requires_restart: false
+
+    timeout:
+      type: duration
+      default: "2h"
+      description: "Timeout of one restaurant"
+
+  sync_all:
+    _description: "Periodic full sync"
+    schedule:
+      type: cron
+      default: "*/15 * * * *"
+      description: "Cron schedule"
+
+  payments:
+    kaspi:
+      _description: "Kaspi payments"
+      max_amount:
+        type: int64
+        default: 5000000000
+      fee_percent:
+        type: float
+        default: 0.95
+        min: 0
+        max: 100
+`
+
+func TestParseTaplyFormat(t *testing.T) {
+	schema, err := settingsdef.Parse([]byte(taplyFormat))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	get := func(key string) settingsx.Definition {
+		t.Helper()
+		d, ok := schema.Definition(key)
+		if !ok {
+			t.Fatalf("%s is missing: %v", key, schema.Definitions())
+		}
+		return d
+	}
+
+	workers := get("sync.queue_workers")
+	if !workers.RequiresRestart || workers.Description != "Workers of the sync queue" || workers.GroupDescription != "Menu synchronisation with external systems" {
+		t.Errorf("queue_workers = %+v", workers)
+	}
+	if get("sync.enabled").RequiresRestart {
+		t.Error("requires_restart: false was read as true")
+	}
+	if d := get("sync_all.schedule"); d.Kind != settingsx.KindCron || d.Default != "*/15 * * * *" {
+		t.Errorf("schedule = %+v", d)
+	}
+
+	// A nested group joins its names with a dot and keeps its own description.
+	if d := get("payments.kaspi.max_amount"); d.Kind != settingsx.KindInt64 || d.Default != "5000000000" || d.GroupDescription != "Kaspi payments" {
+		t.Errorf("max_amount = %+v", d)
+	}
+	if d := get("payments.kaspi.fee_percent"); d.Kind != settingsx.KindFloat || d.Default != "0.95" || d.Max != "100" {
+		t.Errorf("fee_percent = %+v", d)
+	}
+
+	groups := schema.Groups()
+	var names []string
+	for _, g := range groups {
+		names = append(names, g.Name+"="+g.Description)
+	}
+	want := "payments.kaspi=Kaspi payments, sync=Menu synchronisation with external systems, sync_all=Periodic full sync"
+	if got := strings.Join(names, ", "); got != want {
+		t.Errorf("groups = %s", got)
+	}
+}
+
+func TestParseRejectsTaplyFormatMistakes(t *testing.T) {
+	cases := map[string]struct {
+		raw  string
+		want string
+	}{
+		"two roots":           {"settings: {}\nconfigs: {}\n", "expected one root"},
+		"unknown root":        {"options: {}\n", "expected one root"},
+		"setting at the root": {"configs:\n  enabled: { type: bool, default: true }\n", "must be inside a group"},
+		"restart not a bool":  {"configs:\n  a:\n    b: { type: bool, default: true, requires_restart: sometimes }\n", "requires_restart"},
+		"float below min":     {"configs:\n  a:\n    b: { type: float, default: -1.5, min: 0 }\n", "below the minimum"},
+		"int64 not a number":  {"configs:\n  a:\n    b: { type: int64, default: lots }\n", "expected an integer"},
+		"scalar in a group":   {"configs:\n  a:\n    b: 5\n", "a.b: expected a setting or a group"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := settingsdef.Parse([]byte(tc.raw))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

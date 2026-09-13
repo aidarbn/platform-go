@@ -34,7 +34,23 @@ settings:
     burst: { type: int, default: 100 }
 ```
 
-Supported types: `bool`, `int`, `duration`, `string` (with optional `options`) and `cron`. `int` and `duration` accept `min` and `max`; every value is validated against the schema before it is stored, so the admin UI cannot write a limit the code would choke on.
+The format is taply's configuration schema, so a taply `configs/schema.yaml` works unchanged:
+
+```yaml
+configs:                     # or settings:
+  sync:
+    _description: "Menu synchronisation with external systems"
+    queue_workers:
+      type: int
+      default: 3
+      description: "Workers of the sync queue"
+      requires_restart: true   # the admin panel warns that the value applies after a restart
+  payments:
+    kaspi:                     # groups nest: payments.kaspi.fee_percent
+      fee_percent: { type: float, default: 0.95, min: 0, max: 100 }
+```
+
+Types: `bool`, `int`, `int64`, `float`, `duration`, `string` (with optional `options`) and `cron`. Numbers and durations accept `min` and `max`; every value is validated against the schema before it is stored, so the admin UI cannot write a limit the code would choke on. Descriptions of groups and settings are shown in the admin panel and in the comments of the generated accessors.
 
 ```go
 // internal/settings/settings.gen.go, generated from settings.yaml

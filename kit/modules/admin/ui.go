@@ -124,11 +124,12 @@ var contentTemplates = map[string]string{
 {{if not .Data.Groups}}<p class="muted">The project has no business settings: describe them in settings.yaml.</p>{{end}}
 {{range .Data.Groups}}
 <h2>{{.Name}}</h2>
+{{with .Description}}<p class="muted">{{.}}</p>{{end}}
 <table>
   <tr><th>Setting</th><th>Value</th><th>Default</th><th></th></tr>
   {{range .Values}}{{$v := .}}
   <tr>
-    <td><code>{{.Name}}</code>{{with .Title}}<div class="muted">{{.}}</div>{{end}}</td>
+    <td><code>{{.Name}}</code>{{with .Title}}<div>{{.}}</div>{{end}}{{with .Description}}<div class="muted">{{.}}</div>{{end}}{{if .RequiresRestart}}<div class="muted">applies after a restart</div>{{end}}</td>
     <td>
       <form method="post" action="/settings/set" class="row">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">

@@ -84,7 +84,7 @@ func (s *Settings) {{.Method}}() {{.Type}} { return {{.Type}}{store: s.store} }
 type {{.Type}} struct{ store *settingsx.Store }
 {{- range .Settings}}
 
-// {{.Method}} returns {{printf "%q" .Key}}.
+// {{.Method}} returns {{printf "%q" .Key}}.{{with .Description}} {{.}}{{end}}
 func (g {{$group.Type}}) {{.Method}}() {{.GoType}} { return g.store.{{.Getter}}({{printf "%q" .Key}}) }
 {{- end}}
 {{- end}}
@@ -104,10 +104,11 @@ type settingsGroup struct {
 }
 
 type settingsField struct {
-	Key    string
-	Method string
-	GoType string
-	Getter string
+	Key         string
+	Description string
+	Method      string
+	GoType      string
+	Getter      string
 }
 
 // SettingsCode generates the typed access from the schema file contents.
@@ -162,10 +163,11 @@ func settingsData_(schema settingsx.Schema) (settingsData, error) {
 			names[name] = def.Name
 
 			g.Settings = append(g.Settings, settingsField{
-				Key:    def.Key,
-				Method: name,
-				GoType: goType(def.Kind),
-				Getter: getter(def.Kind),
+				Key:         def.Key,
+				Description: oneLine(def.Description),
+				Method:      name,
+				GoType:      goType(def.Kind),
+				Getter:      getter(def.Kind),
 			})
 		}
 		data.Groups = append(data.Groups, g)
@@ -197,10 +199,22 @@ func definitionLiteral(def settingsx.Definition) string {
 	if def.Title != "" {
 		fields = append(fields, fmt.Sprintf("Title: %q", def.Title))
 	}
+	if def.Description != "" {
+		fields = append(fields, fmt.Sprintf("Description: %q", def.Description))
+	}
+	if def.GroupDescription != "" {
+		fields = append(fields, fmt.Sprintf("GroupDescription: %q", def.GroupDescription))
+	}
+	if def.RequiresRestart {
+		fields = append(fields, "RequiresRestart: true")
+	}
 	return "settingsx.Definition{" + strings.Join(fields, ", ") + "}"
 }
 
 func kindConst(kind settingsx.Kind) string { return "Kind" + exported(string(kind)) }
+
+// oneLine keeps a description from breaking the generated comment.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func goType(kind settingsx.Kind) string {
 	switch kind {
@@ -208,6 +222,10 @@ func goType(kind settingsx.Kind) string {
 		return "bool"
 	case settingsx.KindInt:
 		return "int"
+	case settingsx.KindInt64:
+		return "int64"
+	case settingsx.KindFloat:
+		return "float64"
 	case settingsx.KindDuration:
 		return "time.Duration"
 	default:
