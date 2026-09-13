@@ -8,7 +8,7 @@ ENV_FILE ?= $(if $(wildcard .env),.env,.env.example)
 include $(ENV_FILE)
 export
 
-.PHONY: help up down generate build run test lint tidy
+.PHONY: help up down generate db-generate migration build run test lint tidy
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
@@ -19,8 +19,14 @@ up: ## start local services and wait until they are healthy
 down: ## stop local services
 	docker compose down
 
-generate: ## regenerate module wiring
+generate: ## regenerate wiring and static queries
 	go tool platformgo generate
+
+db-generate: up ## migrate the local database and regenerate the dynamic query builder
+	go tool platformgo db generate
+
+migration: ## add a migration: make migration name=create_orders
+	go tool platformgo migrate create $(name)
 
 build: generate ## build the binary into bin/app
 	go build -o bin/app ./cmd/app

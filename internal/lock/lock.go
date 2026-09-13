@@ -26,6 +26,7 @@ const FileName = "platformgo.lock"
 type Lock struct {
 	Modules   []string `yaml:"modules"`   // enabled modules
 	Generated []string `yaml:"generated"` // files owned by generation
+	Tools     []string `yaml:"tools"`     // tools added to go.mod by platformgo
 }
 
 const header = "# Written by platformgo apply. Do not edit: it records what has been applied.\n"
@@ -68,12 +69,15 @@ func Marshal(l Lock) ([]byte, error) {
 }
 
 func (l Lock) normalized() Lock {
-	out := Lock{Modules: uniqSorted(l.Modules), Generated: uniqSorted(l.Generated)}
+	out := Lock{Modules: uniqSorted(l.Modules), Generated: uniqSorted(l.Generated), Tools: uniqSorted(l.Tools)}
 	if out.Modules == nil {
 		out.Modules = []string{}
 	}
 	if out.Generated == nil {
 		out.Generated = []string{}
+	}
+	if out.Tools == nil {
+		out.Tools = []string{}
 	}
 	return out
 }
@@ -89,6 +93,7 @@ type Diff struct {
 	AddedModules   []string
 	RemovedModules []string
 	StaleFiles     []string // generated before and no longer generated
+	StaleTools     []string // added before and no longer needed
 }
 
 // Compare returns the difference between the applied lock and the wanted one.
@@ -98,12 +103,13 @@ func Compare(applied, wanted Lock) Diff {
 		AddedModules:   minus(w.Modules, a.Modules),
 		RemovedModules: minus(a.Modules, w.Modules),
 		StaleFiles:     minus(a.Generated, w.Generated),
+		StaleTools:     minus(a.Tools, w.Tools),
 	}
 }
 
 // Empty reports whether nothing changes.
 func (d Diff) Empty() bool {
-	return len(d.AddedModules) == 0 && len(d.RemovedModules) == 0 && len(d.StaleFiles) == 0
+	return len(d.AddedModules) == 0 && len(d.RemovedModules) == 0 && len(d.StaleFiles) == 0 && len(d.StaleTools) == 0
 }
 
 func minus(from, remove []string) []string {

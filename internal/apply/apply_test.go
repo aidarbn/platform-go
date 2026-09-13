@@ -10,6 +10,7 @@ import (
 
 	"github.com/aidarbn/platform-go/internal/apply"
 	"github.com/aidarbn/platform-go/internal/gen"
+	"github.com/aidarbn/platform-go/internal/gomod"
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
@@ -243,5 +244,65 @@ func TestPending(t *testing.T) {
 	}
 	if !slices.IsSorted(pending) {
 		t.Errorf("pending is not sorted: %v", pending)
+	}
+}
+
+func TestModuleToolsGoIntoGoMod(t *testing.T) {
+	dir := project(t, withoutSettings)
+	writeFile(t, dir, "go.mod", "module example.com/shop-api\n\ngo 1.27\n\ntool golang.org/x/tools/cmd/stringer\n")
+
+	p := build(t, dir)
+	var added []string
+	for _, tool := range p.AddTools {
+		added = append(added, tool.Package)
+	}
+	slices.Sort(added)
+	if !slices.Equal(added, []string{"github.com/go-jet/jet/v2/cmd/jet", "github.com/sqlc-dev/sqlc/cmd/sqlc"}) {
+		t.Fatalf("add tools = %v", added)
+	}
+	if !slices.Contains(p.Pending(), "go.mod") {
+		t.Errorf("pending lacks go.mod: %v", p.Pending())
+	}
+	if err := p.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	mod, err := gomod.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"github.com/sqlc-dev/sqlc/cmd/sqlc", "github.com/go-jet/jet/v2/cmd/jet", "golang.org/x/tools/cmd/stringer"} {
+		if !mod.HasTool(want) {
+			t.Errorf("go.mod lacks the tool %s: %+v", want, mod)
+		}
+	}
+	if mod.Requires["github.com/sqlc-dev/sqlc"] != "v1.31.1" || mod.Requires["github.com/go-jet/jet/v2"] != "v2.16.0" {
+		t.Errorf("pinned versions = %v", mod.Requires)
+	}
+	if again := build(t, dir); !again.UpToDate() {
+		t.Errorf("plan after Execute: %v", again.Pending())
+	}
+
+	// Without the module its tools go away; a tool the project declared itself stays.
+	writeFile(t, dir, spec.FileName, "schema: 1\nproject:\n  module: example.com/shop-api\nmodules: {}\n")
+	p = build(t, dir)
+	slices.Sort(p.DropTools)
+	if !slices.Equal(p.DropTools, []string{"github.com/go-jet/jet/v2/cmd/jet", "github.com/sqlc-dev/sqlc/cmd/sqlc"}) {
+		t.Fatalf("drop tools = %v", p.DropTools)
+	}
+	if err := p.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if mod, err = gomod.Read(dir); err != nil {
+		t.Fatal(err)
+	}
+	if mod.HasTool("github.com/sqlc-dev/sqlc/cmd/sqlc") || mod.HasTool("github.com/go-jet/jet/v2/cmd/jet") {
+		t.Errorf("the tools of the removed module stayed: %v", mod.Tools)
+	}
+	if !mod.HasTool("golang.org/x/tools/cmd/stringer") {
+		t.Errorf("the project's own tool was removed: %v", mod.Tools)
+	}
+	if again := build(t, dir); !again.UpToDate() {
+		t.Errorf("plan after removal: %v", again.Pending())
 	}
 }

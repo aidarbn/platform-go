@@ -6,12 +6,14 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/aidarbn/platform-go/kit/confx"
@@ -51,6 +53,7 @@ func Load(l *confx.Loader) Config {
 type Module struct {
 	cfg        Config
 	pool       *pgxpool.Pool
+	db         *sql.DB
 	migrations fs.FS
 }
 
@@ -98,7 +101,12 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 		}
 	}
 
+	// database/sql over the same pool, for libraries built on it, such as the jet query
+	// runner. It shares the pool's connections instead of opening its own.
+	m.db = stdlib.OpenDBFromPool(pool)
+
 	platform.Provide(app, pool)
+	platform.Provide(app, m.db)
 	if err := app.Metrics().Register(newPoolCollector(pool)); err != nil {
 		return fmt.Errorf("pool metrics: %w", err)
 	}
@@ -115,6 +123,9 @@ func (m *Module) Health(ctx context.Context) error {
 
 // Stop closes the pool, waiting for busy connections to come back.
 func (m *Module) Stop(context.Context) error {
+	if m.db != nil {
+		_ = m.db.Close() // closing it leaves the pool open; the pool is closed next
+	}
 	if m.pool != nil {
 		m.pool.Close()
 	}
@@ -123,6 +134,10 @@ func (m *Module) Stop(context.Context) error {
 
 // Pool returns the pool from the container.
 func Pool(app *platform.App) *pgxpool.Pool { return platform.Get[*pgxpool.Pool](app) }
+
+// SQL returns database/sql over the pool from the container. Dynamic queries built with
+// jet run through it: stmt.QueryContext(ctx, postgres.SQL(app), &dest).
+func SQL(app *platform.App) *sql.DB { return platform.Get[*sql.DB](app) }
 
 // InTx runs fn in a transaction on the pool from the container.
 func InTx(ctx context.Context, app *platform.App, fn func(tx pgx.Tx) error) error {

@@ -137,6 +137,7 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 	}
 	if _, ok := f.Modules["postgres"]; ok {
 		files[MigrationsPath] = []byte(migrationsGo)
+		files[SqlcPath] = []byte(sqlcYAML)
 	}
 	return files, nil
 }

@@ -134,8 +134,6 @@ func goOutput(t *testing.T, dir string, args ...string) string {
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GOFLAGS=-mod=mod",
-		"GOPROXY=off", // build from the module cache, no network
-		"GOPRIVATE=*", // skip the checksum database
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

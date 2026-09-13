@@ -60,6 +60,29 @@ created db/migrations/20260914073005_create_orders.sql
 
 The directory is embedded into the binary by the generated `db/migrations/migrations.gen.go`, and the module applies pending migrations during startup, before any other module touches the database. A session advisory lock makes several instances starting at once apply each migration exactly once. Set `DATABASE_MIGRATE=false` when migrations run as a separate deploy step.
 
+Queries come in two kinds, as in taply:
+
+| Kind | Tool | Where | How to regenerate |
+|---|---|---|---|
+| static — the query text is known in advance | sqlc | `db/queries/*.sql` → `internal/db/sqlcgen` | `make generate`; no database needed |
+| dynamic — filters, sorting, pagination built at run time | jet | the migrated schema → `internal/db/jetgen/{model,table}` | `make db-generate`: migrates the local database and reads its schema |
+
+Both generators are pinned as `tool` in `go.mod` by `platformgo apply` (sqlc v1.31.1, jet v2.16.0) and removed with the module. `db/sqlc.yaml` is generated: schema from the migrations, `pgx/v5`, `numeric` as `decimal.Decimal`, `uuid` as `uuid.UUID`, `jsonb` as `json.RawMessage`, `timestamptz` and `date` as `time.Time`, nullable columns as pointers. `verify` fails when the sqlc output is stale or left from a removed query file.
+
+```go
+// static: sqlc on the pool
+q := sqlcgen.New(postgres.Pool(app))
+order, err := q.GetOrder(ctx, id)
+
+// dynamic: jet on database/sql over the same pool
+o := table.Orders
+stmt := o.SELECT(o.AllColumns).WHERE(o.Customer.EQ(postgres.String(name))).LIMIT(20)
+var orders []model.Orders
+err := stmt.QueryContext(ctx, postgres.SQL(app), &orders)
+```
+
+jet writes its output under the database name; platformgo moves the packages straight under `internal/db/jetgen`, so import paths are the same for every developer.
+
 ## The `settings` module
 
 Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.

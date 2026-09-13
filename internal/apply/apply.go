@@ -17,7 +17,9 @@ import (
 	"strings"
 
 	"github.com/aidarbn/platform-go/internal/gen"
+	"github.com/aidarbn/platform-go/internal/gomod"
 	"github.com/aidarbn/platform-go/internal/lock"
+	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
 
@@ -27,11 +29,13 @@ type Plan struct {
 	Modules []string
 	Diff    lock.Diff
 
-	Create    []string // files a module needs and the project does not have yet
-	Write     []string // generated files that differ from the project
-	Delete    []string // generated files of removed modules
-	Kept      []string // generated files of removed modules that were edited by hand
-	LockStale bool     // platformgo.lock does not match
+	Create    []string        // files a module needs and the project does not have yet
+	Write     []string        // generated files that differ from the project
+	Delete    []string        // generated files of removed modules
+	Kept      []string        // generated files of removed modules that were edited by hand
+	AddTools  []registry.Tool // tools of enabled modules missing from go.mod
+	DropTools []string        // tools of removed modules still declared in go.mod
+	LockStale bool            // platformgo.lock does not match
 
 	dir     string
 	creates map[string][]byte
@@ -78,15 +82,23 @@ func Build(dir string) (*Plan, error) {
 		files:   files,
 		Create:  slices.Sorted(maps.Keys(creates)),
 	}
+	var tools []registry.Tool
 	for _, m := range f.EnabledModules() {
 		p.Modules = append(p.Modules, m.Name)
+		tools = append(tools, m.Tools...)
 	}
 	slices.Sort(p.Modules)
 
 	p.wanted = lock.Lock{Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
+	for _, t := range tools {
+		p.wanted.Tools = append(p.wanted.Tools, t.Package)
+	}
 	p.Diff = lock.Compare(applied, p.wanted)
 
 	if err := p.classifyStale(); err != nil {
+		return nil, err
+	}
+	if err := p.planTools(tools); err != nil {
 		return nil, err
 	}
 	if p.LockStale, err = lockStale(dir, p.wanted); err != nil {
@@ -139,6 +151,29 @@ func (p *Plan) classifyStale() error {
 	return nil
 }
 
+// planTools compares the tools of the enabled modules with go.mod. Only tools platformgo
+// added itself, according to the lock, are ever removed.
+func (p *Plan) planTools(tools []registry.Tool) error {
+	if !gomod.Exists(p.dir) {
+		return nil
+	}
+	mod, err := gomod.Read(p.dir)
+	if err != nil {
+		return err
+	}
+	for _, t := range tools {
+		if !mod.HasTool(t.Package) {
+			p.AddTools = append(p.AddTools, t)
+		}
+	}
+	for _, pkg := range p.Diff.StaleTools {
+		if mod.HasTool(pkg) {
+			p.DropTools = append(p.DropTools, pkg)
+		}
+	}
+	return nil
+}
+
 func lockStale(dir string, wanted lock.Lock) (bool, error) {
 	want, err := lock.Marshal(wanted)
 	if err != nil {
@@ -156,12 +191,16 @@ func lockStale(dir string, wanted lock.Lock) (bool, error) {
 
 // UpToDate reports whether the project already matches its description.
 func (p *Plan) UpToDate() bool {
-	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 && !p.LockStale
+	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 &&
+		len(p.AddTools) == 0 && len(p.DropTools) == 0 && !p.LockStale
 }
 
 // Pending lists every path apply would touch, for messages.
 func (p *Plan) Pending() []string {
 	out := slices.Concat(p.Create, p.Write, p.Delete)
+	if len(p.AddTools) > 0 || len(p.DropTools) > 0 {
+		out = append(out, "go.mod")
+	}
 	if p.LockStale {
 		out = append(out, lock.FileName)
 	}
@@ -183,6 +222,16 @@ func (p *Plan) Execute() error {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		removeEmptyParents(p.dir, filepath.Dir(full))
+	}
+	for _, t := range p.AddTools {
+		if err := gomod.AddTool(p.dir, t.Module, t.Package, t.Version); err != nil {
+			return err
+		}
+	}
+	for _, pkg := range p.DropTools {
+		if err := gomod.DropTool(p.dir, pkg); err != nil {
+			return err
+		}
 	}
 	if p.LockStale {
 		if err := lock.Write(p.dir, p.wanted); err != nil {

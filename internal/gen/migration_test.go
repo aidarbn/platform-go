@@ -47,6 +47,9 @@ func TestMigrationsPackageIsGeneratedWithPostgres(t *testing.T) {
 		t.Fatalf("Wiring: %v", err)
 	}
 	got := string(files[gen.MigrationsPath])
+	if sqlc := string(files[gen.SqlcPath]); !strings.Contains(sqlc, "sql_package: pgx/v5") || !strings.Contains(sqlc, "out: ../internal/db/sqlcgen") {
+		t.Errorf("sqlc.yaml:\n%s", sqlc)
+	}
 	for _, want := range []string{"package migrations", "//go:embed *", "var FS embed.FS"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("migrations.gen.go lacks %q:\n%s", want, got)

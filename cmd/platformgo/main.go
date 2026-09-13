@@ -2,6 +2,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,15 +12,18 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/aidarbn/platform-go/internal/apply"
+	"github.com/aidarbn/platform-go/internal/codegen"
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/scaffold"
 	"github.com/aidarbn/platform-go/internal/spec"
+	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
 func main() {
@@ -47,6 +52,8 @@ func run(args []string, out io.Writer) error {
 		return cmdVerify(args[1:], out)
 	case "migrate":
 		return cmdMigrate(args[1:], out)
+	case "db":
+		return cmdDB(args[1:], out)
 	case "doctor":
 		return cmdDoctor(args[1:], out)
 	case "version":
@@ -70,6 +77,7 @@ func usage(out io.Writer) {
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
   platformgo migrate create <name> add an SQL migration to db/migrations
+  platformgo db generate          migrate the database and generate the jet query builder
   platformgo doctor               check the development environment
   platformgo version              print the version
 
@@ -127,8 +135,19 @@ func cmdGenerate(args []string, out io.Writer) error {
 	if *check {
 		return verify(*dir, out)
 	}
-	_, err := runApply(*dir, out)
-	return err
+	plan, err := runApply(*dir, out)
+	if err != nil {
+		return err
+	}
+	return runSqlc(plan, *dir, out)
+}
+
+// runSqlc regenerates the static queries of a project with the postgres module.
+func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
+	if !slices.Contains(plan.Modules, "postgres") {
+		return nil
+	}
+	return codegen.Sqlc(context.Background(), dir, out)
 }
 
 func cmdVerify(args []string, out io.Writer) error {
@@ -150,6 +169,11 @@ func verify(dir string, out io.Writer) error {
 	if !plan.UpToDate() {
 		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
 	}
+	if slices.Contains(plan.Modules, "postgres") {
+		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintln(out, "generation is up to date")
 	return nil
 }
@@ -162,7 +186,8 @@ func cmdApply(args []string, out io.Writer) error {
 		return err
 	}
 
-	if _, err := runApply(*dir, out); err != nil {
+	plan, err := runApply(*dir, out)
+	if err != nil {
 		return err
 	}
 	if *noTidy {
@@ -176,7 +201,57 @@ func cmdApply(args []string, out io.Writer) error {
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = *dir
 	cmd.Stdout, cmd.Stderr = out, os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	// The generators are in go.sum now, so the queries can be generated.
+	return runSqlc(plan, *dir, out)
+}
+
+func cmdDB(args []string, out io.Writer) error {
+	if len(args) == 0 || args[0] != "generate" {
+		return fmt.Errorf("usage: platformgo db generate [--dsn url]")
+	}
+	fs := flag.NewFlagSet("db generate", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	dsnFlag := fs.String("dsn", "", "database address; DATABASE_URL, .env and .env.example otherwise")
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return err
+	}
+
+	plan, err := apply.Build(*dir)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(plan.Modules, "postgres") {
+		return errors.New("db generate needs the postgres module")
+	}
+	dsn, err := codegen.DSN(*dir, *dsnFlag)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	pool, err := pgdb.Open(ctx, pgdb.Config{URL: dsn, ConnectTimeout: 5 * time.Second})
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	// The builder reflects the schema, so the database first gets every migration.
+	applied, err := pgdb.Migrate(ctx, pool, os.DirFS(filepath.Join(*dir, codegen.MigrationsDir)), nil)
+	if err != nil {
+		return err
+	}
+	for _, name := range applied {
+		fmt.Fprintln(out, "migrated", name)
+	}
+
+	if err := codegen.Jet(ctx, *dir, dsn, out); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "generated", codegen.JetOut)
+	return nil
 }
 
 func runApply(dir string, out io.Writer) (*apply.Plan, error) {
@@ -259,6 +334,12 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	}
 	for _, path := range plan.Delete {
 		fmt.Fprintln(out, del, path)
+	}
+	for _, t := range plan.AddTools {
+		fmt.Fprintf(out, "%s tool %s@%s\n", create, t.Package, t.Version)
+	}
+	for _, pkg := range plan.DropTools {
+		fmt.Fprintf(out, "%s tool %s\n", del, pkg)
 	}
 	for _, path := range plan.Kept {
 		fmt.Fprintf(out, "kept %s: it belonged to a removed module but was edited by hand\n", path)

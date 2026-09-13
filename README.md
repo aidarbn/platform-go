@@ -11,9 +11,10 @@
 | `platformgo new <module-path>` | creates a project: wiring, compose, Dockerfile, Makefile, CI | ready |
 | `platformgo plan` | shows what `apply` would do: modules added and removed, files to create, rewrite and delete | ready |
 | `platformgo apply` | brings the project in line with `platformgo.yaml`: generated files, files a module needs, removal of what a removed module left, `platformgo.lock`, `go mod tidy` | ready |
-| `platformgo generate [--check]` | `apply` without `go mod tidy`; `--check` fails when anything is stale | ready |
+| `platformgo generate [--check]` | `apply` without `go mod tidy`, plus sqlc for static queries; `--check` fails when anything is stale | ready |
 | `platformgo verify` | the check for CI, same as `generate --check` | ready |
 | `platformgo migrate create <name>` | adds a goose SQL migration to `db/migrations` | ready |
+| `platformgo db generate [--dsn]` | migrates the database and regenerates the jet query builder | ready |
 | `platformgo doctor` | checks the tools a project needs | ready |
 | `platformgo upgrade` | moves a project to a new platform version | planned |
 | `platformgo setup` | shell completion and the short `pgo` alias | planned |
@@ -24,10 +25,10 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 
 | Module | State |
 |---|---|
-| `postgres` — pool, health, pool metrics, transactions, migrations applied on start, local database in compose | ready |
+| `postgres` — pool, health, metrics, transactions, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
 | `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
 | `admin` — admin panel: sign in with one time codes, roles, accounts, audit log, settings pages, project pages | ready |
-| query generation, `river`, `api` and the rest of [docs/modules.md](docs/modules.md) | planned |
+| `river`, `api` and the rest of [docs/modules.md](docs/modules.md) | planned |
 
 ## Layout
 

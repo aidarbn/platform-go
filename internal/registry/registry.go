@@ -19,6 +19,14 @@ type EnvVar struct {
 	Required bool
 }
 
+// Tool is a code generator a module needs in the project. It is pinned in the go.mod of
+// the project, so every developer and CI run generate with the same version.
+type Tool struct {
+	Module  string // module path, "github.com/sqlc-dev/sqlc"
+	Package string // what go tool runs, "github.com/sqlc-dev/sqlc/cmd/sqlc"
+	Version string
+}
+
 // Module describes a platform module.
 type Module struct {
 	Name     string   // section name in platformgo.yaml
@@ -39,6 +47,8 @@ type Module struct {
 	// indented as an entry under services. Volumes lists the named volumes it uses.
 	Compose string
 	Volumes []string
+
+	Tools []Tool
 }
 
 // ConfigType is the settings type of the module, for example postgres.Config.
@@ -84,6 +94,10 @@ var all = []Module{
       timeout: 5s
       retries: 30`,
 		Volumes: []string{"postgres-data"},
+		Tools: []Tool{
+			{Module: "github.com/sqlc-dev/sqlc", Package: "github.com/sqlc-dev/sqlc/cmd/sqlc", Version: "v1.31.1"},
+			{Module: "github.com/go-jet/jet/v2", Package: "github.com/go-jet/jet/v2/cmd/jet", Version: "v2.16.0"},
+		},
 	},
 	{
 		Name:     "admin",

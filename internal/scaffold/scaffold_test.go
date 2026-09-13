@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aidarbn/platform-go/internal/gomod"
 	"github.com/aidarbn/platform-go/internal/scaffold"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
@@ -60,12 +61,15 @@ func TestNewCreatesProject(t *testing.T) {
 		}
 	}
 
-	goMod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	mod, err := gomod.Read(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(goMod), "tool github.com/aidarbn/platform-go/cmd/platformgo") {
-		t.Errorf("go.mod does not pin platformgo as a tool:\n%s", goMod)
+	// platformgo itself, and the generators of the postgres module.
+	for _, tool := range []string{"github.com/aidarbn/platform-go/cmd/platformgo", "github.com/sqlc-dev/sqlc/cmd/sqlc", "github.com/go-jet/jet/v2/cmd/jet"} {
+		if !mod.HasTool(tool) {
+			t.Errorf("go.mod does not pin %s: %v", tool, mod.Tools)
+		}
 	}
 
 	f, err := spec.Load(filepath.Join(dir, spec.FileName))
@@ -180,7 +184,7 @@ func goRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off", "GOPRIVATE=*")
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
