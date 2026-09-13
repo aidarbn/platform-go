@@ -1,4 +1,4 @@
-.PHONY: help test test-db lint fmt tidy ci
+.PHONY: help test test-db lint fmt tidy ci proto-test
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
@@ -15,6 +15,9 @@ lint: ## go vet
 
 fmt: ## formatting
 	gofmt -l -w .
+
+proto-test: ## regenerate the test service of the api module
+	cd kit/modules/api/internal/testapi && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate
 
 tidy: ## dependencies
 	go mod tidy

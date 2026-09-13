@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+// Test service of the api module: one call that validates and answers, one that fails on
+// demand, so the tests cover the interceptors and the gateway end to end.
+package platformtest.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/aidarbn/platform-go/kit/modules/api/internal/testapi/platformtest/v1;platformtestv1";
+
+service EchoService {
+  rpc Echo(EchoRequest) returns (EchoResponse) {
+    option (google.api.http) = {
+      post: "/v1/echo"
+      body: "*"
+    };
+  }
+
+  rpc Fail(FailRequest) returns (FailResponse) {
+    option (google.api.http) = {get: "/v1/fail/{kind}"};
+  }
+}
+
+message EchoRequest {
+  string message_text = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 20
+  }];
+}
+
+message EchoResponse {
+  string message_text = 1;
+  int32 length = 2;
+  bool shouted = 3;
+}
+
+message FailRequest {
+  // panic, internal, not_found or slow
+  string kind = 1;
+}
+
+message FailResponse {}
