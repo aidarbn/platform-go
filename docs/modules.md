@@ -200,6 +200,38 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
 
+## The `i18n` module
+
+Translations of the API, ported from taply's i18n package. Requires `postgres` and `api`.
+
+**Entity fields.** A string field is marked translatable in the proto file; the option comes with the platform as `proto/platform/i18n/v1/i18n.proto`:
+
+```proto
+import "platform/i18n/v1/i18n.proto";
+
+message Product {
+  int64 id = 1;
+  string name = 2 [(platform.i18n.v1.i18n_field) = {key: "product.name", instance_key: "id"}];
+}
+```
+
+Translations live in taply's `i18n_translations` table (`entity`, `entity_id`, `field`, `locale`, `text`); for every response the module collects the annotated fields, loads their translations with one query per entity type and substitutes the language of `Accept-Language` — `kk-KZ` matches `kk`, an unsupported language gets `I18N_DEFAULT_LOCALE`. An entity without a translation keeps its base value. A message with a `field_translations` map belongs to an editor and is left alone; for its requests the base value is copied into the default locale, so the column and the translation never disagree. `i18n.From(app)` reads and writes translations (`Set`, `SetBatch`, `SetBatchIfMissing` for syncs that must not overwrite edits, `GetAll`, `GetBatchAll`, in a transaction with `WithTx`); `i18nx.TranslationsToProto`, `ProtoToTranslations` and `ValidateFields` serve editor APIs. `i18n.SkipTranslation(app, fn)` turns substitution off for chosen calls, as taply does for some tablets.
+
+**Error messages** are translated the way taply does, in order: a whole sentence template, `{resource} {id}: {message}`, `missing {field}` and `{field} is required`, an exact message. The platform translates its own messages (rate limit, authentication, idempotency, routing) and taply's generic ones into Russian, Kazakh and English; the project adds its own in `i18n/messages.yaml`, created with the module and embedded into the binary:
+
+```yaml
+error.resource.order: {en: order, ru: заказ, kk: тапсырыс}
+error.msg.product is out of stock: {en: product is out of stock, ru: товар не в наличии, kk: өнім қоймада жоқ}
+error.tmpl.image_too_large: {en: "image is too large: %s; maximum allowed is %s", ru: "изображение слишком большое: %s; максимально допустимо %s"}
+```
+
+A broken file stops the start; a template whose translation has a different number of `%s` than its English pattern is refused.
+
+| Variable | Default | |
+|---|---|---|
+| `I18N_DEFAULT_LOCALE` | `ru` | language of the base columns and the fallback |
+| `I18N_LOCALES` | `ru,kk,en` | languages the API answers in |
+
 ## The `rbac` module
 
 Role based access to the gRPC methods of the API — REST calls included, since they pass through gRPC — with taply's casbin model and policy format. Requires `api`.

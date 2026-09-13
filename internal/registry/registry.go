@@ -153,6 +153,20 @@ var all = []Module{
 		},
 	},
 	{
+		Name:         "i18n",
+		Requires:     []string{"postgres", "api"},
+		Import:       "github.com/aidarbn/platform-go/kit/modules/i18n",
+		Package:      "i18n",
+		Field:        "I18n",
+		ProjectPkg:   "i18n",
+		ProjectAlias: "i18nmessages",
+		ExtraArgs:    []string{"i18n.WithMessages(i18nmessages.Messages)"},
+		Env: []EnvVar{
+			{Key: "I18N_DEFAULT_LOCALE", Example: "ru", Comment: "language of the base columns and the fallback"},
+			{Key: "I18N_LOCALES", Example: "ru,kk,en", Comment: "languages the API answers in"},
+		},
+	},
+	{
 		Name:     "admin",
 		Requires: []string{"postgres"},
 		Import:   "github.com/aidarbn/platform-go/kit/modules/admin",

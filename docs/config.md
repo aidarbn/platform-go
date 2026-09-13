@@ -42,11 +42,11 @@ modules:
 - **No secrets in the file.** Only structure and technical options; values come from environment variables, and `.env.example` is generated from the enabled modules.
 - **A module is enabled** by adding its section under `modules` and removed by deleting it. `apply` removes what generation produced for it and the tools it added to `go.mod`; files that belong to the project stay.
 - **Technical options only.** Paths and switches of the tooling. Schedules, limits, timeouts, flags and retry counts are business settings, see [settings.md](settings.md); addresses, secrets and capacity are environment variables.
-- **Dependencies between modules are checked**: `settings`, `admin` and `river` require `postgres`, `rbac` requires `api`, and `plan` says so.
+- **Dependencies between modules are checked**: `settings`, `admin` and `river` require `postgres`, `rbac` requires `api`, `i18n` requires `postgres` and `api`, and `plan` says so.
 
 | Module | Options |
 |---|---|
-| `postgres`, `admin`, `api`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
+| `postgres`, `admin`, `api`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 
 ## Commands

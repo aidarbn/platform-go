@@ -1,0 +1,6 @@
+# The i18n field option of the platform. Regenerate with: make proto-test
+version: v2
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12"]
+    out: ../i18npb
+    opt: [paths=import, module=github.com/aidarbn/platform-go/kit/i18nx/i18npb]

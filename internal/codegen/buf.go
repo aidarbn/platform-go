@@ -32,8 +32,12 @@ func Protos(dir string) ([]string, error) {
 		if err != nil {
 			return err
 		}
+		rel, _ := filepath.Rel(dir, path)
+		// The platform's own proto files are imported, not generated.
+		if d.IsDir() && filepath.ToSlash(rel) == "proto/platform" {
+			return fs.SkipDir
+		}
 		if !d.IsDir() && strings.HasSuffix(path, ".proto") {
-			rel, _ := filepath.Rel(dir, path)
 			out = append(out, filepath.ToSlash(rel))
 		}
 		return nil

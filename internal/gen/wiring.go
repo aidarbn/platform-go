@@ -169,6 +169,11 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 	if _, ok := f.Modules["rbac"]; ok {
 		files[PolicyGoPath] = []byte(policyGo)
 	}
+	if _, ok := f.Modules["i18n"]; ok {
+		for path, content := range i18nFiles(f) {
+			files[path] = content
+		}
+	}
 	if _, ok := f.Modules["api"]; ok {
 		for path, content := range apiFiles(f) {
 			files[path] = content

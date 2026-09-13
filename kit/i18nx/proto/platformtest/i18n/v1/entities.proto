@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+// Messages for the tests of the i18n package.
+package platformtest.i18n.v1;
+
+import "platform/i18n/v1/i18n.proto";
+
+option go_package = "github.com/aidarbn/platform-go/kit/i18nx/internal/testpb;testpb";
+
+message Product {
+  int64 id = 1;
+  string name = 2 [(platform.i18n.v1.i18n_field) = {
+    key: "product.name"
+    instance_key: "id"
+  }];
+  string description = 3 [(platform.i18n.v1.i18n_field) = {
+    key: "product.description"
+    instance_key: "id"
+  }];
+}
+
+message Menu {
+  string title = 1 [(platform.i18n.v1.i18n_field) = {key: "menu.title"}];
+  repeated Product products = 2;
+  Product featured = 3;
+}
+
+message ProductEditor {
+  int64 id = 1;
+  string name = 2 [(platform.i18n.v1.i18n_field) = {
+    key: "product.name"
+    instance_key: "id"
+  }];
+  map<string, platform.i18n.v1.LocaleMap> field_translations = 10;
+  repeated ProductEditor variants = 11;
+}

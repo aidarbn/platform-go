@@ -20,6 +20,12 @@
           "properties": {},
           "type": "object"
         },
+        "i18n": {
+          "additionalProperties": false,
+          "description": "platform module i18n; requires postgres, api",
+          "properties": {},
+          "type": "object"
+        },
         "postgres": {
           "additionalProperties": false,
           "description": "platform module postgres",

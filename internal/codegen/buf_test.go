@@ -166,3 +166,17 @@ func readFile(dir, path string) (string, error) {
 	raw, err := readRaw(filepath.Join(dir, path))
 	return string(raw), err
 }
+
+// The platform's proto files are imported by the project, not generated from it.
+func TestProtosSkipPlatformFiles(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "proto/platform/i18n/v1/i18n.proto", "")
+	got, err := codegen.Protos(dir)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("protos = %v, %v", got, err)
+	}
+	write(t, dir, "proto/shop/v1/orders.proto", "")
+	if got, _ := codegen.Protos(dir); len(got) != 1 || got[0] != "proto/shop/v1/orders.proto" {
+		t.Errorf("protos = %v", got)
+	}
+}

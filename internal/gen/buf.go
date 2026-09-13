@@ -79,10 +79,27 @@ import "embed"
 var FS embed.FS
 `
 
+// platformProtoInputs keeps the proto files of the platform out of the project's
+// generation: their Go code lives in the platform, and their go_package stays as it is.
+const platformProtoInputs = `    - file_option: go_package
+      path: platform
+`
+
+const bufGenInputs = `inputs:
+  - directory: proto
+    exclude_paths:
+      - proto/platform
+`
+
 func apiFiles(f *spec.File) map[string][]byte {
+	bufGen := strings.ReplaceAll(bufGenYAML, "{{module}}", f.Project.Module)
+	if _, ok := f.Modules["i18n"]; ok {
+		bufGen = strings.Replace(bufGen, "  override:\n", platformProtoInputs+"  override:\n", 1)
+		bufGen += bufGenInputs
+	}
 	return map[string][]byte{
 		BufPath:     []byte(bufYAML),
-		BufGenPath:  []byte(strings.ReplaceAll(bufGenYAML, "{{module}}", f.Project.Module)),
+		BufGenPath:  []byte(bufGen),
 		OpenAPIPath: []byte(openapiGo),
 	}
 }

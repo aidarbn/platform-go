@@ -33,7 +33,8 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 | `river` — background jobs, periodic jobs scheduled from business settings, job options carried by the job as in taply | ready |
 | `s3` — object storage with taply's storage API: public and private buckets, streaming uploads, signed links, MinIO in compose | ready |
 | `rbac` — access to gRPC and REST methods by role, taply's casbin model and policy, embedded policy file | ready |
-| i18n, enums, monitoring and the rest of [docs/modules.md](docs/modules.md) | planned |
+| `i18n` — translated entity fields and error messages by Accept-Language, taply's proto option, table and error translation | ready |
+| enums, monitoring and the rest of [docs/modules.md](docs/modules.md) | planned |
 
 ## Layout
 

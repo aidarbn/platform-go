@@ -1,0 +1,6 @@
+# Test messages of the i18n package.
+version: v2
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12"]
+    out: ..
+    opt: [paths=import, module=github.com/aidarbn/platform-go/kit/i18nx]
