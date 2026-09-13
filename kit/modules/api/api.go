@@ -23,6 +23,8 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
@@ -360,6 +362,7 @@ func (m *Module) Start(ctx context.Context) error {
 	)
 
 	m.grpcSrv = grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.MaxRecvMsgSize(m.cfg.MaxRecvSize),
 		grpc.MaxSendMsgSize(m.cfg.MaxSendSize),
 		grpc.ChainUnaryInterceptor(unary...),
@@ -374,6 +377,9 @@ func (m *Module) Start(ctx context.Context) error {
 		s.GRPC(m.grpcSrv)
 	}
 	m.recordMethods()
+	// Every method shows up in the metrics from the start, with zero counts, so a rate is
+	// defined before the first call.
+	m.metrics.server.InitializeMetrics(m.grpcSrv)
 	for method := range deprecatedMethods(m.grpcSrv) {
 		deprecated[method] = true
 	}
@@ -391,6 +397,8 @@ func (m *Module) Start(ctx context.Context) error {
 	// goes through exactly the same interceptors as a gRPC one.
 	m.conn, err = grpc.NewClient(dialAddr(m.grpcLn.Addr()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// The gateway's call carries the trace of the HTTP request on to the gRPC handler.
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(m.cfg.MaxSendSize),
 			grpc.MaxCallSendMsgSize(m.cfg.MaxRecvSize),
@@ -524,7 +532,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	if m.cfg.SecurityHeaders {
 		h = securityHeaders(h)
 	}
-	return identify(h)
+	return otelhttp.NewHandler(identify(h), "http.gateway")
 }
 
 // newGateway configures the REST side: snake_case JSON as in the proto files, every

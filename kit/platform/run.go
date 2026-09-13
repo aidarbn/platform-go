@@ -81,6 +81,18 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 	app := newApp(cfg.Service, cfg.Logger.With("service", cfg.Service))
 	app.role = cfg.Role
 
+	stopTracing, err := startTracing(ctx, cfg.Service)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		stopCtx, cancel := shutdownContext(ctx, cfg)
+		defer cancel()
+		if err := stopTracing(stopCtx); err != nil {
+			app.log.Error("tracing shutdown failed", "err", err)
+		}
+	}()
+
 	// shutdown stops whatever is already up; it runs on every exit path.
 	var inited []Module
 	shutdown := func() error {
@@ -89,7 +101,6 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 		return stopModules(stopCtx, app, inited)
 	}
 
-	var err error
 	inited, err = initModules(ctx, app, modules)
 	if err != nil {
 		return errors.Join(err, shutdown())

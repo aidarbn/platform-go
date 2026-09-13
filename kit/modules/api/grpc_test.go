@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+
 	"github.com/aidarbn/platform-go/kit/modules/api"
 	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -193,5 +196,31 @@ func TestPostgresIdempotencyStore(t *testing.T) {
 	}
 	if n, err := store.DeleteExpired(ctx, time.Now()); err != nil || n < 1 {
 		t.Errorf("DeleteExpired = %d, %v", n, err)
+	}
+}
+
+// A REST call with a traceparent reaches the gRPC handler in the same trace: the gateway
+// carries it over its connection.
+func TestTraceContinuesThroughGateway(t *testing.T) {
+	seen := make(chan string, 1)
+	extraWire = func(app *platform.App) {
+		api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+			seen <- trace.SpanContextFromContext(ctx).TraceID().String()
+			return h(ctx, req)
+		})
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{})
+
+	s.do("POST", "/v1/echo", `{"message_text":"x"}`, map[string]string{
+		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	})
+	select {
+	case got := <-seen:
+		if got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+			t.Errorf("trace id in the handler = %s", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler was not called")
 	}
 }

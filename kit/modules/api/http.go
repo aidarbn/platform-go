@@ -274,26 +274,33 @@ func (w *statusWriter) Flush() {
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// httpMetrics are taply's gateway metrics — the names and labels the go-http dashboard
+// and alerts of the monitoring agent read. path is the route template.
 type httpMetrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	inFlight prometheus.Gauge
+	size     *prometheus.HistogramVec
 }
 
 func newHTTPMetrics(reg *prometheus.Registry) (*httpMetrics, error) {
 	m := &httpMetrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "api", Name: "http_requests_total", Help: "HTTP requests by route template",
-		}, []string{"method", "route", "status"}),
+			Name: "http_gateway_requests_total", Help: "Total number of HTTP requests to the gateway",
+		}, []string{"method", "path", "status"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "api", Name: "http_request_duration_seconds", Help: "time to answer an HTTP request",
+			Name: "http_gateway_request_duration_seconds", Help: "HTTP request duration in seconds",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-		}, []string{"method", "route"}),
+		}, []string{"method", "path", "status"}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "api", Name: "http_requests_in_flight", Help: "HTTP requests being answered",
+			Name: "http_gateway_requests_in_flight", Help: "Number of HTTP requests currently being processed",
 		}),
+		size: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "http_gateway_response_size_bytes", Help: "HTTP response size in bytes",
+			Buckets: []float64{100, 1000, 10000, 100000, 1000000, 10000000},
+		}, []string{"method", "path"}),
 	}
-	for _, c := range []prometheus.Collector{m.requests, m.duration, m.inFlight} {
+	for _, c := range []prometheus.Collector{m.requests, m.duration, m.inFlight, m.size} {
 		if err := reg.Register(c); err != nil {
 			return nil, fmt.Errorf("api http metrics: %w", err)
 		}
@@ -325,8 +332,10 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 
 		route := routeFrom(r.Context())
 		took := time.Since(start)
-		m.requests.WithLabelValues(r.Method, route, strconv.Itoa(sw.status)).Inc()
-		m.duration.WithLabelValues(r.Method, route).Observe(took.Seconds())
+		status := strconv.Itoa(sw.status)
+		m.requests.WithLabelValues(r.Method, route, status).Inc()
+		m.duration.WithLabelValues(r.Method, route, status).Observe(took.Seconds())
+		m.size.WithLabelValues(r.Method, route).Observe(float64(sw.size))
 
 		if !accessLog {
 			return

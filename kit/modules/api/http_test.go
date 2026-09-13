@@ -194,10 +194,11 @@ func TestHTTPMetricsAndAccessLog(t *testing.T) {
 
 	metrics := scrape(t, s.ops)
 	for _, want := range []string{
-		`api_http_requests_total{method="POST",route="/v1/echo",status="200"} 1`,
-		`api_http_requests_total{method="POST",route="/v1/echo",status="400"} 1`,
-		`api_http_requests_total{method="GET",route="unknown",status="404"} 1`,
-		`api_http_requests_total{method="GET",route="GET /webhooks/ping",status="200"} 1`,
+		`http_gateway_requests_total{method="POST",path="/v1/echo",status="200"} 1`,
+		`http_gateway_requests_total{method="POST",path="/v1/echo",status="400"} 1`,
+		`http_gateway_requests_total{method="GET",path="unknown",status="404"} 1`,
+		`http_gateway_requests_total{method="GET",path="GET /webhooks/ping",status="200"} 1`,
+		`http_gateway_request_duration_seconds_count{method="POST",path="/v1/echo",status="200"} 1`,
 	} {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("metrics lack %s", want)

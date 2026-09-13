@@ -219,9 +219,9 @@ func TestErrors(t *testing.T) {
 
 	metrics := scrape(t, s.ops)
 	for _, want := range []string{
-		`api_panics_total 1`,
-		`api_grpc_requests_total{code="NotFound",method="/platformtest.v1.EchoService/Fail"} 1`,
-		`api_grpc_requests_total{code="Internal",method="/platformtest.v1.EchoService/Fail"} 2`,
+		`grpc_req_panics_recovered_total 1`,
+		`grpc_server_handled_total{grpc_code="NotFound",grpc_method="Fail",grpc_service="platformtest.v1.EchoService",grpc_type="unary"} 1`,
+		`grpc_server_handled_total{grpc_code="Internal",grpc_method="Fail",grpc_service="platformtest.v1.EchoService",grpc_type="unary"} 2`,
 	} {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("metrics lack %q", want)

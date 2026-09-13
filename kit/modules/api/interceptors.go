@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"buf.build/go/protovalidate"
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,54 +18,35 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// metrics are the metrics of taply's gRPC server — go-grpc-middleware's
+// grpc_server_handled_total, grpc_server_handling_seconds and friends, with taply's
+// buckets, and grpc_req_panics_recovered_total — so the go-grpc dashboard and alerts of
+// the monitoring agent work on a platform project as they do on taply.
 type metrics struct {
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
-	panics   prometheus.Counter
-	unary    grpc.UnaryServerInterceptor
-	stream   grpc.StreamServerInterceptor
+	server *grpcprom.ServerMetrics
+	panics prometheus.Counter
+	unary  grpc.UnaryServerInterceptor
+	stream grpc.StreamServerInterceptor
 }
 
 func newMetrics(reg *prometheus.Registry) (*metrics, error) {
 	m := &metrics{
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "api", Name: "grpc_requests_total",
-			Help: "gRPC calls, REST calls through the gateway included",
-		}, []string{"method", "code"}),
-		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "api", Name: "grpc_request_duration_seconds",
-			Help:    "time to handle a gRPC call",
-			Buckets: prometheus.DefBuckets,
-		}, []string{"method"}),
+		server: grpcprom.NewServerMetrics(grpcprom.WithServerHandlingTimeHistogram(
+			grpcprom.WithHistogramBuckets([]float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120}),
+		)),
 		panics: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "api", Name: "panics_total",
+			Name: "grpc_req_panics_recovered_total",
 			Help: "panics recovered while handling a call",
 		}),
 	}
-	for _, c := range []prometheus.Collector{m.requests, m.duration, m.panics} {
+	for _, c := range []prometheus.Collector{m.server, m.panics} {
 		if err := reg.Register(c); err != nil {
 			return nil, fmt.Errorf("api metrics: %w", err)
 		}
 	}
-
-	m.unary = func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		start := time.Now()
-		resp, err := handler(ctx, req)
-		m.observe(info.FullMethod, err, start)
-		return resp, err
-	}
-	m.stream = func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		start := time.Now()
-		err := handler(srv, ss)
-		m.observe(info.FullMethod, err, start)
-		return err
-	}
+	m.unary = m.server.UnaryServerInterceptor()
+	m.stream = m.server.StreamServerInterceptor()
 	return m, nil
-}
-
-func (m *metrics) observe(method string, err error, start time.Time) {
-	m.requests.WithLabelValues(method, status.Code(err).String()).Inc()
-	m.duration.WithLabelValues(method).Observe(time.Since(start).Seconds())
 }
 
 // recoverUnary turns a panic in a handler into an Internal error: one broken request
