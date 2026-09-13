@@ -9,7 +9,7 @@ Business settings do not live here — see [settings.md](settings.md). The list 
 | File | Written by | Content | In git |
 |---|---|---|---|
 | `platformgo.yaml` | a human | what the project needs | yes |
-| `platformgo.lock` | `platformgo` | what has actually been applied: module and library versions, hashes of managed files | yes |
+| `platformgo.lock` | `platformgo` | what has been applied: enabled modules, generated files, tools added to `go.mod` | yes |
 
 Same split as `go.mod` and `go.sum`: intent in one file, the recorded result in the other.
 

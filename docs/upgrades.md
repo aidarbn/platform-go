@@ -1,5 +1,7 @@
 # Upgradability
 
+> **State:** the architecture below is in place — module code in `kit`, generated files rebuilt by `apply`, the lock that cleans up after removed modules. `platformgo upgrade`, codemods, the upgrade matrix and API compatibility checks are planned; until then a project moves to a new version with `go get github.com/aidarbn/platform-go@<version>` and `platformgo apply`.
+
 The guarantee rests on three layers: an architecture that leaves almost nothing to upgrade, mechanisms that upgrade the rest, and platform tests that prove an upgrade works before it is released.
 
 ## 1. Architecture

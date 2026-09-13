@@ -1,6 +1,6 @@
 # Module catalogue
 
-A module is declared as a section in `platformgo.yaml` and applied with `platformgo apply`. Module code lives in `kit/<module>` and is imported; a project only receives settings, generated wiring, managed tool files and owned scaffolds.
+A module is declared as a section in `platformgo.yaml` and applied with `platformgo apply`. Module code lives in `kit/<module>` and is imported; a project only receives generated files (wiring, compose, generator configuration) and owned files it keeps.
 
 | Module | What it gives the project |
 |---|---|
