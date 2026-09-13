@@ -41,6 +41,7 @@ package main
 import (
 	"github.com/aidarbn/platform-go/kit/modules/postgres"
 	"github.com/aidarbn/platform-go/kit/platform"
+	"github.com/aidarbn/shop-api/db/migrations"
 )
 
 // serviceName is the service name from platformgo.yaml.
@@ -49,7 +50,7 @@ const serviceName = "shop-api"
 // platformModules returns the project modules in dependency order.
 func platformModules(cfg *Config) []platform.Module {
 	return []platform.Module{
-		postgres.New(cfg.Postgres),
+		postgres.New(cfg.Postgres, postgres.WithMigrations(migrations.FS)),
 	}
 }
 `

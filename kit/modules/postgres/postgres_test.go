@@ -36,7 +36,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err := l.Err(); err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if cfg.URL != "postgres://localhost/app" || cfg.MaxConns != 10 || cfg.ConnectTimeout != 5*time.Second {
+	if cfg.URL != "postgres://localhost/app" || cfg.MaxConns != 10 || cfg.ConnectTimeout != 5*time.Second || !cfg.Migrate {
 		t.Errorf("cfg = %+v", cfg)
 	}
 }
@@ -45,6 +45,7 @@ func TestLoadReadsValues(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/app")
 	t.Setenv("DATABASE_MAX_CONNS", "42")
 	t.Setenv("DATABASE_CONNECT_TIMEOUT", "2s")
+	t.Setenv("DATABASE_MIGRATE", "false")
 
 	l := confx.New("")
 	cfg := postgres.Load(l)
@@ -52,7 +53,7 @@ func TestLoadReadsValues(t *testing.T) {
 	if err := l.Err(); err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if cfg.MaxConns != 42 || cfg.ConnectTimeout != 2*time.Second {
+	if cfg.MaxConns != 42 || cfg.ConnectTimeout != 2*time.Second || cfg.Migrate {
 		t.Errorf("cfg = %+v", cfg)
 	}
 }

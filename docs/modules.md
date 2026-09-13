@@ -47,6 +47,19 @@ admin.AddPage(app, admin.Page{
 
 Removing the admin panel means deleting the section and running `apply`.
 
+## The `postgres` module
+
+A PostgreSQL pool with a health check and pool metrics, the local database in `docker-compose.yml`, and migrations.
+
+Migrations are goose SQL files in `db/migrations`:
+
+```
+$ platformgo migrate create create_orders
+created db/migrations/20260914073005_create_orders.sql
+```
+
+The directory is embedded into the binary by the generated `db/migrations/migrations.gen.go`, and the module applies pending migrations during startup, before any other module touches the database. A session advisory lock makes several instances starting at once apply each migration exactly once. Set `DATABASE_MIGRATE=false` when migrations run as a separate deploy step.
+
 ## The `settings` module
 
 Business settings of the project: the schema in `settings.yaml`, the values in the database, typed access generated into `internal/settings`.

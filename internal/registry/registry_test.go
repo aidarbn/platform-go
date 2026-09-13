@@ -12,7 +12,7 @@ func TestPostgresDescribed(t *testing.T) {
 	if !ok {
 		t.Fatal("postgres must be in the registry")
 	}
-	if m.ConfigType() != "postgres.Config" || m.LoadCall() != "postgres.Load(l)" || m.NewCall() != "postgres.New(cfg.Postgres)" {
+	if m.ConfigType() != "postgres.Config" || m.LoadCall() != "postgres.Load(l)" || m.NewCall() != "postgres.New(cfg.Postgres, postgres.WithMigrations(migrations.FS))" {
 		t.Errorf("calls: %s / %s / %s", m.ConfigType(), m.LoadCall(), m.NewCall())
 	}
 	if len(m.Env) == 0 || m.Env[0].Key != "DATABASE_URL" || !m.Env[0].Required {

@@ -236,3 +236,28 @@ func TestNewWritesLock(t *testing.T) {
 		t.Errorf("lock:\n%s", raw)
 	}
 }
+
+func TestMigrateCreate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	mustRun(t, "new", "example.com/shop-api", "--with", "postgres", "--dir", dir)
+
+	out := mustRun(t, "migrate", "create", "create orders", "--dir", dir)
+	if !strings.Contains(out, "created db/migrations/") || !strings.Contains(out, "_create_orders.sql") {
+		t.Fatalf("output:\n%s", out)
+	}
+	// A new SQL file changes nothing that is generated.
+	if out := mustRun(t, "verify", "--dir", dir); !strings.Contains(out, "up to date") {
+		t.Errorf("verify:\n%s", out)
+	}
+
+	if _, err := output(t, "migrate", "create", "--dir", dir); err == nil {
+		t.Error("a migration without a name was accepted")
+	}
+	if _, err := output(t, "migrate", "status"); err == nil {
+		t.Error("an unknown migrate command was accepted")
+	}
+	if _, err := output(t, "migrate", "create", "x", "--dir", t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), "not a platformgo project") {
+		t.Errorf("outside a project: %v", err)
+	}
+}

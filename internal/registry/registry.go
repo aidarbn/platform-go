@@ -63,7 +63,11 @@ var all = []Module{
 			{Key: "DATABASE_URL", Example: "postgres://app:app@localhost:5432/app?sslmode=disable", Comment: "database address", Required: true},
 			{Key: "DATABASE_MAX_CONNS", Example: "10", Comment: "connection limit"},
 			{Key: "DATABASE_MIN_CONNS", Example: "0", Comment: "connections kept open"},
+			{Key: "DATABASE_MIGRATE", Example: "true", Comment: "apply migrations on start"},
 		},
+		ProjectPkg:   "db/migrations",
+		ProjectAlias: "migrations",
+		ExtraArgs:    []string{"postgres.WithMigrations(migrations.FS)"},
 		Compose: `  postgres:
     image: postgres:18-alpine
     environment:

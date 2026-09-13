@@ -11,8 +11,10 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/aidarbn/platform-go/internal/apply"
+	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/scaffold"
@@ -43,6 +45,8 @@ func run(args []string, out io.Writer) error {
 		return cmdApply(args[1:], out)
 	case "verify":
 		return cmdVerify(args[1:], out)
+	case "migrate":
+		return cmdMigrate(args[1:], out)
 	case "doctor":
 		return cmdDoctor(args[1:], out)
 	case "version":
@@ -65,6 +69,7 @@ func usage(out io.Writer) {
   platformgo apply [--no-tidy]    bring the project in line with platformgo.yaml
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
+  platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo doctor               check the development environment
   platformgo version              print the version
 
@@ -188,6 +193,28 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 	}
 	printChanges(out, plan, "created", "wrote", "deleted")
 	return plan, nil
+}
+
+func cmdMigrate(args []string, out io.Writer) error {
+	if len(args) == 0 || args[0] != "create" {
+		return fmt.Errorf("usage: platformgo migrate create <name>")
+	}
+	fs := flag.NewFlagSet("migrate create", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	name, err := parsePositional(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(*dir, spec.FileName)); err != nil {
+		return fmt.Errorf("%s: not a platformgo project: %w", *dir, err)
+	}
+
+	path, err := gen.NewMigration(*dir, name, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "created", path)
+	return nil
 }
 
 func cmdPlan(args []string, out io.Writer) error {

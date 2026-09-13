@@ -7,6 +7,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,6 +28,10 @@ type Config struct {
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
 	ConnectTimeout  time.Duration
+
+	// Migrate applies pending migrations during startup. Turn it off when migrations
+	// run as a separate step of the deploy.
+	Migrate bool
 }
 
 // Load reads the module settings from environment variables.
@@ -38,17 +43,34 @@ func Load(l *confx.Loader) Config {
 		MaxConnLifetime: l.Duration("DATABASE_MAX_CONN_LIFETIME", time.Hour),
 		MaxConnIdleTime: l.Duration("DATABASE_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		ConnectTimeout:  l.Duration("DATABASE_CONNECT_TIMEOUT", 5*time.Second),
+		Migrate:         l.Bool("DATABASE_MIGRATE", true),
 	}
 }
 
 // Module implements platform.Module.
 type Module struct {
-	cfg  Config
-	pool *pgxpool.Pool
+	cfg        Config
+	pool       *pgxpool.Pool
+	migrations fs.FS
+}
+
+// Option configures the module.
+type Option func(*Module)
+
+// WithMigrations gives the module the migrations of the project. The generated wiring
+// passes the embedded db/migrations directory.
+func WithMigrations(fsys fs.FS) Option {
+	return func(m *Module) { m.migrations = fsys }
 }
 
 // New creates the module from ready settings.
-func New(cfg Config) *Module { return &Module{cfg: cfg} }
+func New(cfg Config, opts ...Option) *Module {
+	m := &Module{cfg: cfg}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
 
 func (m *Module) Name() string { return "postgres" }
 
@@ -67,6 +89,14 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 		return err
 	}
 	m.pool = pool
+
+	// Migrations run before anything else touches the database, so every module and the
+	// domain start on the current schema.
+	if m.migrations != nil && m.cfg.Migrate {
+		if _, err := pgdb.Migrate(ctx, pool, m.migrations, app.Logger()); err != nil {
+			return err
+		}
+	}
 
 	platform.Provide(app, pool)
 	if err := app.Metrics().Register(newPoolCollector(pool)); err != nil {

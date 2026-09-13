@@ -26,9 +26,7 @@ project:
   go: "1.27"
 
 modules:
-  postgres:
-    migrations: db/migrations
-    queries: sqlc
+  postgres: {}
 
   river:
     ui: true

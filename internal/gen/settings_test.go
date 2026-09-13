@@ -107,7 +107,7 @@ func TestModulesFileWiresSettingsSchema(t *testing.T) {
 	for _, want := range []string{
 		`appsettings "github.com/aidarbn/shop-api/internal/settings"`,
 		"settings.New(cfg.Settings, appsettings.Schema)",
-		"postgres.New(cfg.Postgres),\n\t\tsettings.New(",
+		"postgres.New(cfg.Postgres, postgres.WithMigrations(migrations.FS)),\n\t\tsettings.New(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("modules.gen.go lacks %q:\n%s", want, got)
