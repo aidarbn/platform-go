@@ -78,6 +78,7 @@ ci:
 | `platformgo apply` | writes the generated files, creates the files an enabled module needs (such as `settings.yaml`), deletes the generated files of removed modules, updates `platformgo.lock` and runs `go mod tidy` |
 | `platformgo generate` | the same without `go mod tidy`; `--check` fails in CI when anything is stale |
 | `platformgo verify` | for CI: the project matches the file, generation is fresh, nothing is left over |
+| `platformgo lint` | every check of the project, as in taply; the proto checks run only with the `api` module, so the Makefile stays the same when modules change |
 | `platformgo doctor` | checks tools and system dependencies |
 
 Planned: `upgrade` (moving to a new platform version), `doctor --fix`, `setup`.

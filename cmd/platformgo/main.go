@@ -19,6 +19,7 @@ import (
 	"github.com/aidarbn/platform-go/internal/apply"
 	"github.com/aidarbn/platform-go/internal/codegen"
 	"github.com/aidarbn/platform-go/internal/gen"
+	"github.com/aidarbn/platform-go/internal/lint"
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/scaffold"
@@ -54,6 +55,8 @@ func run(args []string, out io.Writer) error {
 		return cmdMigrate(args[1:], out)
 	case "db":
 		return cmdDB(args[1:], out)
+	case "lint":
+		return cmdLint(args[1:], out)
 	case "doctor":
 		return cmdDoctor(args[1:], out)
 	case "version":
@@ -76,6 +79,8 @@ func usage(out io.Writer) {
   platformgo apply [--no-tidy]    bring the project in line with platformgo.yaml
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
+  platformgo lint                 every check of the project: format, tidy, build, generation,
+                                  file length, golangci-lint, proto, govulncheck
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo db generate          migrate the database and generate the jet query builder
   platformgo doctor               check the development environment
@@ -171,6 +176,14 @@ func cmdVerify(args []string, out io.Writer) error {
 // verify fails when the project does not match platformgo.yaml: a stale generated file,
 // a leftover of a removed module or a lock out of date.
 func verify(dir string, out io.Writer) error {
+	if err := checkGenerated(context.Background(), dir); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "generation is up to date")
+	return nil
+}
+
+func checkGenerated(ctx context.Context, dir string) error {
 	plan, err := apply.Build(dir)
 	if err != nil {
 		return err
@@ -184,11 +197,45 @@ func verify(dir string, out io.Writer) error {
 		}
 	}
 	if slices.Contains(plan.Modules, "api") {
-		if err := codegen.BufCheck(context.Background(), dir); err != nil {
+		if err := codegen.BufCheck(ctx, dir); err != nil {
 			return err
 		}
 	}
-	fmt.Fprintln(out, "generation is up to date")
+	return nil
+}
+
+func cmdLint(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("lint", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	skip := fs.String("skip", "", "comma separated checks to skip: "+strings.Join(lint.Names(), ", "))
+	maxLines := fs.Int("max-lines", lint.DefaultMaxLines, "longest hand written Go file")
+	against := fs.String("proto-against", "", "git branch to check proto breaking changes against")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+
+	plan, err := apply.Build(*dir)
+	if err != nil {
+		return err
+	}
+	opts := lint.Options{MaxLines: *maxLines, ProtoAgainst: *against, Modules: plan.Modules}
+	if *skip != "" {
+		for _, name := range strings.Split(*skip, ",") {
+			opts.Skip = append(opts.Skip, strings.TrimSpace(name))
+		}
+	}
+	return lint.Run(context.Background(), *dir, lint.Checks(opts, runCommand, checkGenerated), out)
+}
+
+// runCommand runs a check command and puts its output into the error when it fails.
+func runCommand(ctx context.Context, dir string, _ io.Writer, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
 	return nil
 }
 

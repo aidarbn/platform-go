@@ -54,7 +54,7 @@ func TestNewCreatesProject(t *testing.T) {
 	for _, want := range []string{
 		spec.FileName, "go.mod", "cmd/app/main.go", "cmd/app/wire.go",
 		"cmd/app/config.gen.go", "cmd/app/modules.gen.go", ".env.example", "Makefile", "README.md",
-		"docker-compose.yml", "Dockerfile", ".dockerignore", ".gitignore", ".github/workflows/ci.yml",
+		"docker-compose.yml", "Dockerfile", ".dockerignore", ".gitignore", ".github/workflows/ci.yml", ".golangci.yml",
 	} {
 		if !contains(created, want) {
 			t.Errorf("%s was not created (created: %v)", want, created)
@@ -138,7 +138,7 @@ func TestNewProjectCompiles(t *testing.T) {
 
 	// The Makefile parses and its targets resolve: a space instead of a tab breaks it.
 	if _, err := exec.LookPath("make"); err == nil {
-		for _, target := range []string{"help", "build", "lint", "run", "up"} {
+		for _, target := range []string{"help", "build", "lint", "ci", "run", "up", "db-generate"} {
 			cmd := exec.Command("make", "-n", target)
 			cmd.Dir = dir
 			if out, err := cmd.CombinedOutput(); err != nil {

@@ -2,16 +2,21 @@ package scaffold
 
 import "fmt"
 
-// makefile is created once and belongs to the project afterwards.
+// makefile is created once and belongs to the project afterwards. Its targets follow
+// taply; the checks behind lint depend on the enabled modules, so platformgo lint decides
+// what runs and the Makefile stays the same when modules change.
 const makefile = `# Local variables: .env when present, the generated example otherwise.
 ENV_FILE ?= $(if $(wildcard .env),.env,.env.example)
 include $(ENV_FILE)
 export
 
-.PHONY: help up down generate db-generate migration build run test lint tidy
+# Branch the proto files are checked against for breaking changes.
+PROTO_BASE ?=
+
+.PHONY: help up down generate db-generate migration build run test lint ci tidy
 
 help: ## list targets
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
 
 up: ## start local services and wait until they are healthy
 	docker compose up -d --wait
@@ -19,7 +24,7 @@ up: ## start local services and wait until they are healthy
 down: ## stop local services
 	docker compose down
 
-generate: ## regenerate wiring and static queries
+generate: ## regenerate wiring, queries and API code
 	go tool platformgo generate
 
 db-generate: up ## migrate the local database and regenerate the dynamic query builder
@@ -37,10 +42,10 @@ run: generate ## run
 test: ## tests
 	go test -race ./...
 
-lint: ## checks, including generation freshness
-	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ."; exit 1; }
-	go vet ./...
-	go tool platformgo generate --check
+lint: ## format, tidy, build, generation, file length, golangci-lint, proto, govulncheck
+	go tool platformgo lint $(if $(PROTO_BASE),--proto-against $(PROTO_BASE))
+
+ci: lint test ## what CI runs
 
 tidy: ## dependencies
 	go mod tidy
@@ -61,26 +66,71 @@ dist
 docker-compose*.yml
 `
 
-// dockerfile is created once and belongs to the project afterwards: a service may need
-// extra packages or files in its image.
+// dockerfile is created once and belongs to the project afterwards. It follows taply:
+// BuildKit caches for modules and the build, cross compilation for the target platform,
+// and an Alpine runtime with CA certificates and time zones, so a service can add its
+// own certificates.
 func dockerfile(o Options) string {
 	return fmt.Sprintf(`# syntax=docker/dockerfile:1
-FROM golang:%s-alpine AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/app
 
-FROM gcr.io/distroless/static-debian13:nonroot
-COPY --from=build /out/app /app
-USER nonroot:nonroot
-EXPOSE 9090
-ENTRYPOINT ["/app"]
+FROM --platform=$BUILDPLATFORM golang:%s-alpine AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/app
+
+FROM alpine:3.24
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /out/app /usr/local/bin/app
+USER 1000:1000
+EXPOSE 9090 8080
+ENTRYPOINT ["/usr/local/bin/app"]
 `, o.GoVersion)
 }
 
-// ciWorkflow is created once and belongs to the project afterwards.
+// golangci is the linter configuration of taply.
+const golangci = `version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+  settings:
+    gosec:
+      excludes:
+        - G115 # integer conversion of ids between int64 and int32
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+`
+
+// ciWorkflow is created once and belongs to the project afterwards. As in taply the
+// local services come up from docker-compose.yml and make ci runs the checks and tests.
 const ciWorkflow = `name: ci
 
 on:
@@ -88,19 +138,28 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go tool platformgo generate --check
-      - run: go test -race ./...
-      - run: go build ./...
+      - name: Local services
+        run: make up
+      - name: Checks and tests
+        run: make ci
+      - name: Stop services
+        if: always()
+        run: docker compose down -v --remove-orphans || true
 `
 
 func readme(o Options) string {

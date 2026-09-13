@@ -76,6 +76,7 @@ func New(o Options) ([]string, error) {
 		"Makefile":        []byte(makefile),
 		".gitignore":      []byte(gitignore),
 		".dockerignore":   []byte(dockerignore),
+		".golangci.yml":   []byte(golangci),
 		"Dockerfile":      []byte(dockerfile(o)),
 		"README.md":       []byte(readme(o)),
 
