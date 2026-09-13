@@ -93,6 +93,9 @@ type Registry struct {
 	services   []Service
 	unary      []grpc.UnaryServerInterceptor
 	stream     []grpc.StreamServerInterceptor
+	authUnary  []grpc.UnaryServerInterceptor
+	authStream []grpc.StreamServerInterceptor
+	methods    []string
 	routes     []route
 	middleware []func(http.Handler) http.Handler
 }
@@ -139,6 +142,30 @@ func AddUnaryInterceptor(app *platform.App, i grpc.UnaryServerInterceptor) {
 func AddStreamInterceptor(app *platform.App, i grpc.StreamServerInterceptor) {
 	r := registry(app)
 	r.add(func() { r.stream = append(r.stream, i) })
+}
+
+// Authorize adds an access check. It runs after every project interceptor — so the
+// caller's identity is already in the context — and before request validation. The rbac
+// module registers itself here.
+func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc.StreamServerInterceptor) {
+	r := registry(app)
+	r.add(func() {
+		if unary != nil {
+			r.authUnary = append(r.authUnary, unary)
+		}
+		if stream != nil {
+			r.authStream = append(r.authStream, stream)
+		}
+	})
+}
+
+// Methods returns the full names of every registered gRPC method, such as
+// /shop.v1.OrdersService/CreateOrder. It is filled when the module starts.
+func Methods(app *platform.App) []string {
+	r := registry(app)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.methods)
 }
 
 // HandleHTTP serves a plain HTTP route next to the gateway: webhooks, file downloads,
@@ -224,11 +251,13 @@ func (m *Module) Start(ctx context.Context) error {
 	unary := slices.Concat(
 		[]grpc.UnaryServerInterceptor{m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)},
 		m.registry.unary,
+		m.registry.authUnary,
 		[]grpc.UnaryServerInterceptor{validateUnary(validator)},
 	)
 	stream := slices.Concat(
 		[]grpc.StreamServerInterceptor{m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
 		m.registry.stream,
+		m.registry.authStream,
 	)
 
 	m.grpcSrv = grpc.NewServer(
@@ -245,6 +274,7 @@ func (m *Module) Start(ctx context.Context) error {
 	for _, s := range m.registry.services {
 		s.GRPC(m.grpcSrv)
 	}
+	m.recordMethods()
 
 	if m.grpcLn, err = net.Listen("tcp", m.cfg.GRPCAddr); err != nil {
 		return fmt.Errorf("api: gRPC on %s: %w", m.cfg.GRPCAddr, err)
@@ -294,6 +324,19 @@ func (m *Module) Start(ctx context.Context) error {
 	m.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	m.log.Info("the API is listening", "grpc", m.GRPCAddr(), "http", m.HTTPAddr(), "services", len(m.registry.services))
 	return nil
+}
+
+func (m *Module) recordMethods() {
+	var methods []string
+	for service, info := range m.grpcSrv.GetServiceInfo() {
+		for _, method := range info.Methods {
+			methods = append(methods, "/"+service+"/"+method.Name)
+		}
+	}
+	slices.Sort(methods)
+	m.registry.mu.Lock()
+	m.registry.methods = methods
+	m.registry.mu.Unlock()
 }
 
 func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {

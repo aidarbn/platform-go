@@ -190,6 +190,16 @@ var all = []Module{
 		Volumes: []string{"minio-data"},
 	},
 	{
+		Name:         "rbac",
+		Requires:     []string{"api"},
+		Import:       "github.com/aidarbn/platform-go/kit/modules/rbac",
+		Package:      "rbac",
+		Field:        "RBAC",
+		ProjectPkg:   "rbac",
+		ProjectAlias: "rbacpolicy",
+		ExtraArgs:    []string{"rbac.WithPolicy(rbacpolicy.Policy)"},
+	},
+	{
 		Name:     "river",
 		Requires: []string{"postgres"},
 		Import:   "github.com/aidarbn/platform-go/kit/modules/riverx",

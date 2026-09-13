@@ -306,3 +306,19 @@ func TestModuleToolsGoIntoGoMod(t *testing.T) {
 		t.Errorf("plan after removal: %v", again.Pending())
 	}
 }
+
+// Enabling rbac gives the project a policy to edit and embeds it; removing the module
+// keeps the policy, which belongs to the project.
+func TestRBACPolicy(t *testing.T) {
+	dir := project(t, "schema: 1\nproject:\n  module: example.com/shop-api\nmodules:\n  api: {}\n  rbac: {}\n")
+	p := execute(t, dir)
+	if !slices.Contains(p.Create, gen.PolicyPath) || !exists(dir, gen.PolicyGoPath) {
+		t.Fatalf("create = %v", p.Create)
+	}
+
+	writeFile(t, dir, spec.FileName, "schema: 1\nproject:\n  module: example.com/shop-api\nmodules:\n  api: {}\n")
+	p = execute(t, dir)
+	if !slices.Contains(p.Delete, gen.PolicyGoPath) || !exists(dir, gen.PolicyPath) {
+		t.Errorf("delete = %v, policy kept = %v", p.Delete, exists(dir, gen.PolicyPath))
+	}
+}

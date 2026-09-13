@@ -7,7 +7,7 @@ package platformtest.v1;
 import "buf/validate/validate.proto";
 import "google/api/annotations.proto";
 
-option go_package = "github.com/aidarbn/platform-go/kit/modules/api/internal/testapi/platformtest/v1;platformtestv1";
+option go_package = "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1";
 
 service EchoService {
   rpc Echo(EchoRequest) returns (EchoResponse) {

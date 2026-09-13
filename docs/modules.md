@@ -12,7 +12,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **settings** | business settings: the `settings.yaml` schema, values in the database, cache, change notifications, typed access from code |
 | **s3** | object storage (MinIO), file uploads, service in docker-compose |
 | **keycloak** | Keycloak integration, authorisation interceptor, service in docker-compose |
-| **rbac** | casbin: roles and policies |
+| **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
 | **i18n** | translations, locale in context, interceptors, dictionary migration |
 | **enums** | enum catalogue from markers in the domain |
 | **monitoring** | alert thresholds for an external monitoring agent |
@@ -181,6 +181,36 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 | `RIVER_WORK` | `true` | `false` makes an instance insert only, for splitting API and worker instances |
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
+
+## The `rbac` module
+
+Role based access to the gRPC methods of the API — REST calls included, since they pass through gRPC — with taply's casbin model and policy format. Requires `api`.
+
+`rbac/policy.csv` is created when the module is enabled and belongs to the project; the generated `rbac/policy.gen.go` embeds it, so the image needs no configuration folder:
+
+```
+# p, role, method pattern (keyMatch2), action
+p, *, /grpc.health.v1.Health/*, *                  # * — public, no authentication
+p, admin, /shop.v1.OrdersService/*, *              # every method of a service
+p, support, /shop.v1.OrdersService/GetOrder, *
+```
+
+The module decides what a role may call; who the caller is stays with the project. The project's authentication interceptor puts the roles into the context and skips authentication for public methods:
+
+```go
+api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+	if rbac.IsPublic(app, info.FullMethod) {
+		return h(ctx, req)
+	}
+	claims, err := tokens.Validate(ctx) // the project's own tokens
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "bad token")
+	}
+	return h(rbac.WithRoles(ctx, claims.Roles...), req)
+})
+```
+
+The access check runs after every project interceptor and before request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
 
 ## The `s3` module
 

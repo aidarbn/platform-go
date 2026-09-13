@@ -111,6 +111,15 @@ func Build(dir string) (*Plan, error) {
 // belong to the project afterwards, so an existing one is never touched.
 func ownedFiles(dir string, f *spec.File) (map[string][]byte, error) {
 	out := map[string][]byte{}
+	if _, ok := f.Modules["rbac"]; ok {
+		missing, err := notExists(filepath.Join(dir, gen.PolicyPath))
+		if err != nil {
+			return nil, err
+		}
+		if missing {
+			out[gen.PolicyPath] = []byte(gen.PolicyExample)
+		}
+	}
 	if gen.SettingsEnabled(f) {
 		path := gen.SettingsSchemaPath(f)
 		if !lock.SafePath(path) {

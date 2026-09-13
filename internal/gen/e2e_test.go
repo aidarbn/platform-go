@@ -177,7 +177,10 @@ modules:
   api: {}
   river: {}
   s3: {}
+  rbac: {}
 `)
+
+	write(t, dir, gen.PolicyPath, gen.PolicyExample)
 
 	write(t, dir, "settings.yaml", `settings:
   orders.cleanup:
@@ -227,6 +230,7 @@ import (
 	appsettings "example.com/app/internal/settings"
 	"github.com/aidarbn/platform-go/kit/modules/admin"
 	"github.com/aidarbn/platform-go/kit/modules/api"
+	"github.com/aidarbn/platform-go/kit/modules/rbac"
 	"github.com/aidarbn/platform-go/kit/modules/riverx"
 	"github.com/aidarbn/platform-go/kit/modules/s3"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -239,6 +243,9 @@ func wireDomain(app *platform.App) error {
 	// and the roles, the project gives the content.
 	// A job queued on every start; workers and periodic jobs are declared the same way.
 	riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error { return nil })
+
+	// Roles of the caller for the access policy, from the project's authentication.
+	_ = rbac.WithRoles
 
 	// Files in object storage, with taply's storage API.
 	_ = s3.From

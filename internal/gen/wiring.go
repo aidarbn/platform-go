@@ -28,9 +28,36 @@ const (
 	EnvPath     = ".env.example"
 	ComposePath = "docker-compose.yml"
 
+	// PolicyPath is the access policy of the project; PolicyGoPath embeds it.
+	PolicyPath   = "rbac/policy.csv"
+	PolicyGoPath = "rbac/policy.gen.go"
+
 	// MigrationsPath embeds the SQL migrations of the project next to them.
 	MigrationsPath = "db/migrations/migrations.gen.go"
 )
+
+const policyGo = header + `
+// Package rbac holds the access policy of the project, embedded into the binary so the
+// image needs no configuration folder.
+package rbac
+
+import _ "embed"
+
+// Policy is rbac/policy.csv.
+//
+//go:embed policy.csv
+var Policy string
+`
+
+// PolicyExample is the policy a project starts from when it enables the rbac module.
+const PolicyExample = `# Access to the gRPC methods of the API, in taply's format: p, role, method, action.
+# A method is a keyMatch2 pattern: /shop.v1.OrdersService/* is every method of a service.
+# The role * makes a method public: nobody needs to authenticate to call it.
+#
+# Roles come from the project's authentication interceptor: rbac.WithRoles(ctx, roles...).
+
+p, *, /grpc.health.v1.Health/*, *
+`
 
 const migrationsGo = header + `
 // Package migrations holds the SQL migrations of the project. Create one with
@@ -138,6 +165,9 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 	if _, ok := f.Modules["postgres"]; ok {
 		files[MigrationsPath] = []byte(migrationsGo)
 		files[SqlcPath] = []byte(sqlcYAML)
+	}
+	if _, ok := f.Modules["rbac"]; ok {
+		files[PolicyGoPath] = []byte(policyGo)
 	}
 	if _, ok := f.Modules["api"]; ok {
 		for path, content := range apiFiles(f) {

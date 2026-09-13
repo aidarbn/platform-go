@@ -18,9 +18,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/logx"
 	"github.com/aidarbn/platform-go/kit/modules/api"
-	testv1 "github.com/aidarbn/platform-go/kit/modules/api/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 

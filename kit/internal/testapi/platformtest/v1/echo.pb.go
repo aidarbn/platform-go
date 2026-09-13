@@ -227,7 +227,7 @@ const file_platformtest_v1_echo_proto_rawDesc = "" +
 	"\fFailResponse2\xc5\x01\n" +
 	"\vEchoService\x12X\n" +
 	"\x04Echo\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x13\x82\xd3\xe4\x93\x02\r:\x01*\"\b/v1/echo\x12\\\n" +
-	"\x04Fail\x12\x1c.platformtest.v1.FailRequest\x1a\x1d.platformtest.v1.FailResponse\"\x17\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/fail/{kind}B`Z^github.com/aidarbn/platform-go/kit/modules/api/internal/testapi/platformtest/v1;platformtestv1b\x06proto3"
+	"\x04Fail\x12\x1c.platformtest.v1.FailRequest\x1a\x1d.platformtest.v1.FailResponse\"\x17\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/fail/{kind}BTZRgithub.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1b\x06proto3"
 
 var (
 	file_platformtest_v1_echo_proto_rawDescOnce sync.Once
