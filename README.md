@@ -17,7 +17,7 @@
 | `platformgo db generate [--dsn]` | migrates the database and regenerates the jet query builder | ready |
 | `platformgo lint` | the checks of taply in one command: format, go mod tidy, build, generation, file length, golangci-lint, proto lint and breaking changes with `api`, govulncheck | ready |
 | `platformgo doctor` | checks the tools a project needs | ready |
-| `platformgo upgrade` | moves a project to a new platform version | planned |
+| `platformgo upgrade [version]` | moves a project to a platform version: `go get`, the version recorded in `platformgo.yaml`, `apply` by the new version; codemods are planned | ready |
 | `platformgo setup` | shell completion and the short `pgo` alias | planned |
 
 A project is described declaratively in `platformgo.yaml` — see [docs/config.md](docs/config.md).

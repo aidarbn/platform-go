@@ -61,7 +61,7 @@ modules:
 | `platformgo lint` | every check of the project, as in taply; the proto checks run only with the `api` module, so the Makefile stays the same when modules change |
 | `platformgo doctor` | checks tools and system dependencies |
 
-Planned: `upgrade` (moving to a new platform version), `doctor --fix`, `setup`.
+`platformgo upgrade [version]` moves the project to a platform version. Planned: `doctor --fix`, `setup`.
 
 A generated file of a removed module is deleted only while it still carries the generated mark on its first line. A file taken over by hand stays, and `plan` says so. Files that belong to the project — `settings.yaml`, `main.go`, `wire.go`, the Makefile — are never deleted.
 

@@ -24,6 +24,7 @@ import (
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/scaffold"
 	"github.com/aidarbn/platform-go/internal/spec"
+	"github.com/aidarbn/platform-go/internal/upgrade"
 	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
@@ -57,6 +58,8 @@ func run(args []string, out io.Writer) error {
 		return cmdDB(args[1:], out)
 	case "lint":
 		return cmdLint(args[1:], out)
+	case "upgrade":
+		return cmdUpgrade(args[1:], out)
 	case "schema":
 		raw, err := spec.JSONSchema()
 		if err != nil {
@@ -90,6 +93,7 @@ func usage(out io.Writer) {
                                   file length, golangci-lint, proto, govulncheck
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo db generate          migrate the database and generate the jet query builder
+  platformgo upgrade [version]    move the project to a platform version, latest by default
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor               check the development environment
   platformgo version              print the version
@@ -337,6 +341,32 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 	}
 	printChanges(out, plan, "created", "wrote", "deleted")
 	return plan, nil
+}
+
+func cmdUpgrade(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	version, err := parsePositional(fs, args)
+	if err != nil {
+		return err
+	}
+
+	run := func(ctx context.Context, dir string, out io.Writer, args ...string) error {
+		cmd := exec.CommandContext(ctx, "go", args...)
+		cmd.Dir = dir
+		cmd.Stdout, cmd.Stderr = out, os.Stderr
+		return cmd.Run()
+	}
+	res, err := upgrade.Run(context.Background(), *dir, version, run, out)
+	if err != nil {
+		return err
+	}
+	if res.From == res.To {
+		fmt.Fprintf(out, "already on %s\n", res.To)
+		return nil
+	}
+	fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
+	return nil
 }
 
 func cmdMigrate(args []string, out io.Writer) error {

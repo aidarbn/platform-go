@@ -2,4 +2,4 @@
 package version
 
 // Platform is the version platformgo writes into platformgo.yaml of new projects.
-const Platform = "v0.2.1"
+const Platform = "v0.2.2"
