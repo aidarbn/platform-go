@@ -105,7 +105,9 @@ func Templ(ctx context.Context, dir string, out io.Writer) error {
 }
 
 // TemplCheck fails when the Go code of a template is stale or belongs to a deleted one. It
-// renders each template to stdout, so the project is not touched.
+// generates a copy of the templates in a scratch directory — the generated code names
+// each template by its path under the generated root, so the copy keeps the layout — and
+// compares, so the project is not touched.
 func TemplCheck(ctx context.Context, dir string) error {
 	templates, err := Templates(dir)
 	if err != nil {
@@ -115,17 +117,40 @@ func TemplCheck(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range templates {
-		var fresh bytes.Buffer
-		if err := GoCommand(ctx, dir, &fresh, "tool", "templ", "generate", "-f", t, "-stdout"); err != nil {
+	if len(templates) > 0 {
+		scratch, err := os.MkdirTemp("", "platformgo-templ-")
+		if err != nil {
 			return err
 		}
-		current, err := os.ReadFile(filepath.Join(dir, templOutput(t)))
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		defer os.RemoveAll(scratch)
+		for _, t := range templates {
+			content, err := os.ReadFile(filepath.Join(dir, t))
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(scratch, t)
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(target, content, 0o644); err != nil {
+				return err
+			}
+		}
+		if err := GoCommand(ctx, dir, io.Discard, "tool", "templ", "generate", "-path", scratch); err != nil {
 			return err
 		}
-		if !bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace(fresh.Bytes())) {
-			stale = append(stale, templOutput(t))
+		for _, t := range templates {
+			fresh, err := os.ReadFile(filepath.Join(scratch, templOutput(t)))
+			if err != nil {
+				return fmt.Errorf("templ produced no code for %s: %w", t, err)
+			}
+			current, err := os.ReadFile(filepath.Join(dir, templOutput(t)))
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			if !bytes.Equal(current, fresh) {
+				stale = append(stale, templOutput(t))
+			}
 		}
 	}
 	if len(stale) > 0 {
