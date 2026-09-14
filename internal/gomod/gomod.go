@@ -19,7 +19,9 @@ import (
 // File is the part of go.mod platformgo cares about.
 type File struct {
 	Module   string
+	Go       string            // the go directive
 	Requires map[string]string // module path to version
+	Replaced []string          // module paths with a replace directive
 	Tools    []string          // packages declared with tool
 }
 
@@ -38,14 +40,19 @@ func Read(dir string) (File, error) {
 
 	var raw struct {
 		Module  struct{ Path string }
+		Go      string
 		Require []struct{ Path, Version string }
+		Replace []struct{ Old struct{ Path string } }
 		Tool    []struct{ Path string }
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return File{}, fmt.Errorf("go.mod: %w", err)
 	}
 
-	f := File{Module: raw.Module.Path, Requires: make(map[string]string, len(raw.Require))}
+	f := File{Module: raw.Module.Path, Go: raw.Go, Requires: make(map[string]string, len(raw.Require))}
+	for _, r := range raw.Replace {
+		f.Replaced = append(f.Replaced, r.Old.Path)
+	}
 	for _, r := range raw.Require {
 		f.Requires[r.Path] = r.Version
 	}

@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -29,6 +28,9 @@ import (
 )
 
 func main() {
+	if code, delegated := delegate(os.Args[1:]); delegated {
+		os.Exit(code)
+	}
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -69,6 +71,10 @@ func run(args []string, out io.Writer) error {
 		return err
 	case "doctor":
 		return cmdDoctor(args[1:], out)
+	case "setup":
+		return cmdSetup(args[1:], out)
+	case "completion":
+		return cmdCompletion(args[1:], out)
 	case "version":
 		fmt.Fprintln(out, version())
 		return nil
@@ -95,7 +101,9 @@ func usage(out io.Writer) {
   platformgo db generate          migrate the database and generate the jet query builder
   platformgo upgrade [version]    move the project to a platform version, latest by default
   platformgo schema               print the JSON schema of platformgo.yaml
-  platformgo doctor               check the development environment
+  platformgo doctor [--fix]       check the development environment and the project
+  platformgo setup [--alias]      shell completion and the short pgo alias
+  platformgo completion <shell>   print the completion script: bash, fish, zsh
   platformgo version              print the version
 
 A project is described in `+spec.FileName+`.
@@ -446,32 +454,6 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	if plan.LockStale {
 		fmt.Fprintln(out, write, lock.FileName)
 	}
-}
-
-func cmdDoctor(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(out, "%-10s %s\n", "go", runtime.Version())
-	fmt.Fprintf(out, "%-10s %s\n", "platformgo", version())
-
-	var missing []string
-	for _, bin := range []string{"git", "docker"} {
-		if path, err := exec.LookPath(bin); err == nil {
-			fmt.Fprintf(out, "%-10s %s\n", bin, path)
-			continue
-		}
-		fmt.Fprintf(out, "%-10s not found\n", bin)
-		missing = append(missing, bin)
-	}
-	fmt.Fprintf(out, "%-10s %s\n", "modules", strings.Join(registry.Names(), ", "))
-
-	if len(missing) > 0 {
-		return fmt.Errorf("missing programs: %s", strings.Join(missing, ", "))
-	}
-	return nil
 }
 
 // parseFlags parses a command that takes no arguments of its own.
