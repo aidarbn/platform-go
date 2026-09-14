@@ -256,6 +256,9 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # The bundled plugins, not updates downloaded at start: without it Grafana 13 keeps
+      # Loki unregistered until the download ends, and forever on a server without internet.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
     volumes:
       - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/platform.yaml:ro
       - ./grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/platform.yaml:ro
@@ -601,7 +604,7 @@ func dashboardJSON(service string, enabled func(string) bool) ([]byte, error) {
 		Title      string            `json:"title"`
 		GridPos    map[string]int    `json:"gridPos"`
 		Datasource map[string]string `json:"datasource"`
-		Targets    []target          `json:"targets"`
+		Targets    []target          `json:"targets,omitempty"`
 		FieldCfg   map[string]any    `json:"fieldConfig,omitempty"`
 		Options    map[string]any    `json:"options,omitempty"`
 		Collapsed  *bool             `json:"collapsed,omitempty"`
