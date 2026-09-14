@@ -183,7 +183,7 @@ The HTTP side, following taply's gateway:
 - **Limits and headers**: a body over `API_MAX_RECV_MB` answers 413; taply's security headers (`nosniff`, `DENY`, `no-store`, HSTS); CORS origins accept `https://*.example.com` and `http://localhost:*`.
 - **Metrics and access log**: taply's `http_gateway_requests_total{method,path,status}`, `http_gateway_request_duration_seconds`, `http_gateway_response_size_bytes` and `http_gateway_requests_in_flight`, which the go-http dashboard and alerts read, labelled by the route template — `/v1/orders/{id}`, never the concrete path — with unmatched paths as `unknown`; an access log line per request with the route, status, duration, client address and request id, plus the bodies of failed requests with binary and multipart bodies summarised instead of dumped.
 - **Routing errors** name the method and the path: `GET /v1/nothing: route not found`.
-- **Error contract** — an API with its own error body replaces the gateway's writer: `api.HTTPErrorHandler(app, handler)` receives every REST error — handler statuses, decoding, routing, and a body over `API_MAX_RECV_SIZE` as a `*runtime.HTTPStatusError` with 413 — and writes the status and the body the contract wants. A middleware that reads the body itself, such as a request signature check, asks `api.BodyTooLarge(r)`. Plain routes answer 413 on their own.
+- **Error contract** — an API with its own error body replaces the gateway's writer: `api.HTTPErrorHandler(app, handler)` receives every REST error — handler statuses, decoding, routing, and a body over `API_MAX_RECV_MB` as a `*runtime.HTTPStatusError` with 413 — and writes the status and the body the contract wants. A middleware that reads the body itself, such as a request signature check, asks `api.BodyTooLarge(r)`. Plain routes answer 413 on their own.
 
 And on every call, following taply's interceptors:
 
@@ -205,6 +205,7 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_PUBLIC_RATE_RPS`, `API_PUBLIC_RATE_BURST` | 30, 60 | per client, public methods |
 | `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LOCK` | `24h`, `1m` | |
 | `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
+| `API_TRUSTED_PROXIES` | loopback and private networks | whose `X-Forwarded-For` names the client; a request from elsewhere keeps its connection address, so an allowlist by address cannot be bypassed with a forged header. `none` ignores the header |
 
 ## The `river` module
 

@@ -11,12 +11,14 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
@@ -91,30 +93,58 @@ func userAgent(ctx context.Context) string {
 	return ""
 }
 
-func resolveClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-			return ip
+// resolveClientIP returns the connection address, or the last address of X-Forwarded-For
+// when the connection comes from a trusted proxy.
+func resolveClientIP(r *http.Request, trusted []netip.Prefix) string {
+	remote := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" || !isTrusted(remote, trusted) {
+		return remote
+	}
+	parts := strings.Split(xff, ",")
+	if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+		return ip
+	}
+	return remote
+}
+
+func isTrusted(remote string, trusted []netip.Prefix) bool {
+	addr, err := netip.ParseAddr(remote)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range trusted {
+		if p.Contains(addr) {
+			return true
 		}
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	return false
+}
+
+// newRequestID is a uuidv7: it sorts by time, which helps when logs are searched.
+func newRequestID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		var b [16]byte
+		_, _ = rand.Read(b[:])
+		return hex.EncodeToString(b[:])
 	}
-	return r.RemoteAddr
+	return id.String()
 }
 
 // identify gives the request its id and client address, for the HTTP side through the
 // context and for the gRPC side through headers the gateway forwards.
-func identify(next http.Handler) http.Handler {
+func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
 		if id == "" || len(id) > 128 {
-			var b [8]byte
-			_, _ = rand.Read(b[:])
-			id = hex.EncodeToString(b[:])
+			id = newRequestID()
 		}
-		ip := resolveClientIP(r)
+		ip := resolveClientIP(r, trusted)
 
 		r.Header.Set(requestIDHeader, id)
 		r.Header.Set(clientIPHeader, ip)

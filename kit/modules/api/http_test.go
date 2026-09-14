@@ -8,16 +8,19 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/aidarbn/platform-go/kit/confx"
 	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/modules/api"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -163,8 +166,37 @@ func TestRequestIDAndClientIP(t *testing.T) {
 
 	_, body, h = s.do("POST", "/v1/things", `{"name":"x"}`, nil)
 	id := h.Get("X-Request-ID")
-	if len(id) != 16 || thingID(t, body) != id+"|127.0.0.1" {
-		t.Errorf("generated id %q, body %s", id, body)
+	if _, err := uuid.Parse(id); err != nil || id[14] != '7' || thingID(t, body) != id+"|127.0.0.1" {
+		t.Errorf("generated id %q is not a uuidv7, body %s", id, body)
+	}
+}
+
+// Only a trusted proxy may name the client: a request straight from elsewhere keeps its
+// connection address whatever X-Forwarded-For says.
+func TestUntrustedForwardedFor(t *testing.T) {
+	s := start(t, api.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.9.9.0/24")}})
+	code, body, _ := s.do("POST", "/v1/things", `{"name":"x"}`, map[string]string{"X-Forwarded-For": "10.0.0.9"})
+	if code != http.StatusOK || !strings.HasSuffix(thingID(t, body), "|127.0.0.1") {
+		t.Errorf("a forged address was believed: %d %s", code, body)
+	}
+}
+
+func TestTrustedProxiesFromEnvironment(t *testing.T) {
+	t.Setenv("API_TRUSTED_PROXIES", "10.1.0.0/16, 192.0.2.7")
+	l := confx.New("")
+	cfg := api.Load(l)
+	if l.Err() != nil || len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[1].String() != "192.0.2.7/32" {
+		t.Errorf("%v %v", cfg.TrustedProxies, l.Err())
+	}
+	t.Setenv("API_TRUSTED_PROXIES", "none")
+	if cfg := api.Load(confx.New("")); cfg.TrustedProxies == nil || len(cfg.TrustedProxies) != 0 {
+		t.Errorf("none: %v", cfg.TrustedProxies)
+	}
+	t.Setenv("API_TRUSTED_PROXIES", "proxy.local")
+	l = confx.New("")
+	api.Load(l)
+	if l.Err() == nil {
+		t.Error("a bad network is accepted")
 	}
 }
 

@@ -147,6 +147,7 @@ var all = []Module{
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
 			{Key: "API_LOG_BODIES", Example: "true", Comment: "bodies of failed requests in the access log"},
 			{Key: "API_SECURITY_HEADERS", Example: "true", Comment: "security response headers"},
+			{Key: "API_TRUSTED_PROXIES", Example: "", Comment: "networks whose X-Forwarded-For is believed; empty means loopback and private networks, none ignores the header"},
 		},
 		Tools: []Tool{
 			{Module: "github.com/bufbuild/buf", Package: "github.com/bufbuild/buf/cmd/buf", Version: "v1.73.0"},

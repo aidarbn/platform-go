@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -58,6 +59,22 @@ type Config struct {
 	AccessLog       bool // log every HTTP request, as taply does
 	LogBodies       bool // put the bodies of failed requests into the access log
 	SecurityHeaders bool // taply's security response headers
+
+	// TrustedProxies are the networks whose X-Forwarded-For is believed. A request from
+	// anywhere else is identified by its connection address, so a client reaching the
+	// service directly cannot pose as another address. Empty means the private networks
+	// and loopback, where a reverse proxy normally runs.
+	TrustedProxies []netip.Prefix
+}
+
+// DefaultTrustedProxies are loopback and the private networks.
+var DefaultTrustedProxies = []netip.Prefix{
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fc00::/7"),
 }
 
 // Load reads the module settings from environment variables.
@@ -83,12 +100,39 @@ func Load(l *confx.Loader) Config {
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
+		TrustedProxies:  trustedProxies(l),
 	}
+}
+
+// trustedProxies reads API_TRUSTED_PROXIES: comma separated networks or addresses, or
+// "none" to ignore X-Forwarded-For entirely.
+func trustedProxies(l *confx.Loader) []netip.Prefix {
+	raw := l.Strings("API_TRUSTED_PROXIES", nil)
+	if len(raw) == 1 && raw[0] == "none" {
+		return []netip.Prefix{}
+	}
+	var out []netip.Prefix
+	for _, item := range raw {
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(item)
+			if aerr != nil {
+				l.Fail(fmt.Errorf("%s: %q is neither a network nor an address", l.Key("API_TRUSTED_PROXIES"), item))
+				continue
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		out = append(out, prefix)
+	}
+	return out
 }
 
 func (c *Config) setDefaults() {
 	if c.GRPCAddr == "" {
 		c.GRPCAddr = "127.0.0.1:9091"
+	}
+	if c.TrustedProxies == nil {
+		c.TrustedProxies = DefaultTrustedProxies
 	}
 	if c.HTTPAddr == "" {
 		c.HTTPAddr = ":8080"
@@ -542,7 +586,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	if m.cfg.SecurityHeaders {
 		h = securityHeaders(h)
 	}
-	return otelhttp.NewHandler(identify(h), "http.gateway")
+	return otelhttp.NewHandler(identify(m.cfg.TrustedProxies, h), "http.gateway")
 }
 
 // newGateway configures the REST side: snake_case JSON as in the proto files, every
