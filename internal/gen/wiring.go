@@ -7,6 +7,7 @@ package gen
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/format"
 	"io/fs"
@@ -27,7 +28,12 @@ const (
 	ConfigPath  = "cmd/app/config.gen.go"
 	ModulesPath = "cmd/app/modules.gen.go"
 	EnvPath     = ".env.example"
-	ComposePath = "docker-compose.yml"
+
+	// ProjectEnvPath holds the variables of the project's own code. It belongs to the
+	// project, and its content is appended to .env.example, so one file documents the
+	// whole environment and make run reads it.
+	ProjectEnvPath = ".env.project.example"
+	ComposePath    = "docker-compose.yml"
 
 	// PolicyPath is the access policy of the project; PolicyGoPath embeds it.
 	PolicyPath   = "rbac/policy.csv"
@@ -377,6 +383,14 @@ func FilesFrom(f *spec.File, project fs.FS) (map[string][]byte, error) {
 			return nil, err
 		}
 		files[SettingsPath] = code
+	}
+
+	projectEnv, err := fs.ReadFile(project, ProjectEnvPath)
+	switch {
+	case err == nil:
+		files[EnvPath] = append(append(files[EnvPath], "\n# project: "+ProjectEnvPath+"\n"...), bytes.TrimLeft(projectEnv, "\n")...)
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("%s: %w", ProjectEnvPath, err)
 	}
 
 	if _, ok := f.Modules["monitoring"]; ok {

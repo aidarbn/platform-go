@@ -168,7 +168,7 @@ func cmdGenerate(args []string, out io.Writer) error {
 }
 
 // runSqlc runs the external generators of the enabled modules: sqlc for postgres, buf
-// for api.
+// for api, templ for web.
 func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 	ctx := context.Background()
 	if slices.Contains(plan.Modules, "postgres") {
@@ -178,6 +178,11 @@ func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 	}
 	if slices.Contains(plan.Modules, "api") {
 		if err := codegen.Buf(ctx, dir, out); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(plan.Modules, "web") {
+		if err := codegen.Templ(ctx, dir, out); err != nil {
 			return err
 		}
 	}
@@ -218,6 +223,11 @@ func checkGenerated(ctx context.Context, dir string) error {
 	}
 	if slices.Contains(plan.Modules, "api") {
 		if err := codegen.BufCheck(ctx, dir); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(plan.Modules, "web") {
+		if err := codegen.TemplCheck(ctx, dir); err != nil {
 			return err
 		}
 	}

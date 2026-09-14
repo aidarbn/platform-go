@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/spec"
@@ -166,5 +167,17 @@ func TestApplyAndChanged(t *testing.T) {
 	}
 	if len(changed) != 1 || changed[0] != gen.ModulesPath {
 		t.Errorf("want a difference in %s, got %v", gen.ModulesPath, changed)
+	}
+}
+
+func TestProjectEnvIsAppended(t *testing.T) {
+	project := fstest.MapFS{gen.ProjectEnvPath: {Data: []byte("\n# keys of the project\nCRYPTO_KEY=\n")}}
+	files, err := gen.FilesFrom(mustParse(t, "schema: 1\nproject:\n  module: example.com/shop\nmodules: {}\n"), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := string(files[gen.EnvPath])
+	if !strings.HasSuffix(env, "\n# project: .env.project.example\n# keys of the project\nCRYPTO_KEY=\n") || !strings.Contains(env, "APP_ROLE=all") {
+		t.Errorf(".env.example:\n%s", env)
 	}
 }

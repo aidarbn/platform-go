@@ -79,6 +79,12 @@
             }
           },
           "type": "object"
+        },
+        "web": {
+          "additionalProperties": false,
+          "description": "platform module web; requires api",
+          "properties": {},
+          "type": "object"
         }
       },
       "type": [

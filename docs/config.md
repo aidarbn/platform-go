@@ -35,6 +35,10 @@ modules:
   s3: {}
 ```
 
+## The environment of the project's own code
+
+Modules document their variables in the generated `.env.example`. Variables of the project's own code — keys, provider addresses — go into `.env.project.example`, which belongs to the project: `platformgo generate` appends it to `.env.example` under `# project`, so one file describes the whole environment and `make run` reads it.
+
 ## Rules
 
 - **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones: a typo fails `plan` instead of being ignored.

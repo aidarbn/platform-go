@@ -14,6 +14,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
 | **i18n** | translations, locale in context, interceptors, dictionary migration |
 | **enums** | enum catalogue from markers in the domain |
+| **web** | server rendered pages next to the API: templ components, htmx fragments, CSRF, sealed cookies, hashed static assets, strict CSP |
 | **monitoring** | a self-contained observability stack: OpenTelemetry collector, Prometheus, Alertmanager, Loki, Tempo, Grafana with a dashboard and alerts for the enabled modules |
 
 ## The `admin` module
@@ -302,6 +303,46 @@ A broken file stops the start; a template whose translation has a different numb
 |---|---|---|
 | `I18N_DEFAULT_LOCALE` | `ru` | language of the base columns and the fallback |
 | `I18N_LOCALES` | `ru,kk,en` | languages the API answers in |
+
+## The `web` module
+
+Pages rendered on the server by the same binary, on the same address as the API: a sign up form, a customer's card page, anything a browser opens. Requires `api` — pages are its plain routes, so they share its server, request ids, metrics, access log and body limit.
+
+```yaml
+modules:
+  api: {}
+  web: {}
+```
+
+The module pins [templ](https://templ.guide) as a tool: `platformgo generate` turns every `*.templ` file into Go code next to it and removes the code of deleted templates, and `platformgo verify` fails when that code is stale. The generated files are committed like the rest of generated code, so the image builds without the generator. htmx and styles are the project's own files, embedded and served by `kit/webx`.
+
+```go
+kit := web.From(app)
+assets, _ := webx.NewAssets(static.FS, "/static/")
+
+pages := http.NewServeMux()
+pages.HandleFunc("GET /", signup.Form)
+pages.HandleFunc("POST /", signup.Submit)
+api.HandleHTTP(app, "/", webx.PageHeaders(kit.CSRF.Middleware(pages)))
+api.HandleHTTP(app, assets.Pattern(), assets.Handler())
+```
+
+What `kit/webx` gives:
+
+| | |
+|---|---|
+| `Render(w, r, status, page, fragment)` | the whole page, or only the fragment when htmx asks (`HX-Request`) — one route for both, forms keep working without JavaScript |
+| `Redirect(w, r, url)` | `303` after a plain form post, `HX-Redirect` for htmx |
+| `CSRF` | `http.CrossOriginProtection` plus a token in every form (`CSRFInput()`, or `X-CSRF-Token` for htmx) matching a `__Host-` cookie |
+| `Cookies` | small state of a multi step form in a cookie sealed with AES-GCM, bound to its name, with expiry |
+| `Assets` | embedded files under content hashed names (`app.1a2b3c4d.css`), cached for a year; `Path("app.css")` for templates |
+| `PageHeaders`, `NoReferrer` | a CSP that allows nothing inline and nothing from other origins; `no-referrer` and `no-store` for pages whose address is a secret |
+| `Locale(r, supported, fallback)` | the visitor's choice from a cookie, then `Accept-Language` |
+
+| Variable | Default | |
+|---|---|---|
+| `WEB_SECRET_KEY` | — | required; base64 of at least 32 bytes (`openssl rand -base64 32`), seals cookies |
+| `WEB_INSECURE_COOKIES` | `false` | cookies over plain http, for local development |
 
 ## The `rbac` module
 

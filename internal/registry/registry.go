@@ -202,6 +202,20 @@ var all = []Module{
 		},
 	},
 	{
+		Name:     "web",
+		Requires: []string{"api"},
+		Import:   "github.com/aidarbn/platform-go/kit/modules/web",
+		Package:  "web",
+		Field:    "Web",
+		Env: []EnvVar{
+			{Key: "WEB_SECRET_KEY", Example: "", Comment: "seals cookies of the pages, base64 of 32 random bytes: openssl rand -base64 32", Required: true},
+			{Key: "WEB_INSECURE_COOKIES", Example: "false", Comment: "cookies over plain http, local development only"},
+		},
+		Tools: []Tool{
+			{Module: "github.com/a-h/templ", Package: "github.com/a-h/templ/cmd/templ", Version: "v0.3.1020"},
+		},
+	},
+	{
 		// monitoring runs next to the service, not in it: it generates the observability
 		// stack under monitoring/ and has no Go code.
 		Name: "monitoring",
