@@ -38,7 +38,7 @@ type Option struct {
 type Module struct {
 	Name     string   // section name in platformgo.yaml
 	Requires []string // modules it cannot work without
-	Import   string   // import path of the module package
+	Import   string   // import path of the module package; empty for a module without runtime code
 	Package  string   // package name in code
 	Field    string   // field name in the project's Config struct
 	Env      []EnvVar
@@ -69,6 +69,10 @@ func (m Module) Option(name string) (Option, bool) {
 	}
 	return Option{}, false
 }
+
+// Runtime reports whether the module runs inside the service. A module without runtime
+// code only generates files, like the monitoring stack, and stays out of the wiring.
+func (m Module) Runtime() bool { return m.Import != "" }
 
 // ConfigType is the settings type of the module, for example postgres.Config.
 func (m Module) ConfigType() string { return m.Package + ".Config" }
@@ -194,6 +198,14 @@ var all = []Module{
 			{Key: "ADMIN_INSECURE_COOKIES", Example: "false", Comment: "allow the cookie over plain http: local development only"},
 			{Key: "ADMIN_BOOTSTRAP_EMAIL", Example: "admin@example.com", Comment: "first account, created while there are none"},
 			{Key: "ADMIN_BOOTSTRAP_PASSWORD", Example: "", Comment: "password of the first account"},
+		},
+	},
+	{
+		// monitoring runs next to the service, not in it: it generates the observability
+		// stack under monitoring/ and has no Go code.
+		Name: "monitoring",
+		Env: []EnvVar{
+			{Key: "OTEL_EXPORTER_OTLP_ENDPOINT", Example: "", Comment: "traces to the collector of the monitoring stack, for example http://127.0.0.1:4317; empty turns tracing off"},
 		},
 	},
 	{

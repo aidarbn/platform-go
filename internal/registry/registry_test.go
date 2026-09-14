@@ -28,15 +28,21 @@ func TestUnknownModule(t *testing.T) {
 
 func TestEveryModuleDescribedFully(t *testing.T) {
 	for _, m := range registry.All() {
-		if m.Name == "" || m.Import == "" || m.Package == "" || m.Field == "" {
+		if m.Name == "" {
+			t.Errorf("module without a name: %+v", m)
+		}
+		if m.Runtime() && (m.Package == "" || m.Field == "") {
 			t.Errorf("module is described only partially: %+v", m)
+		}
+		if !m.Runtime() && (m.Package != "" || m.Field != "" || m.ProjectPkg != "" || len(m.ExtraArgs) > 0) {
+			t.Errorf("module %s has no runtime code but describes wiring", m.Name)
 		}
 		for _, dep := range m.Requires {
 			if _, ok := registry.Get(dep); !ok {
 				t.Errorf("module %s requires unknown module %s", m.Name, dep)
 			}
 		}
-		if !strings.HasPrefix(m.Import, "github.com/aidarbn/platform-go/") {
+		if m.Runtime() && !strings.HasPrefix(m.Import, "github.com/aidarbn/platform-go/") {
 			t.Errorf("module %s: unexpected import path %s", m.Name, m.Import)
 		}
 	}

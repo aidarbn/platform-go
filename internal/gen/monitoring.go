@@ -1,0 +1,694 @@
+package gen
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"slices"
+	"strconv"
+	"strings"
+
+	"go.yaml.in/yaml/v3"
+
+	"github.com/aidarbn/platform-go/internal/spec"
+)
+
+// Files of the monitoring module.
+const (
+	MonitoringPath  = "monitoring.yml" // thresholds, owned by the project
+	monitoringDir   = "monitoring/"
+	MonitoringStack = monitoringDir + "docker-compose.yml"
+)
+
+// Image versions of the monitoring stack.
+const (
+	imageCollector    = "otel/opentelemetry-collector-contrib:0.160.0"
+	imagePrometheus   = "prom/prometheus:v3.14.0"
+	imageAlertmanager = "prom/alertmanager:v0.34.0"
+	imageLoki         = "grafana/loki:3.7.7"
+	imageTempo        = "grafana/tempo:3.0.3"
+	imageGrafana      = "grafana/grafana:13.2.1"
+)
+
+// MonitoringExample is the thresholds file a project starts from. Its sections and keys
+// are taply's, so the numbers read the same in every project.
+const MonitoringExample = `# Alert thresholds of the monitoring stack, in taply's format. Seconds for latency,
+# percent for error rates. Pick them from the data: the observed maximum plus a margin.
+# Mind the histogram ceilings: HTTP latency buckets end at 10 s, gRPC at 120 s.
+#
+# After editing run: make generate
+
+go-http:
+  overall_latency: 3        # p99 of the whole service
+  latency_by_endpoint: 5    # p99 of any single route
+  5xx_rate: 1               # share of 5xx answers
+  endpoint_latency_overrides: {}   # routes slow by design, with their own p99: {"/v1/reports": 20}
+
+go-grpc:
+  overall_latency: 3
+  latency_by_endpoint: 5
+  5xx_rate: 1               # share of Internal, Unavailable, Unknown and DataLoss
+  endpoint_latency_overrides: {}
+`
+
+// thresholds are the keys of one section of monitoring.yml, as the monitoring agent of
+// taply reads them.
+type thresholds struct {
+	OverallLatency    float64            `yaml:"overall_latency"`
+	LatencyByEndpoint float64            `yaml:"latency_by_endpoint"`
+	ErrorRate         float64            `yaml:"5xx_rate"`
+	Overrides         map[string]float64 `yaml:"endpoint_latency_overrides"`
+}
+
+type monitoringConfig struct {
+	HTTP thresholds `yaml:"go-http"`
+	GRPC thresholds `yaml:"go-grpc"`
+}
+
+func defaultThresholds() thresholds {
+	return thresholds{OverallLatency: 3, LatencyByEndpoint: 5, ErrorRate: 1}
+}
+
+func readMonitoring(project fs.FS) (monitoringConfig, error) {
+	cfg := monitoringConfig{HTTP: defaultThresholds(), GRPC: defaultThresholds()}
+	raw, err := fs.ReadFile(project, MonitoringPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		return cfg, err
+	}
+	var file map[string]thresholds
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
+		return cfg, fmt.Errorf("%s: %w", MonitoringPath, err)
+	}
+	for name, t := range file {
+		switch name {
+		case "go-http":
+			cfg.HTTP = merge(cfg.HTTP, t)
+		case "go-grpc":
+			cfg.GRPC = merge(cfg.GRPC, t)
+		default:
+			return cfg, fmt.Errorf("%s: unknown section %q, known sections: go-http, go-grpc", MonitoringPath, name)
+		}
+	}
+	return cfg, nil
+}
+
+func merge(base, t thresholds) thresholds {
+	if t.OverallLatency > 0 {
+		base.OverallLatency = t.OverallLatency
+	}
+	if t.LatencyByEndpoint > 0 {
+		base.LatencyByEndpoint = t.LatencyByEndpoint
+	}
+	if t.ErrorRate > 0 {
+		base.ErrorRate = t.ErrorRate
+	}
+	base.Overrides = t.Overrides
+	return base
+}
+
+// MonitoringFiles generates the monitoring stack of the project: an OpenTelemetry
+// collector next to the service and Prometheus, Alertmanager, Loki, Tempo and Grafana,
+// with the dashboard and the alerts of the enabled modules.
+func MonitoringFiles(f *spec.File, project fs.FS) (map[string][]byte, error) {
+	cfg, err := readMonitoring(project)
+	if err != nil {
+		return nil, err
+	}
+	enabled := func(name string) bool { _, ok := f.Modules[name]; return ok }
+	service := composeName(f.Service())
+
+	dashboard, err := dashboardJSON(f.Service(), enabled)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string][]byte{
+		MonitoringStack:                                    []byte(strings.ReplaceAll(stackCompose, "{{service}}", service)),
+		monitoringDir + "otel-collector.yaml":              []byte(strings.ReplaceAll(collectorYAML, "{{service}}", service)),
+		monitoringDir + "prometheus.yml":                   []byte(prometheusYAML),
+		monitoringDir + "alerts.yml":                       []byte(alertRules(f.Service(), cfg, enabled)),
+		monitoringDir + "alertmanager.yml":                 []byte(alertmanagerYAML),
+		monitoringDir + "alertmanager-telegram.yml":        []byte(alertmanagerTelegramYAML),
+		monitoringDir + "loki.yaml":                        []byte(lokiYAML),
+		monitoringDir + "tempo.yaml":                       []byte(tempoYAML),
+		monitoringDir + "grafana/datasources.yaml":         []byte(grafanaDatasources),
+		monitoringDir + "grafana/dashboards.yaml":          []byte(grafanaDashboards),
+		monitoringDir + "grafana/dashboards/platform.json": dashboard,
+		monitoringDir + ".env.example":                     []byte(stackEnv),
+	}, nil
+}
+
+const yamlHeader = "# Generated by platformgo from platformgo.yaml and monitoring.yml. Do not edit.\n"
+
+var stackCompose = yamlHeader + `# The monitoring stack of the service:
+#   otel-collector — the agent, always next to the service;
+#   prometheus, alertmanager, loki, tempo, grafana — the storage, here or on another server.
+#
+#   docker compose -f monitoring/docker-compose.yml --env-file monitoring/.env up -d                  everything
+#   docker compose -f monitoring/docker-compose.yml --env-file monitoring/.env up -d otel-collector   the agent only, with
+#                                                                                                     the *_ENDPOINT variables at a remote stack
+#
+# The collector reads /metrics of the service at APP_METRICS_TARGET. A service on the host
+# is reached through host.docker.internal; a service in a container joins the network
+# {{service}}-monitoring and is reached by its name, for example app:9090.
+#
+# The stack containers log through the local driver: docker logs still works, and their
+# own logs stay out of Loki.
+name: {{service}}-monitoring
+
+x-logging: &logging
+  driver: local
+
+networks:
+  default:
+    name: {{service}}-monitoring
+
+services:
+  otel-collector:
+    image: ` + imageCollector + `
+    command: ["--config=/etc/otelcol/config.yaml"]
+    user: "0:0" # container logs are readable by root only
+    logging: *logging
+    environment:
+      APP_METRICS_TARGET: ${APP_METRICS_TARGET:-host.docker.internal:9090}
+      PROMETHEUS_REMOTE_WRITE_ENDPOINT: ${PROMETHEUS_REMOTE_WRITE_ENDPOINT:-http://prometheus:9090/api/v1/write}
+      LOKI_OTLP_ENDPOINT: ${LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp}
+      TEMPO_OTLP_ENDPOINT: ${TEMPO_OTLP_ENDPOINT:-tempo:4317}
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    ports:
+      - "127.0.0.1:4317:4317"   # traces from the service: OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
+      - "127.0.0.1:4318:4318"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  prometheus:
+    image: ` + imagePrometheus + `
+    logging: *logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9095:9090"
+    restart: unless-stopped
+
+  alertmanager:
+    image: ` + imageAlertmanager + `
+    logging: *logging
+    # Alertmanager does not read environment variables, so the Telegram configuration is
+    # put together at start, and only when a bot and a chat are given.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -n "$$TELEGRAM_BOT_TOKEN" ] && [ -n "$$TELEGRAM_CHAT_ID" ]; then
+          printf '%s' "$$TELEGRAM_BOT_TOKEN" > /tmp/telegram-token
+          sed "s/__TELEGRAM_CHAT_ID__/$$TELEGRAM_CHAT_ID/" /etc/alertmanager/alertmanager-telegram.yml > /tmp/alertmanager.yml
+        else
+          cp /etc/alertmanager/alertmanager.yml /tmp/alertmanager.yml
+        fi
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager-telegram.yml:/etc/alertmanager/alertmanager-telegram.yml:ro
+      - alertmanager-data:/alertmanager
+    restart: unless-stopped
+
+  loki:
+    image: ` + imageLoki + `
+    logging: *logging
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  tempo:
+    image: ` + imageTempo + `
+    logging: *logging
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    restart: unless-stopped
+
+  grafana:
+    image: ` + imageGrafana + `
+    logging: *logging
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/platform.yaml:ro
+      - ./grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/platform.yaml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
+`
+
+var collectorYAML = yamlHeader + `# The only agent next to the service: metrics from /metrics, traces over OTLP, logs of
+# the Docker containers. Where they go is decided by the *_ENDPOINT variables.
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: {{service}}
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["${env:APP_METRICS_TARGET}"]
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  file_log:
+    include: [/var/lib/docker/containers/*/*-json.log]
+    start_at: end
+    operators:
+      - type: container
+        format: docker
+        add_metadata_from_filepath: false
+
+processors:
+  batch: {}
+  resource:
+    attributes:
+      - key: service.name
+        value: {{service}}
+        action: insert # spans and logs that name their service keep it
+
+exporters:
+  prometheus_remote_write:
+    endpoint: ${env:PROMETHEUS_REMOTE_WRITE_ENDPOINT}
+  otlp_http/loki:
+    endpoint: ${env:LOKI_OTLP_ENDPOINT}
+  otlp_grpc/tempo:
+    endpoint: ${env:TEMPO_OTLP_ENDPOINT}
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [batch]
+      exporters: [prometheus_remote_write]
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp_grpc/tempo]
+    logs:
+      receivers: [file_log, otlp]
+      processors: [resource, batch]
+      exporters: [otlp_http/loki]
+`
+
+var prometheusYAML = yamlHeader + `# Metrics arrive from the collector through remote write; Prometheus evaluates the alerts.
+global:
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+`
+
+var alertmanagerYAML = yamlHeader + `# No notifications: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to get them in Telegram.
+route:
+  receiver: none
+receivers:
+  - name: none
+`
+
+var alertmanagerTelegramYAML = yamlHeader + `route:
+  receiver: telegram
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /tmp/telegram-token
+        chat_id: __TELEGRAM_CHAT_ID__
+        parse_mode: HTML
+        send_resolved: true
+`
+
+var lokiYAML = yamlHeader + `auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: "2024-01-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 720h
+  allow_structured_metadata: true
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+`
+
+var tempoYAML = yamlHeader + `stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal
+
+backend_worker:
+  compaction:
+    block_retention: 168h
+
+usage_report:
+  reporting_enabled: false
+`
+
+var grafanaDatasources = yamlHeader + `apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+  - name: Loki
+    uid: loki
+    type: loki
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        - name: trace
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+`
+
+var grafanaDashboards = yamlHeader + `apiVersion: 1
+providers:
+  - name: platform
+    folder: Service
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
+`
+
+var stackEnv = `# Generated by platformgo. Copy to monitoring/.env and fill in.
+GRAFANA_ADMIN_PASSWORD=change-me
+# Telegram notifications; leave empty for none.
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+# Where the collector finds /metrics of the service.
+APP_METRICS_TARGET=host.docker.internal:9090
+# A remote stack for a collector running with --profile agent.
+PROMETHEUS_REMOTE_WRITE_ENDPOINT=http://prometheus:9090/api/v1/write
+LOKI_OTLP_ENDPOINT=http://loki:3100/otlp
+TEMPO_OTLP_ENDPOINT=tempo:4317
+PROMETHEUS_RETENTION=30d
+`
+
+func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+// alertRules are the alerts of the enabled modules with the thresholds of monitoring.yml;
+// the expressions follow the go-http and go-grpc rules of taply's monitoring.
+func alertRules(service string, cfg monitoringConfig, enabled func(string) bool) string {
+	type rule struct{ name, expr, forDur, severity, summary string }
+	var rules []rule
+	add := func(name, expr, forDur, severity, summary string) {
+		rules = append(rules, rule{name, expr, forDur, severity, summary})
+	}
+
+	add("ServiceDown", `up{job="`+composeName(service)+`"} == 0`, "2m", "critical", "the service does not answer /metrics")
+
+	if enabled("api") {
+		h, g := cfg.HTTP, cfg.GRPC
+		exclude := func(overrides map[string]float64) string {
+			keys := make([]string, 0, len(overrides))
+			for k := range overrides {
+				keys = append(keys, regexpQuote(k))
+			}
+			slices.Sort(keys)
+			return strings.Join(keys, "|")
+		}
+
+		add("HTTP5xx", `sum(rate(http_gateway_request_duration_seconds_count{status=~"5.."}[5m])) / sum(rate(http_gateway_request_duration_seconds_count[5m])) * 100 > `+num(h.ErrorRate), "5m", "critical",
+			"{{ $value | printf \"%.1f\" }}% of HTTP answers are 5xx")
+		add("HTTPLatency", `histogram_quantile(0.99, sum by (le) (rate(http_gateway_request_duration_seconds_bucket[5m]))) > `+num(h.OverallLatency), "10m", "warning",
+			"HTTP p99 is {{ $value | printf \"%.2f\" }}s")
+		endpointHTTP := `histogram_quantile(0.99, sum by (le, method, path) (rate(http_gateway_request_duration_seconds_bucket{path!="unknown"`
+		if ex := exclude(h.Overrides); ex != "" {
+			endpointHTTP += `, path!~"` + ex + `"`
+		}
+		add("HTTPEndpointLatency", endpointHTTP+`}[5m]))) > `+num(h.LatencyByEndpoint), "10m", "warning",
+			"{{ $labels.method }} {{ $labels.path }} p99 is {{ $value | printf \"%.2f\" }}s")
+		for _, limit := range sortedOverrides(h.Overrides) {
+			add("HTTPEndpointLatency", `histogram_quantile(0.99, sum by (le, method, path) (rate(http_gateway_request_duration_seconds_bucket{path="`+limit.key+`"}[5m]))) > `+num(limit.value), "10m", "warning",
+				"{{ $labels.method }} {{ $labels.path }} p99 is {{ $value | printf \"%.2f\" }}s (own threshold "+num(limit.value)+"s)")
+		}
+
+		add("GRPCErrors", `sum(rate(grpc_server_handled_total{grpc_code=~"Internal|Unavailable|Unknown|DataLoss"}[5m])) / sum(rate(grpc_server_handled_total[5m])) * 100 > `+num(g.ErrorRate), "5m", "critical",
+			"{{ $value | printf \"%.1f\" }}% of gRPC calls fail")
+		add("GRPCLatency", `histogram_quantile(0.99, sum by (le) (rate(grpc_server_handling_seconds_bucket[5m]))) > `+num(g.OverallLatency), "10m", "warning",
+			"gRPC p99 is {{ $value | printf \"%.2f\" }}s")
+		endpointGRPC := `histogram_quantile(0.99, sum by (le, grpc_service, grpc_method) (rate(grpc_server_handling_seconds_bucket`
+		if ex := exclude(g.Overrides); ex != "" {
+			endpointGRPC += `{grpc_method!~"` + ex + `"}`
+		}
+		add("GRPCMethodLatency", endpointGRPC+`[5m]))) > `+num(g.LatencyByEndpoint), "10m", "warning",
+			"{{ $labels.grpc_service }}/{{ $labels.grpc_method }} p99 is {{ $value | printf \"%.2f\" }}s")
+		for _, limit := range sortedOverrides(g.Overrides) {
+			add("GRPCMethodLatency", `histogram_quantile(0.99, sum by (le, grpc_service, grpc_method) (rate(grpc_server_handling_seconds_bucket{grpc_method="`+limit.key+`"}[5m]))) > `+num(limit.value), "10m", "warning",
+				"{{ $labels.grpc_service }}/{{ $labels.grpc_method }} p99 is {{ $value | printf \"%.2f\" }}s (own threshold "+num(limit.value)+"s)")
+		}
+		add("Panics", `increase(grpc_req_panics_recovered_total[10m]) > 0`, "0m", "critical", "a handler panicked")
+	}
+	if enabled("postgres") {
+		add("DatabasePoolExhausted", `max(pgdb_pool_acquired_conns / pgdb_pool_max_conns) > 0.9`, "5m", "warning", "the database pool is almost exhausted")
+	}
+	if enabled("river") {
+		add("JobsFailing", `sum by (kind) (increase(river_jobs_total{outcome="failed"}[15m])) > 0`, "0m", "warning", "jobs of kind {{ $labels.kind }} fail")
+	}
+	if enabled("settings") {
+		add("SettingsStale", `increase(settings_reload_failures_total[15m]) > 0`, "0m", "warning", "business settings cannot be re-read")
+	}
+
+	var b strings.Builder
+	b.WriteString(yamlHeader)
+	b.WriteString("groups:\n  - name: " + composeName(service) + "\n    rules:\n")
+	for _, r := range rules {
+		fmt.Fprintf(&b, "      - alert: %s\n        expr: %s\n        for: %s\n        labels:\n          severity: %s\n          service: %s\n        annotations:\n          summary: %s\n",
+			r.name, yamlString(r.expr), r.forDur, r.severity, composeName(service), yamlString(r.summary))
+	}
+	return b.String()
+}
+
+type override struct {
+	key   string
+	value float64
+}
+
+func sortedOverrides(m map[string]float64) []override {
+	out := make([]override, 0, len(m))
+	for k, v := range m {
+		out = append(out, override{key: k, value: v})
+	}
+	slices.SortFunc(out, func(a, b override) int { return strings.Compare(a.key, b.key) })
+	return out
+}
+
+func regexpQuote(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `.`, `\\.`, `+`, `\\+`, `*`, `\\*`, `?`, `\\?`, `(`, `\\(`, `)`, `\\)`, `[`, `\\[`, `]`, `\\]`, `{`, `\\{`, `}`, `\\}`, `|`, `\\|`, `^`, `\\^`, `$`, `\\$`).Replace(s)
+}
+
+func yamlString(s string) string {
+	// JSON strings are valid YAML double quoted scalars; > stays readable.
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// dashboardJSON builds the Grafana dashboard of the enabled modules.
+func dashboardJSON(service string, enabled func(string) bool) ([]byte, error) {
+	type target struct {
+		Expr         string `json:"expr"`
+		LegendFormat string `json:"legendFormat"`
+		RefID        string `json:"refId"`
+	}
+	type panel struct {
+		ID         int               `json:"id"`
+		Type       string            `json:"type"`
+		Title      string            `json:"title"`
+		GridPos    map[string]int    `json:"gridPos"`
+		Datasource map[string]string `json:"datasource"`
+		Targets    []target          `json:"targets"`
+		FieldCfg   map[string]any    `json:"fieldConfig,omitempty"`
+		Options    map[string]any    `json:"options,omitempty"`
+		Collapsed  *bool             `json:"collapsed,omitempty"`
+		Panels     []any             `json:"panels,omitempty"`
+	}
+	ds := map[string]string{"type": "prometheus", "uid": "prometheus"}
+	var panels []panel
+	y := 0
+	row := func(title string) {
+		collapsed := false
+		panels = append(panels, panel{ID: len(panels) + 1, Type: "row", Title: title, GridPos: map[string]int{"h": 1, "w": 24, "x": 0, "y": y}, Collapsed: &collapsed, Panels: []any{}, Datasource: ds})
+		y++
+	}
+	x := 0
+	chart := func(title, unit string, targets ...target) {
+		for i := range targets {
+			targets[i].RefID = string(rune('A' + i))
+		}
+		panels = append(panels, panel{
+			ID: len(panels) + 1, Type: "timeseries", Title: title, Datasource: ds, Targets: targets,
+			GridPos:  map[string]int{"h": 8, "w": 12, "x": x, "y": y},
+			FieldCfg: map[string]any{"defaults": map[string]any{"unit": unit}, "overrides": []any{}},
+		})
+		if x == 0 {
+			x = 12
+		} else {
+			x = 0
+			y += 8
+		}
+	}
+	flush := func() {
+		if x != 0 {
+			x = 0
+			y += 8
+		}
+	}
+	t := func(expr, legend string) target { return target{Expr: expr, LegendFormat: legend} }
+
+	row("Service")
+	chart("Up", "short", t(`up{job="`+composeName(service)+`"}`, "up"))
+	chart("Memory", "bytes", t(`go_memstats_heap_inuse_bytes`, "heap in use"), t(`process_resident_memory_bytes`, "resident"))
+	chart("Goroutines", "short", t(`go_goroutines`, "goroutines"))
+	chart("CPU", "percentunit", t(`rate(process_cpu_seconds_total[5m])`, "cpu"))
+	flush()
+
+	if enabled("api") {
+		row("HTTP")
+		chart("Requests by route", "reqps", t(`sum by (method, path) (rate(http_gateway_requests_total[5m]))`, "{{method}} {{path}}"))
+		chart("Status codes", "reqps", t(`sum by (status) (rate(http_gateway_requests_total[5m]))`, "{{status}}"))
+		chart("p99 by route", "s", t(`histogram_quantile(0.99, sum by (le, method, path) (rate(http_gateway_request_duration_seconds_bucket[5m])))`, "{{method}} {{path}}"))
+		chart("In flight", "short", t(`http_gateway_requests_in_flight`, "in flight"))
+		flush()
+		row("gRPC")
+		chart("Calls by method", "reqps", t(`sum by (grpc_method) (rate(grpc_server_handled_total[5m]))`, "{{grpc_method}}"))
+		chart("Codes", "reqps", t(`sum by (grpc_code) (rate(grpc_server_handled_total{grpc_code!="OK"}[5m]))`, "{{grpc_code}}"))
+		chart("p99 by method", "s", t(`histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket[5m])))`, "{{grpc_method}}"))
+		chart("Refused and deprecated", "short",
+			t(`sum by (method) (increase(api_rate_limited_total[5m]))`, "rate limited {{method}}"),
+			t(`sum by (method) (increase(api_deprecated_calls_total[5m]))`, "deprecated {{method}}"),
+			t(`increase(grpc_req_panics_recovered_total[5m])`, "panics"))
+		flush()
+	}
+	if enabled("postgres") {
+		row("Database")
+		chart("Pool", "short", t(`pgdb_pool_acquired_conns`, "acquired"), t(`pgdb_pool_idle_conns`, "idle"), t(`pgdb_pool_max_conns`, "max"))
+		flush()
+	}
+	if enabled("river") {
+		row("Jobs")
+		chart("Finished jobs", "short", t(`sum by (kind, outcome) (increase(river_jobs_total[5m]))`, "{{kind}} {{outcome}}"))
+		chart("Job p95", "s", t(`histogram_quantile(0.95, sum by (le, kind) (rate(river_job_duration_seconds_bucket[5m])))`, "{{kind}}"))
+		flush()
+	}
+
+	board := map[string]any{
+		"uid":           composeName(service) + "-service",
+		"title":         service,
+		"schemaVersion": 39,
+		"version":       1,
+		"refresh":       "30s",
+		"time":          map[string]string{"from": "now-6h", "to": "now"},
+		"tags":          []string{"platform-go"},
+		"panels":        panels,
+	}
+	out, err := json.MarshalIndent(board, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}

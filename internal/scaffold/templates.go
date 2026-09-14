@@ -13,7 +13,7 @@ export
 # Branch the proto files are checked against for breaking changes.
 PROTO_BASE ?=
 
-.PHONY: help up down generate db-generate migration build run test lint ci tidy
+.PHONY: help up down monitoring-up monitoring-down generate db-generate migration build run test lint ci tidy
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
@@ -23,6 +23,16 @@ up: ## start local services and wait until they are healthy
 
 down: ## stop local services
 	docker compose down
+
+MONITORING = docker compose -f monitoring/docker-compose.yml --env-file $(if $(wildcard monitoring/.env),monitoring/.env,monitoring/.env.example)
+
+monitoring-up: ## start the monitoring stack, Grafana on 127.0.0.1:3000 (module monitoring)
+	@test -f monitoring/docker-compose.yml || { echo "enable the monitoring module in platformgo.yaml"; exit 1; }
+	$(MONITORING) up -d
+
+monitoring-down: ## stop the monitoring stack
+	@test -f monitoring/docker-compose.yml || { echo "enable the monitoring module in platformgo.yaml"; exit 1; }
+	$(MONITORING) down
 
 generate: ## regenerate wiring, queries and API code
 	go tool platformgo generate

@@ -38,6 +38,12 @@
           "properties": {},
           "type": "object"
         },
+        "monitoring": {
+          "additionalProperties": false,
+          "description": "platform module monitoring",
+          "properties": {},
+          "type": "object"
+        },
         "postgres": {
           "additionalProperties": false,
           "description": "platform module postgres",

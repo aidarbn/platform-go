@@ -117,6 +117,15 @@ func ownedFiles(dir string, f *spec.File) (map[string][]byte, error) {
 			out[gen.MessagesPath] = []byte(gen.MessagesExample)
 		}
 	}
+	if _, ok := f.Modules["monitoring"]; ok {
+		missing, err := notExists(filepath.Join(dir, gen.MonitoringPath))
+		if err != nil {
+			return nil, err
+		}
+		if missing {
+			out[gen.MonitoringPath] = []byte(gen.MonitoringExample)
+		}
+	}
 	if _, ok := f.Modules["rbac"]; ok {
 		missing, err := notExists(filepath.Join(dir, gen.PolicyPath))
 		if err != nil {

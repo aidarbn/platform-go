@@ -35,7 +35,8 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 | `rbac` — access to gRPC and REST methods by role, taply's casbin model and policy, embedded policy file | ready |
 | `i18n` — translated entity fields and error messages by Accept-Language, taply's proto option, table and error translation | ready |
 | `enums` — catalog of enums from taply's go-enum markers, served translated and used for validation | ready |
-| monitoring and tracing | planned |
+| `monitoring` — own observability stack: OpenTelemetry collector, Prometheus, Alertmanager with Telegram, Loki, Tempo, Grafana; dashboard and alerts follow the enabled modules, thresholds in taply's `monitoring.yml` | ready |
+| tracing — OpenTelemetry spans for gRPC and REST, `trace_id` in logs, W3C propagation (core) | ready |
 
 ## Layout
 
@@ -51,8 +52,6 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 - [docs/upgrades.md](docs/upgrades.md) — how projects stay upgradable
 
 ## Installation
-
-Available with the first release:
 
 ```bash
 go install github.com/aidarbn/platform-go/cmd/platformgo@latest

@@ -11,11 +11,10 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **admin** | admin shell: login, roles, TOTP, audit log; pages for settings, jobs and state; a place for project pages |
 | **settings** | business settings: the `settings.yaml` schema, values in the database, cache, change notifications, typed access from code |
 | **s3** | object storage (MinIO), file uploads, service in docker-compose |
-| **keycloak** | Keycloak integration, authorisation interceptor, service in docker-compose |
 | **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
 | **i18n** | translations, locale in context, interceptors, dictionary migration |
 | **enums** | enum catalogue from markers in the domain |
-| **monitoring** | alert thresholds for an external monitoring agent |
+| **monitoring** | a self-contained observability stack: OpenTelemetry collector, Prometheus, Alertmanager with Telegram, Loki, Tempo, Grafana with a dashboard and alerts for the enabled modules |
 
 ## The `admin` module
 
@@ -46,6 +45,56 @@ admin.AddPage(app, admin.Page{
 ```
 
 Removing the admin panel means deleting the section and running `apply`.
+
+## The `monitoring` module
+
+A monitoring stack of the service's own, for a project that has no shared monitoring to join. The module has no Go code: it generates `monitoring/` and leaves the service as it is, because the platform already exposes everything — `/metrics` on the ops port, traces over OTLP, JSON logs with `trace_id`.
+
+```yaml
+modules:
+  monitoring: {}
+```
+
+What runs, from `monitoring/docker-compose.yml`:
+
+| Service | Role |
+|---|---|
+| `otel-collector` | the agent next to the service: scrapes `/metrics`, receives traces over OTLP on `127.0.0.1:4317`, reads the logs of the Docker containers |
+| `prometheus` | metrics (through remote write from the collector) and alert rules |
+| `alertmanager` | notifications to Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, none otherwise |
+| `loki`, `tempo` | logs and traces; a log line links to its trace and a trace to its logs |
+| `grafana` | `127.0.0.1:3000`, data sources and the service dashboard provisioned |
+
+```sh
+cp monitoring/.env.example monitoring/.env    # Grafana password, Telegram
+make monitoring-up
+# the service sends traces to the collector:
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 make run
+```
+
+The collector finds the service at `APP_METRICS_TARGET`. A service on the host is reached through `host.docker.internal:9090` (the ops port must listen on an address the Docker bridge reaches, `OPS_ADDR=:9090` behind a firewall); a service in a container joins the external network `<service>-monitoring` and is reached by name, `app:9090`.
+
+The storage can live elsewhere: run only `otel-collector` next to the service and point `PROMETHEUS_REMOTE_WRITE_ENDPOINT`, `LOKI_OTLP_ENDPOINT` and `TEMPO_OTLP_ENDPOINT` at the stack on the other server.
+
+**Alerts** follow the enabled modules: `ServiceDown` always; with `api` the 5xx share, p99 of the service and of every route for HTTP and gRPC (the `go-http` and `go-grpc` rules of taply's monitoring) and recovered panics; with `postgres` pool exhaustion; with `river` failing jobs; with `settings` failing reloads. The **dashboard** has the same sections.
+
+**Thresholds** live in `monitoring.yml`, created once and owned by the project, in taply's format — the same keys taply's monitoring agent reads, so the numbers mean the same:
+
+```yaml
+go-http:
+  overall_latency: 3        # p99 of the service, seconds
+  latency_by_endpoint: 5    # p99 of any route
+  5xx_rate: 1               # percent of 5xx answers
+  endpoint_latency_overrides:
+    /v1/reports: 20         # a route slow by design gets its own rule
+go-grpc:
+  overall_latency: 3
+  latency_by_endpoint: 5
+  5xx_rate: 1               # percent of Internal, Unavailable, Unknown, DataLoss
+  endpoint_latency_overrides: {}
+```
+
+An unknown section or key fails generation. After editing run `make generate`.
 
 ## The `postgres` module
 
@@ -328,7 +377,7 @@ One binary, split by `APP_ROLE`, the way taply runs API and worker instances:
 
 Every role runs the same `wireDomain`: services, pages and workers are registered everywhere, and each module decides what to start. `/health` and `/metrics` are served in every role.
 
-**Tracing** follows taply: with `OTEL_EXPORTER_OTLP_ENDPOINT` set, spans go over OTLP gRPC to the collector of the monitoring agent; W3C `traceparent` and baggage carry the trace in and out. The gRPC server and the HTTP side are instrumented and the gateway passes the trace to gRPC, so a REST call is one trace; log lines written with a context carry `trace_id` and `span_id`. Without the variable nothing is exported, yet an incoming trace still continues. Sampling and the exporter follow the standard `OTEL_*` variables.
+**Tracing** follows taply: with `OTEL_EXPORTER_OTLP_ENDPOINT` set, spans go over OTLP gRPC to a collector — the one of the `monitoring` module or of an external agent; W3C `traceparent` and baggage carry the trace in and out. The gRPC server and the HTTP side are instrumented and the gateway passes the trace to gRPC, so a REST call is one trace; log lines written with a context carry `trace_id` and `span_id`. Without the variable nothing is exported, yet an incoming trace still continues. Sampling and the exporter follow the standard `OTEL_*` variables.
 
 Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
 
