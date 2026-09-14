@@ -320,12 +320,14 @@ The module pins [templ](https://templ.guide) as a tool: `platformgo generate` tu
 kit := web.From(app)
 assets, _ := webx.NewAssets(static.FS, "/static/")
 
-pages := http.NewServeMux()
-pages.HandleFunc("GET /", signup.Form)
-pages.HandleFunc("POST /", signup.Submit)
-api.HandleHTTP(app, "/", webx.PageHeaders(kit.CSRF.Middleware(pages)))
+page := func(h http.HandlerFunc) http.Handler { return webx.PageHeaders(kit.CSRF.Middleware(h)) }
+api.HandleHTTP(app, "GET /{$}", page(signup.Form))   // the root itself: "/" is the gateway's catch-all
+api.HandleHTTP(app, "POST /{$}", page(signup.Submit))
+api.HandleHTTP(app, "GET /c/{token}", webx.NoReferrer(page(card.Show)))
 api.HandleHTTP(app, assets.Pattern(), assets.Handler())
 ```
+
+Page routes must be more specific than `/`, which the REST gateway serves: `GET /{$}` for the root, `GET /c/{token}` and so on.
 
 What `kit/webx` gives:
 
