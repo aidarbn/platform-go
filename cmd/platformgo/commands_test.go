@@ -147,6 +147,15 @@ func TestDoctorFixesProject(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 	dir := filepath.Join(t.TempDir(), "project")
 	mustRun(t, "new", "example.com/shop", "--dir", dir, "--with", "monitoring")
+	// go mod tidy of the fix resolves the platform from this checkout, not from a
+	// release that may not be published yet.
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "mod", "edit", "-C", dir, "-replace", "github.com/aidarbn/platform-go="+root).CombinedOutput(); err != nil {
+		t.Fatalf("go mod edit: %v\n%s", err, out)
+	}
 	if err := os.Remove(filepath.Join(dir, gen.ModulesPath)); err != nil {
 		t.Fatal(err)
 	}
