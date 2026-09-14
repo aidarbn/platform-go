@@ -14,7 +14,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
 | **i18n** | translations, locale in context, interceptors, dictionary migration |
 | **enums** | enum catalogue from markers in the domain |
-| **monitoring** | a self-contained observability stack: OpenTelemetry collector, Prometheus, Alertmanager with Telegram, Loki, Tempo, Grafana with a dashboard and alerts for the enabled modules |
+| **monitoring** | a self-contained observability stack: OpenTelemetry collector, Prometheus, Alertmanager, Loki, Tempo, Grafana with a dashboard and alerts for the enabled modules |
 
 ## The `admin` module
 
@@ -61,12 +61,12 @@ What runs, from `monitoring/docker-compose.yml`:
 |---|---|
 | `otel-collector` | the agent next to the service: scrapes `/metrics`, receives traces over OTLP on `127.0.0.1:4317`, reads the logs of the Docker containers |
 | `prometheus` | metrics (through remote write from the collector) and alert rules |
-| `alertmanager` | notifications to Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, none otherwise |
+| `alertmanager` | groups firing alerts; notifications are not configured yet, the alerts are seen in Grafana and Prometheus |
 | `loki`, `tempo` | logs and traces; a log line links to its trace and a trace to its logs |
 | `grafana` | `127.0.0.1:3000`, data sources and the service dashboard provisioned |
 
 ```sh
-cp monitoring/.env.example monitoring/.env    # Grafana password, Telegram
+cp monitoring/.env.example monitoring/.env    # Grafana password
 make monitoring-up
 # the service sends traces to the collector:
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 make run
