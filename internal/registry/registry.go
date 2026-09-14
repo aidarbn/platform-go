@@ -221,9 +221,9 @@ var all = []Module{
 			{Key: "S3_REGION", Example: "", Comment: "region, when the storage needs one"},
 			{Key: "S3_PUBLIC_URL", Example: "", Comment: "where public buckets are served, for example https://example.com/storage"},
 		},
-		// The MinIO release taply runs.
+		// The MinIO release taply runs, from quay.io: MinIO no longer publishes to Docker Hub.
 		Compose: `  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
