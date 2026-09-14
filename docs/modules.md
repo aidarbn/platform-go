@@ -97,6 +97,18 @@ go-grpc:
 
 An unknown section or key fails generation. After editing run `make generate`.
 
+**Alerts of the project's own metrics** go into `monitoring.rules.yml`, created once and owned by the project, in Prometheus rule format. Its groups are appended to the generated `monitoring/alerts.yml`; a group may not take the name of the service, which the platform group uses.
+
+```yaml
+groups:
+  - name: shop-orders
+    rules:
+      - alert: OrdersStuck
+        expr: increase(orders_stuck_total[15m]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "orders are stuck" }
+```
+
 ## The `postgres` module
 
 A PostgreSQL pool with a health check and pool metrics, the local database in `docker-compose.yml`, and migrations.

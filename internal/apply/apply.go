@@ -136,6 +136,13 @@ func ownedFiles(dir string, f *spec.File) (map[string][]byte, error) {
 		if missing {
 			out[gen.MonitoringPath] = []byte(gen.MonitoringExample)
 		}
+		missing, err = notExists(filepath.Join(dir, gen.MonitoringRulesPath))
+		if err != nil {
+			return nil, err
+		}
+		if missing {
+			out[gen.MonitoringRulesPath] = []byte(gen.MonitoringRulesExample)
+		}
 	}
 	if _, ok := f.Modules["rbac"]; ok {
 		missing, err := notExists(filepath.Join(dir, gen.PolicyPath))

@@ -187,3 +187,40 @@ func withMonitoringExample() fstest.MapFS {
 	project[gen.MonitoringPath] = &fstest.MapFile{Data: []byte(gen.MonitoringExample)}
 	return project
 }
+
+func TestMonitoringProjectRules(t *testing.T) {
+	project := withSettingsFS()
+	project[gen.MonitoringRulesPath] = &fstest.MapFile{Data: []byte(`groups:
+  - name: shop
+    rules:
+      - alert: OrdersStuck
+        expr: increase(orders_stuck_total[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "orders are stuck"
+`)}
+	files, err := gen.FilesFrom(mustParse(t, withMonitoringAll), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alerts := alertNames(t, files["monitoring/alerts.yml"])
+	if !strings.Contains(alerts["OrdersStuck"], "orders_stuck_total") || alerts["ServiceDown"] == "" {
+		t.Errorf("rules: %v\n%s", alerts, files["monitoring/alerts.yml"])
+	}
+
+	example := withSettingsFS()
+	example[gen.MonitoringRulesPath] = &fstest.MapFile{Data: []byte(gen.MonitoringRulesExample)}
+	if _, err := gen.FilesFrom(mustParse(t, withMonitoringAll), example); err != nil {
+		t.Errorf("the example: %v", err)
+	}
+	taken := withSettingsFS()
+	taken[gen.MonitoringRulesPath] = &fstest.MapFile{Data: []byte("groups:\n  - name: shop-api\n    rules:\n      - alert: X\n        expr: up == 0\n")}
+	if _, err := gen.FilesFrom(mustParse(t, withMonitoringAll), taken); err == nil {
+		t.Error("a group named after the service is accepted")
+	}
+	broken := withSettingsFS()
+	broken[gen.MonitoringRulesPath] = &fstest.MapFile{Data: []byte("groups:\n  - rules: []\n")}
+	if _, err := gen.FilesFrom(mustParse(t, withMonitoringAll), broken); err == nil {
+		t.Error("a group without a name is accepted")
+	}
+}

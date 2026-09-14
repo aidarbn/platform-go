@@ -71,6 +71,13 @@ func Sqlc(ctx context.Context, dir string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A broken query must not cost the code that compiles: sqlc checks the queries
+	// before anything is removed.
+	if len(queries) > 0 {
+		if err := GoCommand(ctx, dir, out, "tool", "sqlc", "compile", "-f", SqlcConfig); err != nil {
+			return err
+		}
+	}
 	// sqlc does not remove the output of a deleted query file, so the old output goes
 	// first.
 	if err := removeGenerated(dir, SqlcOut, sqlcMark); err != nil {

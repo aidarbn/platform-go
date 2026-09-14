@@ -18,9 +18,12 @@ import (
 
 // Files of the monitoring module.
 const (
-	MonitoringPath  = "monitoring.yml" // thresholds, owned by the project
-	monitoringDir   = "monitoring/"
-	MonitoringStack = monitoringDir + "docker-compose.yml"
+	MonitoringPath = "monitoring.yml" // thresholds, owned by the project
+	// MonitoringRulesPath holds the project's own alert rules in Prometheus format, owned
+	// by the project; its groups are appended to the generated alerts.
+	MonitoringRulesPath = "monitoring.rules.yml"
+	monitoringDir       = "monitoring/"
+	MonitoringStack     = monitoringDir + "docker-compose.yml"
 )
 
 // Image versions of the monitoring stack.
@@ -32,6 +35,77 @@ const (
 	imageTempo        = "grafana/tempo:3.0.3"
 	imageGrafana      = "grafana/grafana:13.2.1"
 )
+
+// MonitoringRulesExample is the rules file a project starts from.
+const MonitoringRulesExample = `# Alert rules of the project's own metrics, in Prometheus rule format. The groups are
+# appended to monitoring/alerts.yml; the platform alerts stay as they are.
+#
+# After editing run: make generate
+
+groups: []
+# groups:
+#   - name: orders
+#     rules:
+#       - alert: OrdersStuck
+#         expr: increase(orders_stuck_total[15m]) > 0
+#         labels: { severity: warning }
+#         annotations: { summary: "orders are stuck" }
+`
+
+// projectRules reads the project's rule groups and renders them as items of groups:.
+func projectRules(project fs.FS, reserved string) (string, error) {
+	raw, err := fs.ReadFile(project, MonitoringRulesPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var file struct {
+		Groups []struct {
+			Name  string      `yaml:"name"`
+			Rules []yaml.Node `yaml:"rules"`
+		} `yaml:"groups"`
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return "", fmt.Errorf("%s: %w", MonitoringRulesPath, err)
+	}
+	if err := doc.Decode(&file); err != nil {
+		return "", fmt.Errorf("%s: %w", MonitoringRulesPath, err)
+	}
+	var groups yaml.Node
+	if len(doc.Content) > 0 {
+		for i := 0; i+1 < len(doc.Content[0].Content); i += 2 {
+			if doc.Content[0].Content[i].Value == "groups" {
+				groups = *doc.Content[0].Content[i+1]
+			}
+		}
+	}
+	var b strings.Builder
+	seen := map[string]bool{reserved: true}
+	for i, g := range file.Groups {
+		if g.Name == "" || len(g.Rules) == 0 {
+			return "", fmt.Errorf("%s: group %d needs a name and rules", MonitoringRulesPath, i+1)
+		}
+		if seen[g.Name] {
+			return "", fmt.Errorf("%s: group name %q is taken: the platform group is named after the service, and names must be unique", MonitoringRulesPath, g.Name)
+		}
+		seen[g.Name] = true
+		out, err := yaml.Marshal(groups.Content[i])
+		if err != nil {
+			return "", err
+		}
+		for j, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+			prefix := "    "
+			if j == 0 {
+				prefix = "  - "
+			}
+			b.WriteString(prefix + line + "\n")
+		}
+	}
+	return b.String(), nil
+}
 
 // MonitoringExample is the thresholds file a project starts from. Its sections and keys
 // are taply's, so the numbers read the same in every project.
@@ -129,12 +203,16 @@ func MonitoringFiles(f *spec.File, project fs.FS) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	own, err := projectRules(project, service)
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string][]byte{
 		MonitoringStack:                                    []byte(strings.ReplaceAll(stackCompose, "{{service}}", service)),
 		monitoringDir + "otel-collector.yaml":              []byte(strings.ReplaceAll(collectorYAML, "{{service}}", service)),
 		monitoringDir + "prometheus.yml":                   []byte(prometheusYAML),
-		monitoringDir + "alerts.yml":                       []byte(alertRules(f.Service(), cfg, enabled)),
+		monitoringDir + "alerts.yml":                       []byte(alertRules(f.Service(), cfg, enabled) + own),
 		monitoringDir + "alertmanager.yml":                 []byte(alertmanagerYAML),
 		monitoringDir + "loki.yaml":                        []byte(lokiYAML),
 		monitoringDir + "tempo.yaml":                       []byte(tempoYAML),
