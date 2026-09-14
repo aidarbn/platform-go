@@ -22,8 +22,11 @@ const FileName = "platformgo.lock"
 
 // Lock is the content of platformgo.lock.
 //
-// The platform version is not repeated here: go.mod already records it.
+// Platform is the version that applied the project last. go.mod says which version the
+// project requires; this says which one has already rewritten it, so the next version
+// knows which codemods are still to run.
 type Lock struct {
+	Platform  string   `yaml:"platform,omitempty"`
 	Modules   []string `yaml:"modules"`   // enabled modules
 	Generated []string `yaml:"generated"` // files owned by generation
 	Tools     []string `yaml:"tools"`     // tools added to go.mod by platformgo
@@ -69,7 +72,7 @@ func Marshal(l Lock) ([]byte, error) {
 }
 
 func (l Lock) normalized() Lock {
-	out := Lock{Modules: uniqSorted(l.Modules), Generated: uniqSorted(l.Generated), Tools: uniqSorted(l.Tools)}
+	out := Lock{Platform: l.Platform, Modules: uniqSorted(l.Modules), Generated: uniqSorted(l.Generated), Tools: uniqSorted(l.Tools)}
 	if out.Modules == nil {
 		out.Modules = []string{}
 	}

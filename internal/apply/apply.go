@@ -18,11 +18,13 @@ import (
 	"strings"
 	"testing/fstest"
 
+	"github.com/aidarbn/platform-go/internal/codemod"
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/gomod"
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
+	"github.com/aidarbn/platform-go/internal/version"
 )
 
 // Plan is what apply would do to a project.
@@ -31,19 +33,23 @@ type Plan struct {
 	Modules []string
 	Diff    lock.Diff
 
-	Create    []string        // files a module needs and the project does not have yet
-	Write     []string        // generated files that differ from the project
-	Delete    []string        // generated files of removed modules
-	Kept      []string        // generated files of removed modules that were edited by hand
-	AddTools  []registry.Tool // tools of enabled modules missing from go.mod
-	DropTools []string        // tools of removed modules still declared in go.mod
-	LockStale bool            // platformgo.lock does not match
+	Create    []string         // files a module needs and the project does not have yet
+	Write     []string         // generated files that differ from the project
+	Delete    []string         // generated files of removed modules
+	Kept      []string         // generated files of removed modules that were edited by hand
+	AddTools  []registry.Tool  // tools of enabled modules missing from go.mod
+	DropTools []string         // tools of removed modules still declared in go.mod
+	LockStale bool             // platformgo.lock does not match
+	Codemods  []codemod.Change // project files rewritten for changes of kit
 
 	dir     string
 	creates map[string][]byte
 	files   map[string][]byte
 	wanted  lock.Lock
 }
+
+// codemods are the rewrites of the platform; tests replace them.
+var codemods = codemod.All
 
 // Build reads the project and computes the plan without changing anything.
 func Build(dir string) (*Plan, error) {
@@ -86,7 +92,12 @@ func Build(dir string) (*Plan, error) {
 	}
 	slices.Sort(p.Modules)
 
-	p.wanted = lock.Lock{Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
+	// Codemods newer than the version that applied the project last.
+	if p.Codemods, err = codemod.Run(dir, codemod.Pending(codemods(), applied.Platform)); err != nil {
+		return nil, err
+	}
+
+	p.wanted = lock.Lock{Platform: version.Platform, Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
 	for _, t := range tools {
 		p.wanted.Tools = append(p.wanted.Tools, t.Package)
 	}
@@ -215,13 +226,16 @@ func lockStale(dir string, wanted lock.Lock) (bool, error) {
 
 // UpToDate reports whether the project already matches its description.
 func (p *Plan) UpToDate() bool {
-	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 &&
+	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 && len(p.Codemods) == 0 &&
 		len(p.AddTools) == 0 && len(p.DropTools) == 0 && !p.LockStale
 }
 
 // Pending lists every path apply would touch, for messages.
 func (p *Plan) Pending() []string {
 	out := slices.Concat(p.Create, p.Write, p.Delete)
+	for _, c := range p.Codemods {
+		out = append(out, c.Path)
+	}
 	if len(p.AddTools) > 0 || len(p.DropTools) > 0 {
 		out = append(out, "go.mod")
 	}
@@ -234,6 +248,11 @@ func (p *Plan) Pending() []string {
 
 // Execute carries out the plan: creates, writes, deletes and records the lock.
 func (p *Plan) Execute() error {
+	for _, c := range p.Codemods {
+		if err := os.WriteFile(filepath.Join(p.dir, c.Path), c.Content, 0o644); err != nil {
+			return fmt.Errorf("codemod: %w", err)
+		}
+	}
 	if _, err := gen.Apply(p.dir, p.creates); err != nil {
 		return err
 	}

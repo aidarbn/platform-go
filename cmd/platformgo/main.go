@@ -442,6 +442,9 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	for _, path := range plan.Delete {
 		fmt.Fprintln(out, del, path)
 	}
+	for _, c := range plan.Codemods {
+		fmt.Fprintf(out, "%s %s: codemod %s\n", write, c.Path, strings.Join(c.Codemods, ", "))
+	}
 	for _, t := range plan.AddTools {
 		fmt.Fprintf(out, "%s tool %s@%s\n", create, t.Package, t.Version)
 	}

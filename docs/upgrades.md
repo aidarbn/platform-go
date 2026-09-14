@@ -1,6 +1,6 @@
 # Upgradability
 
-> **State:** the architecture below is in place — module code in `kit`, generated files rebuilt by `apply`, the lock that cleans up after removed modules. `platformgo upgrade [version]` requires the version in `go.mod`, records it in `platformgo.yaml` and lets the new version run `apply`. Codemods, the upgrade matrix and API compatibility checks are planned.
+> **State:** in place — module code in `kit`, generated files rebuilt by `apply`, the lock that cleans up after removed modules and records the version that applied the project, codemods run by `apply` for every version newer than that, the API compatibility check of `kit` (`scripts/apicheck.sh`, CI job `api`) and the upgrade matrix over the last three releases (`scripts/upgrade-matrix.sh`, CI job `upgrade-matrix`). Config schema migrations are not needed yet: the schema is still 1.
 
 The guarantee rests on three layers: an architecture that leaves almost nothing to upgrade, mechanisms that upgrade the rest, and platform tests that prove an upgrade works before it is released.
 
@@ -39,10 +39,20 @@ checks      go build, go test, platformgo verify
 
 | Check | What it catches |
 |---|---|
-| Upgrade matrix | projects created by the last N minor versions with different module sets are upgraded to the new one; `go build`, `go test`, `verify` and `generate` must be clean. One failing combination blocks the release |
-| `kit` API compatibility | `gorelease` or `apidiff` against the previous tag; a breaking change without a major bump fails CI |
+| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout: `apply` by the new version, `verify`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
+| `kit` API compatibility | `apidiff` against the previous tag. Every run reports the changes; a release tag fails when an incompatible change ships without a new minor version (before v1) or major version (after v1) |
 | Reference projects | demo services in the repository, one per typical module set, always on the latest version |
-| Codemods | before and after tests: the result matches and compiles |
+| Codemods | before and after tests: the result matches, keeps comments and a second run changes nothing |
+
+### Writing a codemod
+
+An incompatible change of `kit` that project code can follow mechanically ships with a codemod in `internal/codemod/all.go`, under the version it is released in:
+
+```go
+codemod.RenameSymbol("v0.3.0", "github.com/aidarbn/platform-go/kit/modules/riverx", "NewQueue", "Queue"),
+```
+
+`apply` runs every codemod newer than the `platform` recorded in `platformgo.lock` and records its own version afterwards, so skipping releases replays the steps in order; `plan` lists the files a codemod would rewrite. Generated files, `vendor` and `testdata` are left alone. Anything beyond a rename is a `Codemod` with its own `Fix`, which edits source ranges through `File.Replace` so comments and layout stay as they were.
 
 ## Version policy
 

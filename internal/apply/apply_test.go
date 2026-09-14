@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aidarbn/platform-go/internal/apply"
+	"github.com/aidarbn/platform-go/internal/codemod"
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/gomod"
 	"github.com/aidarbn/platform-go/internal/lock"
@@ -320,5 +321,55 @@ func TestRBACPolicy(t *testing.T) {
 	p = execute(t, dir)
 	if !slices.Contains(p.Delete, gen.PolicyGoPath) || !exists(dir, gen.PolicyPath) {
 		t.Errorf("delete = %v, policy kept = %v", p.Delete, exists(dir, gen.PolicyPath))
+	}
+}
+
+func TestCodemodsRunOncePerVersion(t *testing.T) {
+	const pkg = "github.com/aidarbn/platform-go/kit/modules/postgres"
+	dir := project(t, withSettings)
+	execute(t, dir)
+	writeFile(t, dir, "internal/store/store.go", "package store\n\nimport \""+pkg+"\"\n\nvar _ = postgres.OldPool\n")
+
+	// Applied by the current version: a codemod of an older one does not run.
+	apply.SetCodemods(t, codemod.RenameSymbol("v0.0.1", pkg, "OldPool", "Pool"))
+	if plan := build(t, dir); len(plan.Codemods) != 0 {
+		t.Fatalf("an old codemod runs again: %+v", plan.Codemods)
+	}
+
+	// A codemod of a version newer than the lock is pending and applied.
+	apply.SetCodemods(t, codemod.RenameSymbol("v99.0.0", pkg, "OldPool", "Pool"))
+	plan := build(t, dir)
+	if plan.UpToDate() || len(plan.Codemods) != 1 || !slices.Contains(plan.Pending(), "internal/store/store.go") {
+		t.Fatalf("codemod not planned: %+v", plan.Codemods)
+	}
+	execute(t, dir)
+	raw, _ := os.ReadFile(filepath.Join(dir, "internal/store/store.go"))
+	if !strings.Contains(string(raw), "postgres.Pool") {
+		t.Errorf("not rewritten:\n%s", raw)
+	}
+	if plan := build(t, dir); !plan.UpToDate() {
+		t.Errorf("not up to date after the codemod: %v", plan.Pending())
+	}
+
+	applied, err := lock.Read(dir)
+	if err != nil || applied.Platform == "" {
+		t.Errorf("the lock does not record the platform: %+v, %v", applied, err)
+	}
+}
+
+func TestProjectWithoutPlatformInLock(t *testing.T) {
+	const pkg = "github.com/aidarbn/platform-go/kit/modules/postgres"
+	dir := project(t, withSettings)
+	execute(t, dir)
+	raw, _ := os.ReadFile(filepath.Join(dir, lock.FileName))
+	old := strings.Join(slices.DeleteFunc(strings.Split(string(raw), "\n"), func(l string) bool { return strings.HasPrefix(l, "platform:") }), "\n")
+	writeFile(t, dir, lock.FileName, old)
+	writeFile(t, dir, "a.go", "package a\n\nimport \""+pkg+"\"\n\nvar _ = postgres.OldPool\n")
+
+	// A lock written before codemods existed runs all of them.
+	apply.SetCodemods(t, codemod.RenameSymbol("v0.0.1", pkg, "OldPool", "Pool"))
+	plan := build(t, dir)
+	if len(plan.Codemods) != 1 || !plan.LockStale {
+		t.Errorf("codemods = %+v, lock stale = %v", plan.Codemods, plan.LockStale)
 	}
 }
