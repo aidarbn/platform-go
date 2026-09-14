@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -127,7 +128,21 @@ func TestSetupWritesCompletion(t *testing.T) {
 	}
 }
 
+// keepGoDirs pins the Go caches before a test moves HOME: otherwise go downloads modules
+// into the temporary home, whose read-only files its cleanup cannot remove.
+func keepGoDirs(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
+		out, err := exec.Command("go", "env", name).Output()
+		if err != nil {
+			t.Fatalf("go env %s: %v", name, err)
+		}
+		t.Setenv(name, strings.TrimSpace(string(out)))
+	}
+}
+
 func TestDoctorFixesProject(t *testing.T) {
+	keepGoDirs(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/zsh")
 	dir := filepath.Join(t.TempDir(), "project")
