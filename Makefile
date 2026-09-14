@@ -25,7 +25,7 @@ apicheck: ## exported API of kit against the latest release
 	scripts/apicheck.sh
 
 upgrade-matrix: ## projects of the last three releases upgraded to this checkout
-	scripts/upgrade-matrix.sh $$(git tag --list 'v*' --sort=-v:refname | head -3)
+	scripts/upgrade-matrix.sh $$(git tag --list 'v*' --no-contains HEAD --sort=-v:refname | head -3)
 
 tidy: ## dependencies
 	go mod tidy
