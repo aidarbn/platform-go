@@ -48,6 +48,9 @@ type Config struct {
 	// empty. Without them a fresh installation has nobody to log in as.
 	BootstrapEmail    string
 	BootstrapPassword string
+
+	// Language of the panel: en or ru.
+	Language string
 }
 
 // Load reads the module settings from environment variables.
@@ -58,7 +61,17 @@ func Load(l *confx.Loader) Config {
 		Insecure:          l.Bool("ADMIN_INSECURE_COOKIES", false),
 		BootstrapEmail:    l.String("ADMIN_BOOTSTRAP_EMAIL", ""),
 		BootstrapPassword: l.String("ADMIN_BOOTSTRAP_PASSWORD", ""),
+		Language:          language(l),
 	}
+}
+
+func language(l *confx.Loader) string {
+	lang := l.String("ADMIN_LANGUAGE", "en")
+	if _, ok := translations[lang]; !ok && lang != "en" {
+		l.Fail(fmt.Errorf("%s=%q: expected en or ru", l.Key("ADMIN_LANGUAGE"), lang))
+		return "en"
+	}
+	return lang
 }
 
 // Page is a project page in the admin panel. It is the extension point: the platform

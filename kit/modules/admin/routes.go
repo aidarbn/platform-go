@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,6 +36,7 @@ type server struct {
 	settings *settingsx.Store
 	pages    []Page
 	tmpl     map[string]*template.Template
+	login    *template.Template
 }
 
 // NewServer builds the panel handler. Everything it needs is passed in, so tests run it
@@ -47,10 +50,12 @@ func NewServer(cfg Config, service string, auth *adminx.Auth, users adminx.UserR
 		auth: auth, users: users, audit: aud, settings: settings, pages: pages,
 		tmpl: make(map[string]*template.Template, len(contentTemplates)),
 	}
+	funcs := template.FuncMap{"t": s.t, "lang": func() string { return s.language() }}
 	for name, content := range contentTemplates {
-		s.tmpl[name] = template.Must(template.New(name).Parse(
+		s.tmpl[name] = template.Must(template.New(name).Funcs(funcs).Parse(
 			pageSrc + auditTableTmpl + `{{define "content"}}` + content + `{{end}}`))
 	}
+	s.login = template.Must(template.New("login").Funcs(funcs).Parse(pageSrc))
 	return s.routes()
 }
 
@@ -101,16 +106,17 @@ func (s *server) guard(roles []string, next http.Handler) http.Handler {
 		// Double submit: the form carries the hash of the token, which a foreign site
 		// cannot read out of the cookie.
 		if r.Method == http.MethodPost && r.FormValue("csrf") != adminx.SessionID(token) {
-			http.Error(w, "the form has expired, open the page again", http.StatusForbidden)
+			http.Error(w, s.t("the form has expired, open the page again"), http.StatusForbidden)
 			return
 		}
 
 		if !user.HasAny(roles) {
 			w.WriteHeader(http.StatusForbidden)
-			s.render(w, r, user, "forbidden", "Not enough rights", nil)
+			s.render(w, r, user, "forbidden", s.t("Not enough rights"), nil)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
+		ctx := context.WithValue(r.Context(), userKey{}, user)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, serverKey{}, s)))
 	})
 }
 
@@ -217,7 +223,7 @@ func (s *server) showIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		data["Audit"] = entries
 	}
-	s.render(w, r, user, "index", "Overview", data)
+	s.render(w, r, user, "index", s.t("Overview"), data)
 }
 
 type settingsGroupView struct {
@@ -229,7 +235,7 @@ type settingsGroupView struct {
 func (s *server) showSettings(w http.ResponseWriter, r *http.Request) {
 	user, _ := UserFrom(r.Context())
 	if s.settings == nil {
-		s.render(w, r, user, "settings", "Business settings", map[string]any{})
+		s.render(w, r, user, "settings", s.t("Business settings"), map[string]any{})
 		return
 	}
 
@@ -241,7 +247,7 @@ func (s *server) showSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		groups = append(groups, settingsGroupView{Name: v.Group, Description: v.GroupDescription, Values: []settingsx.Value{v}})
 	}
-	s.render(w, r, user, "settings", "Business settings", map[string]any{"Groups": groups})
+	s.render(w, r, user, "settings", s.t("Business settings"), map[string]any{"Groups": groups})
 }
 
 func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +268,7 @@ func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, user, adminx.ActionSettingSet, key, fmt.Sprintf("%s → %s", before, value))
-	s.back(w, r, "settings", key+" saved", "")
+	s.back(w, r, "settings", fmt.Sprintf(s.t("%s saved"), key), "")
 }
 
 func (s *server) resetSetting(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +284,7 @@ func (s *server) resetSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, user, adminx.ActionSettingReset, key, "")
-	s.back(w, r, "settings", key+" back to the default", "")
+	s.back(w, r, "settings", fmt.Sprintf(s.t("%s back to the default"), key), "")
 }
 
 func (s *server) showUsers(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +294,7 @@ func (s *server) showUsers(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, user, "users", "Accounts", map[string]any{"Users": users})
+	s.render(w, r, user, "users", s.t("Accounts"), map[string]any{"Users": users})
 }
 
 func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
@@ -310,12 +316,12 @@ func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
 	s.record(r, actor, adminx.ActionUserCreate, created.Email, strings.Join(roles, ", "))
 
 	if !twoFactor {
-		s.back(w, r, "users", created.Email+" added", "")
+		s.back(w, r, "users", fmt.Sprintf(s.t("%s added"), created.Email), "")
 		return
 	}
 	// The secret is shown once and never again: it is not stored anywhere a person can
 	// read it later.
-	s.render(w, r, actor, "secret", "Two factor authentication", map[string]any{
+	s.render(w, r, actor, "secret", s.t("Two factor authentication"), map[string]any{
 		"Email":  created.Email,
 		"Secret": secret,
 		"URI":    adminx.TOTPURI(s.service, created.Email, secret),
@@ -332,7 +338,7 @@ func (s *server) toggleUser(w http.ResponseWriter, r *http.Request) {
 
 	// Disabling your own account would lock you out of the panel.
 	if target.ID == actor.ID {
-		s.back(w, r, "users", "", "you cannot disable your own account")
+		s.back(w, r, "users", "", s.t("you cannot disable your own account"))
 		return
 	}
 
@@ -341,12 +347,12 @@ func (s *server) toggleUser(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "users", "", err.Error())
 		return
 	}
-	state := "enabled"
+	state, message := "enabled", s.t("%s enabled")
 	if target.Disabled {
-		state = "disabled"
+		state, message = "disabled", s.t("%s disabled")
 	}
 	s.record(r, actor, adminx.ActionUserUpdate, target.Email, state)
-	s.back(w, r, "users", target.Email+" "+state, "")
+	s.back(w, r, "users", fmt.Sprintf(message, target.Email), "")
 }
 
 func (s *server) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +363,7 @@ func (s *server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target.ID == actor.ID {
-		s.back(w, r, "users", "", "you cannot delete your own account")
+		s.back(w, r, "users", "", s.t("you cannot delete your own account"))
 		return
 	}
 	if err := s.users.Delete(r.Context(), target.ID); err != nil {
@@ -365,7 +371,7 @@ func (s *server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, actor, adminx.ActionUserDelete, target.Email, "")
-	s.back(w, r, "users", target.Email+" deleted", "")
+	s.back(w, r, "users", fmt.Sprintf(s.t("%s deleted"), target.Email), "")
 }
 
 func (s *server) formUser(r *http.Request) (adminx.User, error) {
@@ -391,7 +397,7 @@ func (s *server) showAudit(w http.ResponseWriter, r *http.Request) {
 	if len(entries) == perPage {
 		data["Next"] = entries[len(entries)-1].ID
 	}
-	s.render(w, r, user, "audit", "Audit log", data)
+	s.render(w, r, user, "audit", s.t("Audit log"), data)
 }
 
 // record writes to the audit log. A failure here must not break the action that has
@@ -451,9 +457,9 @@ func (s *server) render(w http.ResponseWriter, r *http.Request, user adminx.User
 
 func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, next, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	err := loginTemplate.ExecuteTemplate(w, "login", loginData{
+	err := s.login.ExecuteTemplate(w, "login", loginData{
 		Service: s.service,
-		Error:   message,
+		Error:   s.t(message),
 		Next:    next,
 	})
 	if err != nil {
@@ -470,12 +476,12 @@ type loginData struct {
 
 // nav is the menu: the pages of the panel plus the project pages this account may open.
 func (s *server) nav(r *http.Request, user adminx.User) []navItem {
-	items := []navItem{{Title: "Overview", Path: "/"}}
+	items := []navItem{{Title: s.t("Overview"), Path: "/"}}
 	if user.Has(adminx.RoleAdmin) {
 		items = append(items,
-			navItem{Title: "Settings", Path: "/settings"},
-			navItem{Title: "Accounts", Path: "/users"},
-			navItem{Title: "Audit", Path: "/audit"},
+			navItem{Title: s.t("Settings"), Path: "/settings"},
+			navItem{Title: s.t("Accounts"), Path: "/users"},
+			navItem{Title: s.t("Audit"), Path: "/audit"},
 		)
 	}
 	for _, p := range s.pages {
@@ -484,7 +490,7 @@ func (s *server) nav(r *http.Request, user adminx.User) []navItem {
 		}
 	}
 	for i := range items {
-		items[i].Active = items[i].Path == r.URL.Path
+		items[i].Active = items[i].Path == r.URL.Path || (strings.HasSuffix(items[i].Path, "/") && items[i].Path != "/" && strings.HasPrefix(r.URL.Path, items[i].Path))
 	}
 	return items
 }
@@ -560,4 +566,42 @@ func validatePagePath(path string) error {
 		return fmt.Errorf("admin: page path %q is used by the panel itself", path)
 	}
 	return nil
+}
+
+// serverKey carries the panel through the request context of project pages.
+type serverKey struct{}
+
+// CSRFField is the form field every POST form of the panel carries.
+const CSRFField = "csrf"
+
+// CSRFToken returns the value of the CSRF field for a form on a project page.
+func CSRFToken(r *http.Request) string { return adminx.SessionID(sessionToken(r)) }
+
+// Render draws a project page inside the panel: the menu, the account, the banners of
+// ?ok= and ?error=, and the body the project renders.
+func Render(w http.ResponseWriter, r *http.Request, title string, body func(w io.Writer) error) {
+	s, ok := r.Context().Value(serverKey{}).(*server)
+	user, _ := UserFrom(r.Context())
+	if !ok {
+		http.Error(w, "admin: Render is for pages registered with AddPage", http.StatusInternalServerError)
+		return
+	}
+	var buf bytes.Buffer
+	if err := body(&buf); err != nil {
+		s.fail(w, r, fmt.Errorf("admin: page %s: %w", r.URL.Path, err))
+		return
+	}
+	// #nosec G203 -- the body is rendered by the project's own templates, which escape it.
+	s.render(w, r, user, "project", title, map[string]any{"Body": template.HTML(buf.String())})
+}
+
+// Record writes an action of a project page to the audit log: who, what, on what, and
+// what changed, the way the panel records its own actions.
+func Record(r *http.Request, action, target, details string) {
+	s, ok := r.Context().Value(serverKey{}).(*server)
+	if !ok {
+		return
+	}
+	user, _ := UserFrom(r.Context())
+	s.record(r, user, action, target, details)
 }

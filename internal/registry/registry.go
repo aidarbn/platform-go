@@ -199,6 +199,7 @@ var all = []Module{
 			{Key: "ADMIN_INSECURE_COOKIES", Example: "false", Comment: "allow the cookie over plain http: local development only"},
 			{Key: "ADMIN_BOOTSTRAP_EMAIL", Example: "admin@example.com", Comment: "first account, created while there are none"},
 			{Key: "ADMIN_BOOTSTRAP_PASSWORD", Example: "", Comment: "password of the first account"},
+			{Key: "ADMIN_LANGUAGE", Example: "en", Comment: "language of the panel: en or ru"},
 		},
 	},
 	{

@@ -1,7 +1,5 @@
 package admin
 
-import "html/template"
-
 // The panel is server rendered HTML with no external assets: an admin panel must open
 // on a locked down network, and a page that needs a CDN does not.
 //
@@ -9,7 +7,7 @@ import "html/template"
 // cloned once it has executed, and each server parses its own pages.
 const pageSrc = `
 {{define "layout"}}<!doctype html>
-<html lang="en">
+<html lang="{{lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -55,7 +53,7 @@ button:hover { border-color: var(--accent); }
   </nav>
   <form method="post" action="/logout">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <button>Sign out {{.User.Email}}</button>
+    <button>{{t "Sign out"}} {{.User.Email}}</button>
   </form>
 </header>
 <main>
@@ -68,11 +66,11 @@ button:hover { border-color: var(--accent); }
 </html>{{end}}
 
 {{define "login"}}<!doctype html>
-<html lang="en">
+<html lang="{{lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in — {{.Service}}</title>
+<title>{{t "Sign in"}} — {{.Service}}</title>
 <style>
 :root { color-scheme: light dark; --line: #d4d4d8; --bad: #b91c1c; --accent: #2563eb; }
 @media (prefers-color-scheme: dark) { :root { --line: #3f3f46; --bad: #f87171; --accent: #60a5fa; } }
@@ -92,13 +90,13 @@ button:hover { border-color: var(--accent); }
 {{- with .Error}}<p class="banner error">{{.}}</p>{{end}}
 <form method="post">
   <input type="hidden" name="next" value="{{.Next}}">
-  <label for="email">Email</label>
+  <label for="email">{{t "Email"}}</label>
   <input id="email" name="email" type="email" autocomplete="username" autofocus required>
-  <label for="password">Password</label>
+  <label for="password">{{t "Password"}}</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <label for="code">One time code <span class="muted">if enabled</span></label>
+  <label for="code">{{t "One time code"}} <span class="muted">{{t "if enabled"}}</span></label>
   <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code">
-  <button>Sign in</button>
+  <button>{{t "Sign in"}}</button>
 </form>
 </div>
 </body>
@@ -106,30 +104,27 @@ button:hover { border-color: var(--accent); }
 
 `
 
-// loginTemplate is the only page rendered without a session.
-var loginTemplate = template.Must(template.New("admin").Parse(pageSrc))
-
 // Every page is one template that fills the content block of the layout.
 var contentTemplates = map[string]string{
 	"index": `
-<p class="muted">Signed in as {{.User.Email}}{{if .User.Roles}}, roles: {{range $i, $r := .User.Roles}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}{{end}}.</p>
+<p class="muted">{{t "Signed in as"}} {{.User.Email}}{{if .User.Roles}}, {{t "roles"}}: {{range $i, $r := .User.Roles}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}{{end}}.</p>
 <table>
-  <tr><th>Business settings</th><td>{{if .Data.HasSettings}}{{.Data.Settings}} total, {{.Data.Overrides}} changed{{else}}the settings module is off{{end}}</td></tr>
-  <tr><th>Accounts</th><td>{{.Data.Users}}</td></tr>
+  <tr><th>{{t "Business settings"}}</th><td>{{if .Data.HasSettings}}{{t "total"}}: {{.Data.Settings}}, {{t "changed"}}: {{.Data.Overrides}}{{else}}{{t "the settings module is off"}}{{end}}</td></tr>
+  <tr><th>{{t "Accounts"}}</th><td>{{.Data.Users}}</td></tr>
 </table>
-<h2>Recent actions</h2>
+<h2>{{t "Recent actions"}}</h2>
 {{template "audit-table" .Data.Audit}}
 `,
 	"settings": `
-{{if not .Data.Groups}}<p class="muted">The project has no business settings: describe them in settings.yaml.</p>{{end}}
+{{if not .Data.Groups}}<p class="muted">{{t "The project has no business settings: describe them in settings.yaml."}}</p>{{end}}
 {{range .Data.Groups}}
 <h2>{{.Name}}</h2>
 {{with .Description}}<p class="muted">{{.}}</p>{{end}}
 <table>
-  <tr><th>Setting</th><th>Value</th><th>Default</th><th></th></tr>
+  <tr><th>{{t "Setting"}}</th><th>{{t "Value"}}</th><th>{{t "Default"}}</th><th></th></tr>
   {{range .Values}}{{$v := .}}
   <tr>
-    <td><code>{{.Name}}</code>{{with .Title}}<div>{{.}}</div>{{end}}{{with .Description}}<div class="muted">{{.}}</div>{{end}}{{if .RequiresRestart}}<div class="muted">applies after a restart</div>{{end}}</td>
+    <td><code>{{.Name}}</code>{{with .Title}}<div>{{.}}</div>{{end}}{{with .Description}}<div class="muted">{{.}}</div>{{end}}{{if .RequiresRestart}}<div class="muted">{{t "applies after a restart"}}</div>{{end}}</td>
     <td>
       <form method="post" action="/settings/set" class="row">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -144,16 +139,16 @@ var contentTemplates = map[string]string{
         {{else}}
           <input name="value" value="{{.Value}}" size="18">
         {{end}}
-        <button>Save</button>
+        <button>{{t "Save"}}</button>
       </form>
     </td>
-    <td class="muted"><code>{{.Default}}</code>{{if or .Min .Max}}<div>{{with .Min}}min {{.}}{{end}} {{with .Max}}max {{.}}{{end}}</div>{{end}}</td>
+    <td class="muted"><code>{{.Default}}</code>{{if or .Min .Max}}<div>{{with .Min}}{{t "min"}} {{.}}{{end}} {{with .Max}}{{t "max"}} {{.}}{{end}}</div>{{end}}</td>
     <td>
       {{if .Overridden}}
       <form method="post" action="/settings/reset">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="key" value="{{.Key}}">
-        <button>Reset</button>
+        <button>{{t "Reset"}}</button>
       </form>
       {{end}}
     </td>
@@ -164,60 +159,61 @@ var contentTemplates = map[string]string{
 `,
 	"users": `
 <table>
-  <tr><th>Email</th><th>Roles</th><th>Two factor</th><th>State</th><th>Last sign in</th><th></th></tr>
+  <tr><th>{{t "Email"}}</th><th>{{t "Roles"}}</th><th>{{t "Two factor"}}</th><th>{{t "State"}}</th><th>{{t "Last sign in"}}</th><th></th></tr>
   {{range .Data.Users}}
   <tr>
     <td>{{.Email}}</td>
     <td>{{range $i, $r := .Roles}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}</td>
-    <td>{{if .TwoFactor}}on{{else}}<span class="muted">off</span>{{end}}</td>
-    <td>{{if .Disabled}}<span class="muted">disabled</span>{{else}}active{{end}}</td>
-    <td class="muted">{{if .LastLoginAt.IsZero}}never{{else}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{end}}</td>
+    <td>{{if .TwoFactor}}{{t "on"}}{{else}}<span class="muted">{{t "off"}}</span>{{end}}</td>
+    <td>{{if .Disabled}}<span class="muted">{{t "disabled"}}</span>{{else}}{{t "active"}}{{end}}</td>
+    <td class="muted">{{if .LastLoginAt.IsZero}}{{t "never"}}{{else}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{end}}</td>
     <td class="row">
       <form method="post" action="/users/toggle">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="id" value="{{.ID}}">
-        <button>{{if .Disabled}}Enable{{else}}Disable{{end}}</button>
+        <button>{{if .Disabled}}{{t "Enable"}}{{else}}{{t "Disable"}}{{end}}</button>
       </form>
       <form method="post" action="/users/delete">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="id" value="{{.ID}}">
-        <button>Delete</button>
+        <button>{{t "Delete"}}</button>
       </form>
     </td>
   </tr>
   {{end}}
 </table>
 
-<h2>Add an account</h2>
+<h2>{{t "Add an account"}}</h2>
 <form method="post" action="/users/create" class="row">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <input name="email" type="email" placeholder="email" required>
-  <input name="password" type="password" placeholder="password" required>
-  <input name="roles" placeholder="roles, comma separated">
-  <label class="row"><input type="checkbox" name="twofactor" value="1" checked> two factor</label>
-  <button>Add</button>
+  <input name="email" type="email" placeholder="{{t "email"}}" required>
+  <input name="password" type="password" placeholder="{{t "password"}}" required>
+  <input name="roles" placeholder="{{t "roles, comma separated"}}">
+  <label class="row"><input type="checkbox" name="twofactor" value="1" checked> {{t "two factor"}}</label>
+  <button>{{t "Add"}}</button>
 </form>
 `,
 	"secret": `
-<p>The account <strong>{{.Data.Email}}</strong> is created. The secret is shown once: add it to an authenticator app now.</p>
+<p><strong>{{.Data.Email}}</strong>: {{t "the account is created. The secret is shown once: add it to an authenticator app now."}}</p>
 <p class="secret"><code>{{.Data.Secret}}</code></p>
-<p class="muted">Link for a QR code: <code>{{.Data.URI}}</code></p>
-<p><a href="/users">Back to the accounts</a></p>
+<p class="muted">{{t "Link for a QR code"}}: <code>{{.Data.URI}}</code></p>
+<p><a href="/users">{{t "Back to the accounts"}}</a></p>
 `,
 	"audit": `
 {{template "audit-table" .Data.Entries}}
-{{if .Data.Next}}<p><a href="/audit?before={{.Data.Next}}">Older</a></p>{{end}}
+{{if .Data.Next}}<p><a href="/audit?before={{.Data.Next}}">{{t "Older"}}</a></p>{{end}}
 `,
+	"project": `{{.Data.Body}}`,
 	"forbidden": `
-<p>The page needs a role this account does not have.</p>
+<p>{{t "The page needs a role this account does not have."}}</p>
 `,
 }
 
 const auditTableTmpl = `
 {{define "audit-table"}}
-{{if not .}}<p class="muted">No records.</p>{{else}}
+{{if not .}}<p class="muted">{{t "No records."}}</p>{{else}}
 <table>
-  <tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th><th>Address</th></tr>
+  <tr><th>{{t "When"}}</th><th>{{t "Who"}}</th><th>{{t "What"}}</th><th>{{t "Target"}}</th><th>{{t "Details"}}</th><th>{{t "Address"}}</th></tr>
   {{range .}}
   <tr>
     <td class="muted">{{.At.Format "2006-01-02 15:04:05"}}</td>

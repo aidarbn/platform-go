@@ -47,6 +47,18 @@ admin.AddPage(app, admin.Page{
 
 Removing the admin panel means deleting the section and running `apply`.
 
+**Project pages** are registered with `admin.AddPage` and drawn inside the panel: `admin.Render` puts the body the project renders — `html/template`, templ, anything that writes HTML — under the menu, the account and the `?ok=` / `?error=` banners. Forms carry `admin.CSRFField` with `admin.CSRFToken(r)`; `admin.Record(r, action, target, details)` writes to the audit log; `admin.UserFrom(ctx)` tells who is acting. A path ending in `/` takes the whole subtree, so a list and its detail pages are one page.
+
+```go
+admin.AddPage(app, admin.Page{Title: "Customers", Path: "/customers/", Roles: []string{"support"}, Handler: customers})
+
+func (h *Customers) show(w http.ResponseWriter, r *http.Request) {
+	admin.Render(w, r, "Customer", func(w io.Writer) error { return views.Customer(c).Render(r.Context(), w) })
+}
+```
+
+`ADMIN_LANGUAGE` (`en` or `ru`) sets the language of the panel itself.
+
 ## The `monitoring` module
 
 A monitoring stack of the service's own, for a project that has no shared monitoring to join. The module has no Go code: it generates `monitoring/` and leaves the service as it is, because the platform already exposes everything — `/metrics` on the ops port, traces over OTLP, JSON logs with `trace_id`.

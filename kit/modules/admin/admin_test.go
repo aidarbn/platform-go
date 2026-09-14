@@ -37,6 +37,11 @@ type panel struct {
 
 func newPanel(t *testing.T, pages ...admin.Page) *panel {
 	t.Helper()
+	return newPanelWith(t, admin.Config{Insecure: true, SessionTTL: time.Hour}, pages...)
+}
+
+func newPanelWith(t *testing.T, cfg admin.Config, pages ...admin.Page) *panel {
+	t.Helper()
 
 	store := adminx.NewMemoryStore()
 	ctx := context.Background()
@@ -58,7 +63,7 @@ func newPanel(t *testing.T, pages ...admin.Page) *panel {
 	settings := settingsx.NewTestStore(schema, nil)
 
 	handler := admin.NewServer(
-		admin.Config{Insecure: true, SessionTTL: time.Hour},
+		cfg,
 		"shop-api",
 		adminx.NewAuth(store.Users(), store.Sessions(), time.Hour),
 		store.Users(), store.Audit(), settings, pages, nil,
@@ -496,3 +501,49 @@ func TestRegistryRejectsBadPaths(t *testing.T) {
 }
 
 func itoa(id int64) string { return strconv.FormatInt(id, 10) }
+
+// A project page renders inside the panel, carries the CSRF token of its forms and
+// writes to the audit log.
+func TestProjectPageAPI(t *testing.T) {
+	page := admin.Page{Title: "Customers", Path: "/customers/", Roles: []string{"support"}, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			admin.Record(r, "customer.phone_revealed", r.PathValue("id"), "full phone shown")
+			http.Redirect(w, r, "/customers/42?ok=shown", http.StatusSeeOther)
+			return
+		}
+		admin.Render(w, r, "Customer 42", func(w io.Writer) error {
+			_, err := io.WriteString(w, `<form method="post"><input type="hidden" name="`+admin.CSRFField+`" value="`+admin.CSRFToken(r)+`"><button>Reveal</button></form>`)
+			return err
+		})
+	})}
+	p := newPanel(t, page)
+	csrf := p.login("support@example.com", "hunter2")
+
+	code, body := p.get("/customers/42")
+	if code != 200 || !strings.Contains(body, "<h1>Customer 42</h1>") || !strings.Contains(body, `class="on">Customers</a>`) ||
+		!strings.Contains(body, `value="`+csrf+`"`) || !strings.Contains(body, "<button>Reveal</button>") {
+		t.Fatalf("page: %d\n%s", code, body)
+	}
+	resp, body := p.post("/customers/42", url.Values{"csrf": {csrf}})
+	if resp.StatusCode != 200 || !strings.Contains(body, "shown") {
+		t.Errorf("action: %d\n%s", resp.StatusCode, body)
+	}
+	if actions := p.auditActions(); len(actions) == 0 || actions[0] != "customer.phone_revealed" {
+		t.Errorf("audit: %v", actions)
+	}
+}
+
+func TestRussianPanel(t *testing.T) {
+	p := newPanelWith(t, admin.Config{Insecure: true, SessionTTL: time.Hour, Language: "ru"})
+	if code, body := p.get("/login"); code != 200 || !strings.Contains(body, `lang="ru"`) || !strings.Contains(body, "Пароль") {
+		t.Fatalf("login: %d\n%s", code, body)
+	}
+	resp, body := p.post("/login", url.Values{"email": {"admin@example.com"}, "password": {"wrong"}})
+	if !strings.Contains(body, "Неверная почта или пароль.") {
+		t.Errorf("error: %d\n%s", resp.StatusCode, body)
+	}
+	p.login("admin@example.com", "hunter2")
+	if _, body := p.get("/users"); !strings.Contains(body, "Учётные записи") || !strings.Contains(body, "Новая учётная запись") {
+		t.Errorf("users:\n%s", body)
+	}
+}
