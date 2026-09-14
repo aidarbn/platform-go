@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -12,8 +14,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/modules/api"
+	"github.com/aidarbn/platform-go/kit/platform"
 )
 
 // syncBuffer collects log output written from several goroutines.
@@ -230,4 +237,93 @@ func thingID(t *testing.T, body string) string {
 		t.Fatalf("decode: %v\n%s", err, body)
 	}
 	return resp.ID
+}
+
+// An API with its own error contract replaces the error body and the status codes for
+// every error of the gateway, including a body over the limit.
+func TestHTTPErrorHandler(t *testing.T) {
+	var sawTooLarge atomic.Bool
+	extraWire = func(app *platform.App) {
+		api.HTTPErrorHandler(app, func(ctx context.Context, _ *runtime.ServeMux, _ runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
+			code := http.StatusInternalServerError
+			var withStatus *runtime.HTTPStatusError
+			if errors.As(err, &withStatus) {
+				code = withStatus.HTTPStatus
+			} else if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
+				code = http.StatusUnprocessableEntity
+			} else if ok && st.Code() == codes.NotFound {
+				code = http.StatusNotFound
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(code)
+			_ = json.NewEncoder(w).Encode(map[string]any{"request_id": api.RequestID(ctx), "error": map[string]string{"message": status.Convert(err).Message()}})
+		})
+		// A middleware that reads the body itself learns that it is too large.
+		api.UseHTTP(app, func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/echo" && r.Method == http.MethodPut {
+					_, _ = io.ReadAll(r.Body)
+					sawTooLarge.Store(api.BodyTooLarge(r))
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		})
+		api.HandleHTTP(app, "POST /webhooks/in", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		}))
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{MaxRecvSize: 1024})
+
+	contract := func(body string) map[string]any {
+		t.Helper()
+		var v map[string]any
+		if err := json.Unmarshal([]byte(body), &v); err != nil || v["request_id"] == "" || v["error"] == nil {
+			t.Errorf("not the contract body: %s", body)
+		}
+		return v
+	}
+
+	code, body, _ := s.do("POST", "/v1/echo", `{"message_text":""}`, nil)
+	if code != http.StatusUnprocessableEntity {
+		t.Errorf("validation: %d %s", code, body)
+	}
+	contract(body)
+
+	code, body, _ = s.do("GET", "/v1/nowhere", "", nil)
+	if code != http.StatusNotFound {
+		t.Errorf("routing: %d %s", code, body)
+	}
+	contract(body)
+
+	huge := `{"message_text":"` + strings.Repeat("x", 4096) + `"}`
+	code, body, _ = s.do("POST", "/v1/echo", huge, nil)
+	if code != http.StatusRequestEntityTooLarge {
+		t.Errorf("declared too large: %d %s", code, body)
+	}
+	contract(body)
+
+	// A streamed body of unknown length runs over the limit while the gateway decodes it.
+	req, _ := http.NewRequest("POST", "http://"+s.module.HTTPAddr()+"/v1/echo", io.MultiReader(strings.NewReader(huge)))
+	req.ContentLength = -1
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("streamed too large: %d %s", resp.StatusCode, raw)
+	}
+	contract(string(raw))
+
+	// Plain routes keep the plain 413; the middleware sees the flag.
+	if code, _, _ := s.do("POST", "/webhooks/in", huge, nil); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("plain route: %d", code)
+	}
+	if code, _, _ := s.do("PUT", "/v1/echo", huge, nil); code != http.StatusNoContent || !sawTooLarge.Load() {
+		t.Errorf("middleware: %d, too large = %v", code, sawTooLarge.Load())
+	}
 }

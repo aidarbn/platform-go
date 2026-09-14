@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -137,19 +139,112 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// limitBody refuses a body over the limit: at once with 413 when the length is declared,
-// and when a streamed body runs over it, by failing the read.
+// bodyLimitKey keeps the state of the body limit in the request context.
+type bodyLimitKey struct{}
+
+type bodyLimit struct {
+	limit    int64
+	exceeded atomic.Bool
+}
+
+// BodyTooLarge reports whether the request body is over API_MAX_RECV_SIZE: declared
+// larger, or found larger while it was read. A project middleware that reads the body
+// itself, such as a signature check, answers 413 when it is.
+func BodyTooLarge(r *http.Request) bool {
+	state, ok := r.Context().Value(bodyLimitKey{}).(*bodyLimit)
+	return ok && state.exceeded.Load()
+}
+
+// limitBody caps the body. It does not answer itself, so the gateway can write the error
+// in the format of the API: a body declared over the limit fails on the first read, and
+// the routes and the gateway turn that into 413.
 func limitBody(limit int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > limit {
-			http.Error(w, fmt.Sprintf("the request body is over %d bytes", limit), http.StatusRequestEntityTooLarge)
-			return
-		}
-		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		state := &bodyLimit{limit: limit}
+		r = r.WithContext(context.WithValue(r.Context(), bodyLimitKey{}, state))
+		switch {
+		case r.ContentLength > limit:
+			state.exceeded.Store(true)
+			r.Body = io.NopCloser(errReader{&http.MaxBytesError{Limit: limit}})
+		case r.Body != nil:
+			r.Body = &limitedBody{ReadCloser: http.MaxBytesReader(w, r.Body, limit), state: state}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// limitedBody remembers that the reader ran over the limit.
+type limitedBody struct {
+	io.ReadCloser
+	state *bodyLimit
+}
+
+func (b *limitedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		b.state.exceeded.Store(true)
+	}
+	return n, err
+}
+
+func tooLargeMessage(r *http.Request) string {
+	var limit int64
+	if state, ok := r.Context().Value(bodyLimitKey{}).(*bodyLimit); ok {
+		limit = state.limit
+	}
+	return fmt.Sprintf("the request body is over %d bytes", limit)
+}
+
+func tooLargeError(r *http.Request) error {
+	return &runtime.HTTPStatusError{
+		HTTPStatus: http.StatusRequestEntityTooLarge,
+		Err:        status.Error(codes.InvalidArgument, tooLargeMessage(r)),
+	}
+}
+
+// refuseTooLarge answers a plain route with 413 before its handler runs.
+func refuseTooLarge(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if BodyTooLarge(r) {
+			http.Error(w, tooLargeMessage(r), http.StatusRequestEntityTooLarge)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// gatewayTooLarge refuses a gateway call whose body is declared over the limit, even when
+// the method reads no body, through the error handler of the API.
+func (m *Module) gatewayTooLarge(gateway *runtime.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if BodyTooLarge(r) {
+			_, out := runtime.MarshalerForRequest(gateway, r)
+			runtime.HTTPError(r.Context(), gateway, out, w, r, tooLargeError(r))
+			return
+		}
+		gateway.ServeHTTP(w, r)
+	})
+}
+
+// gatewayErrors is the error handler of the gateway: the project's, or the default one.
+// A body that ran over the limit while the gateway decoded it becomes 413 first.
+func (m *Module) gatewayErrors() runtime.ErrorHandlerFunc {
+	handler := m.registry.errorHandler
+	if handler == nil {
+		handler = runtime.DefaultHTTPErrorHandler
+	}
+	return func(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
+		var withStatus *runtime.HTTPStatusError
+		if BodyTooLarge(r) && !errors.As(err, &withStatus) {
+			err = tooLargeError(r)
+		}
+		handler(ctx, mux, marshaler, w, r, err)
+	}
 }
 
 // cors lets browsers on the allowed origins call the REST API. Patterns follow taply:
@@ -413,7 +508,7 @@ func routingError(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.
 	case http.StatusNotFound:
 		err = status.Errorf(codes.NotFound, "%s %s: route not found", r.Method, r.URL.Path)
 	}
-	runtime.DefaultHTTPErrorHandler(ctx, mux, marshaler, w, r, err)
+	runtime.HTTPError(ctx, mux, marshaler, w, r, err)
 }
 
 // docsPage renders the OpenAPI description with Scalar. The page loads the renderer

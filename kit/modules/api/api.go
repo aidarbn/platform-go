@@ -137,6 +137,7 @@ type Registry struct {
 	idemUser     func(context.Context) string
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
+	errorHandler runtime.ErrorHandlerFunc
 }
 
 type route struct {
@@ -239,6 +240,15 @@ func HandleHTTP(app *platform.App, pattern string, h http.Handler) {
 func UseHTTP(app *platform.App, mw func(http.Handler) http.Handler) {
 	r := registry(app)
 	r.add(func() { r.middleware = append(r.middleware, mw) })
+}
+
+// HTTPErrorHandler replaces how the REST side writes an error, for an API whose contract
+// has its own error body. It receives every error of the gateway: from the handlers,
+// from request decoding and routing, and a body over the limit as a
+// *runtime.HTTPStatusError with 413. A later call replaces an earlier one.
+func HTTPErrorHandler(app *platform.App, h runtime.ErrorHandlerFunc) {
+	r := registry(app)
+	r.add(func() { r.errorHandler = h })
 }
 
 // Option configures the module.
@@ -410,7 +420,7 @@ func (m *Module) Start(ctx context.Context) error {
 
 	gwCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	m.gwCancel = cancel
-	gateway := newGateway()
+	gateway := newGateway(m.gatewayErrors())
 	for _, s := range m.registry.services {
 		if s.Gateway == nil {
 			continue
@@ -503,7 +513,7 @@ func (m *Module) recordMethods() {
 func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	mux := http.NewServeMux()
 	for _, r := range m.registry.routes {
-		mux.Handle(r.pattern, withRoute(r.pattern, r.handler))
+		mux.Handle(r.pattern, withRoute(r.pattern, refuseTooLarge(r.handler)))
 	}
 	if m.cfg.Docs && m.openapi != nil {
 		if spec, err := fs.ReadFile(m.openapi, "openapi.yaml"); err == nil {
@@ -514,7 +524,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 			mux.Handle("GET /docs", withRoute("/docs", http.HandlerFunc(docsPage)))
 		}
 	}
-	mux.Handle("/", gateway)
+	mux.Handle("/", m.gatewayTooLarge(gateway))
 
 	// From the inside out: project middleware and the body limit around the routes,
 	// recovery inside the metrics and the access log so a panic is counted as a 500,
@@ -538,7 +548,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 // newGateway configures the REST side: snake_case JSON as in the proto files, every
 // field present in responses, unknown request fields ignored so old clients keep
 // working, and request headers forwarded to the gRPC handlers as metadata.
-func newGateway() *runtime.ServeMux {
+func newGateway(errors runtime.ErrorHandlerFunc) *runtime.ServeMux {
 	json := &runtime.JSONPb{
 		MarshalOptions:   protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true},
 		UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
@@ -547,6 +557,7 @@ func newGateway() *runtime.ServeMux {
 		runtime.WithMarshalerOption(runtime.MIMEWildcard, json),
 		runtime.WithMarshalerOption("multipart/form-data", newMultipartMarshaler(json)),
 		runtime.WithIncomingHeaderMatcher(forwardHeader),
+		runtime.WithErrorHandler(errors),
 		runtime.WithRoutingErrorHandler(routingError),
 		runtime.WithMetadata(annotateRoute),
 	)
