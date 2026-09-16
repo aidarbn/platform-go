@@ -433,6 +433,15 @@ func newHTTPMetrics(reg *prometheus.Registry) (*httpMetrics, error) {
 	return m, nil
 }
 
+// loggedPath keeps the path out of the log when a route matched: the route already says
+// which handler ran, and path segments may be secrets.
+func loggedPath(path, route string) string {
+	if route == "" || route == "unknown" {
+		return path
+	}
+	return route
+}
+
 // observe records metrics and the access log. The route is the template, never the
 // concrete path: a path label per order id would grow without bound, and scanners
 // hitting random paths all count as unknown.
@@ -466,7 +475,11 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 			return
 		}
 		attrs := []any{
-			"method", r.Method, "path", r.URL.Path, "route", route, "status", sw.status,
+			// The route template, not the concrete path: a path can carry a secret — the
+			// token of a link that is itself the credential — and the access log ends up in
+			// the log store. The raw path is logged only when no route matched, where there
+			// is no secret to leak and the path is the whole point (scanners, typos).
+			"method", r.Method, "path", loggedPath(r.URL.Path, route), "route", route, "status", sw.status,
 			"duration", took, "ip", ClientIP(r.Context()), "request_id", RequestID(r.Context()),
 			"user_agent", r.UserAgent(), "request_size", r.ContentLength, "response_size", sw.size,
 		}

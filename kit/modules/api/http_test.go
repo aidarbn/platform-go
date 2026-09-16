@@ -245,9 +245,14 @@ func TestHTTPMetricsAndAccessLog(t *testing.T) {
 	}
 
 	logs := s.logs.String()
+	if strings.Contains(logs, `"path":"/webhooks/ping?`) {
+		t.Error("the access log keeps the raw path of a matched route")
+	}
 	for _, want := range []string{
 		`"msg":"http request"`, `"route":"/v1/echo"`, `"status":400`, `"req_body":"{\"message_text\":\"\"}"`,
 		`"path":"/wp-login.php"`, `"route":"unknown"`,
+		// A matched route never puts the concrete path in the log: it may carry a token.
+		`"path":"/v1/echo"`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs lack %s", want)
