@@ -186,7 +186,7 @@ message CreateOrderRequest {
 }
 ```
 
-`make generate` runs buf with the plugins pinned in `go.mod` by `apply` (buf, protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway, protoc-gen-connect-openapi): Go code into `internal/api/gen`, an OpenAPI 3.1 description with the protovalidate rules into `api/openapi/openapi.yaml`. `verify` generates into a scratch directory and fails when the committed code is stale.
+`make generate` runs buf with the plugins pinned in `go.mod` by `apply` (buf, protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway, protoc-gen-connect-openapi): Go code into `internal/api/gen`, an OpenAPI 3.1 description with the protovalidate rules into `api/openapi/openapi.yaml`. The human part of that description — title, intro, tags, security scheme — lives in `api/openapi/base.yaml`, created once on `apply` and owned by the project from then on: only the project knows what to tell the reader of its API, and the proto files cannot say it. Tags and operation ids use the short service name. `verify` generates into a scratch directory and fails when the committed code is stale.
 
 The handler is registered from `wire.go`:
 

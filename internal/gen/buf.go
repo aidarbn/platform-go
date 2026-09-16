@@ -12,6 +12,12 @@ const (
 	BufGenPath  = "buf.gen.yaml"
 	OpenAPIPath = "api/openapi/openapi.gen.go"
 
+	// OpenAPIBasePath holds the human part of the API description — title, intro, tags,
+	// security scheme. The generator fills the rest from the proto files; this file is
+	// created once and belongs to the project, because only the project knows what to
+	// tell the reader of its API.
+	OpenAPIBasePath = "api/openapi/base.yaml"
+
 	// APIGenDir is where the Go code of the proto files is generated.
 	APIGenDir = "internal/api/gen"
 )
@@ -64,6 +70,40 @@ plugins:
       - features=google.api.http;protovalidate;gnostic
       - with-proto-names
       - path=openapi.yaml
+      # The human part of the description: title, intro, tags, security scheme.
+      - base=api/openapi/base.yaml
+      # Tags and operation ids by the short service name: damdala.onec.v1.OnecService
+      # reads as noise in the docs page, OnecService does not.
+      - short-service-tags
+      - short-operation-ids
+`
+
+// OpenAPIBaseExample is the starting point of the description: the generator never
+// touches it again, so the project can say what its API is for.
+const OpenAPIBaseExample = `# The human part of the API description: the generator fills paths and schemas from the
+# proto files and merges them into this file. Says what the API is for, who may call it
+# and how it authenticates — the proto files cannot say that.
+openapi: 3.1.0
+info:
+  title: {{service}} API
+  version: "1.0.0"
+  description: |
+    Что это за API, кому он выдан и чем закрыт.
+
+    Опишите здесь правила, общие для всех методов: авторизацию, лимиты, повторы,
+    формат ошибок. Читатель этой страницы — разработчик на стороне клиента.
+servers:
+  - url: https://{{service}}.example.com
+    description: продуктив
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Токен на каждый запрос.
 `
 
 const openapiGo = header + `

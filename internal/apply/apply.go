@@ -144,6 +144,15 @@ func ownedFiles(dir string, f *spec.File) (map[string][]byte, error) {
 			out[gen.MonitoringRulesPath] = []byte(gen.MonitoringRulesExample)
 		}
 	}
+	if _, ok := f.Modules["api"]; ok {
+		missing, err := notExists(filepath.Join(dir, gen.OpenAPIBasePath))
+		if err != nil {
+			return nil, err
+		}
+		if missing {
+			out[gen.OpenAPIBasePath] = []byte(strings.ReplaceAll(gen.OpenAPIBaseExample, "{{service}}", f.Project.Service))
+		}
+	}
 	if _, ok := f.Modules["rbac"]; ok {
 		missing, err := notExists(filepath.Join(dir, gen.PolicyPath))
 		if err != nil {
