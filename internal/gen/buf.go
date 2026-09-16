@@ -81,9 +81,10 @@ plugins:
       - path=openapi.yaml
       # The human part of the description: title, intro, tags, security scheme.
       - base=api/openapi/base.yaml
-      # Tags and operation ids by the short service name: damdala.onec.v1.OnecService
-      # reads as noise in the docs page, OnecService does not.
-      - short-service-tags
+      # Sections in the docs page come from gnostic tags in the proto and their
+      # descriptions from the base file; the service itself is not a section, or every
+      # method would be listed twice.
+      - without-default-tags
       - short-operation-ids
 `
 
