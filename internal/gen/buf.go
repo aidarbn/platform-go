@@ -30,6 +30,10 @@ modules:
 deps:
   - buf.build/googleapis/googleapis
   - buf.build/bufbuild/protovalidate
+  # OpenAPI annotations: a method or a message uses them for the things the contract
+  # itself cannot say — sections, titles, examples. The generator reads them already
+  # (features=...;gnostic), so the dependency is here from the start.
+  - buf.build/gnostic/gnostic
 lint:
   use: [STANDARD]
 breaking:
