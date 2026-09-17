@@ -180,3 +180,44 @@ func TestProtosSkipPlatformFiles(t *testing.T) {
 		t.Errorf("protos = %v", got)
 	}
 }
+
+// buf.lock is resolved again whenever it pins a different set of dependencies than
+// buf.yaml declares — an upgrade that adds one must not leave a lock without it.
+func TestBufLockFollowsDependencies(t *testing.T) {
+	const config = "version: v2\ndeps:\n  - buf.build/googleapis/googleapis\n  - buf.build/gnostic/gnostic\n"
+	pin := func(names ...string) string {
+		out := "version: v2\ndeps:\n"
+		for _, n := range names {
+			out += "  - name: " + n + "\n    commit: 0123\n    digest: b5:abc\n"
+		}
+		return out
+	}
+	cases := []struct {
+		name   string
+		lock   string // "" — no buf.lock
+		update bool
+	}{
+		{"no lock", "", true},
+		{"same set in another order", pin("buf.build/gnostic/gnostic", "buf.build/googleapis/googleapis"), false},
+		{"dependency added to buf.yaml", pin("buf.build/googleapis/googleapis"), true},
+		{"dependency removed from buf.yaml", pin("buf.build/googleapis/googleapis", "buf.build/gnostic/gnostic", "buf.build/bufbuild/protovalidate"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+			write(t, dir, "buf.yaml", config)
+			if tc.lock != "" {
+				write(t, dir, "buf.lock", tc.lock)
+			}
+			calls := fakeBuf(t, pbFile)
+			if err := codegen.Buf(context.Background(), dir, io.Discard); err != nil {
+				t.Fatalf("Buf: %v", err)
+			}
+			updated := slices.ContainsFunc(*calls, func(args []string) bool { return slices.Contains(args, "update") })
+			if updated != tc.update {
+				t.Errorf("dep update called = %v, want %v (calls %v)", updated, tc.update, *calls)
+			}
+		})
+	}
+}
