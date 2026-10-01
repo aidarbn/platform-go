@@ -47,6 +47,7 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 - **Modules** are declared in `platformgo.yaml` and applied with `platformgo apply` at any time. A project holds two kinds of platform files: generated ones (wiring, compose, `.env.example`, `db/sqlc.yaml`, `buf.gen.yaml`, typed settings) are rebuilt by `generate` and removed with their module; owned ones (`main.go`, `wire.go`, Makefile, Dockerfile, CI, `settings.yaml`) are created once and belong to the project.
 - **`platformgo.lock`** records what has been applied — modules, generated files, tools added to `go.mod` — which is what lets `apply` clean up after a removed module. The platform version lives in `go.mod`.
 - **Libraries** of the platform live in `github.com/aidarbn/platform-go/kit/...`; modules in a project stay a thin layer on top of them.
+  Libraries a project may also import directly: `kit/logx` (logger, alerts from log lines), `kit/confx` (environment), `kit/webx` (pages), `kit/cryptox` (field encryption, blind indexes, tokens stored as hashes).
 
 ## Documentation
 
