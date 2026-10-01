@@ -4,7 +4,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 
 | Module | What it gives the project |
 |---|---|
-| **core** (always) | settings from the environment, slog, `/metrics`, `/health`, graceful shutdown, tracing, profiling, Makefile, Dockerfile, linters, CI |
+| **core** (always) | settings from the environment, slog, alerts from log lines, `/metrics`, `/health`, graceful shutdown, tracing, profiling, Makefile, Dockerfile, linters, CI |
 | **postgres** | pgx pool, goose migrations, application migrations, database in docker-compose, query generation (sqlc and jet) |
 | **river** | queues, periodic jobs, workers, riverui, test helpers |
 | **api** | gRPC server with an interceptor chain, REST gateway, multipart, OpenAPI 3.1, documentation page |
@@ -447,6 +447,13 @@ One binary, split by `APP_ROLE`, the way taply runs API and worker instances:
 Every role runs the same `wireDomain`: services, pages and workers are registered everywhere, and each module decides what to start. `/health` and `/metrics` are served in every role.
 
 **Tracing** follows taply: with `OTEL_EXPORTER_OTLP_ENDPOINT` set, spans go over OTLP gRPC to a collector — the one of the `monitoring` module or of an external agent; W3C `traceparent` and baggage carry the trace in and out. The gRPC server and the HTTP side are instrumented and the gateway passes the trace to gRPC, so a REST call is one trace; log lines written with a context carry `trace_id` and `span_id`. Without the variable nothing is exported, yet an incoming trace still continues. Sampling and the exporter follow the standard `OTEL_*` variables.
+
+**Alerts** are ordinary log lines. A use case that needs someone's attention logs with the `alert` attribute (`logx.AlertKey`) set to the kind of the problem, and the platform counts the line in `app_alerts_total{kind}` — whichever logger derived from `app.Logger()` wrote it and whatever `LOG_LEVEL` is. `app.DeclareAlerts(kinds...)` in `wireDomain` starts the known kinds at zero, so `increase()` sees the first alert after a restart. The alert rules on the counter belong to the project: which kinds page someone is its decision.
+
+```go
+app.DeclareAlerts("pool_empty", "code_send_failed")
+log.ErrorContext(ctx, "the card pool is empty", logx.AlertKey, "pool_empty")
+```
 
 Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
 

@@ -1,8 +1,10 @@
 package platform_test
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/aidarbn/platform-go/kit/logx"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
 
@@ -78,5 +80,31 @@ func TestMetricsRegistry(t *testing.T) {
 	}
 	if len(families) == 0 {
 		t.Error("want Go and process metrics out of the box")
+	}
+}
+
+func TestAlertsCounted(t *testing.T) {
+	app := platform.NewApp(nil)
+	app.DeclareAlerts("pool_empty", "code_send_failed")
+
+	app.Logger().With("module", "registration").Error("send failed", logx.AlertKey, "code_send_failed")
+	app.Logger().Error("unknown reason", logx.AlertKey, "unknown_reason")
+
+	got := map[string]float64{}
+	families, err := app.Metrics().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() != "app_alerts_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			got[m.GetLabel()[0].GetValue()] = m.GetCounter().GetValue()
+		}
+	}
+	want := map[string]float64{"pool_empty": 0, "code_send_failed": 1, "unknown_reason": 1}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("app_alerts_total = %v, want %v: the discarding logger still counts, declared kinds start at zero", got, want)
 	}
 }

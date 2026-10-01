@@ -9,6 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+
+	"github.com/aidarbn/platform-go/kit/logx"
 )
 
 // App is the application container: logger, metrics, health checks and the values
@@ -21,6 +23,7 @@ type App struct {
 	role    string
 	log     *slog.Logger
 	metrics *prometheus.Registry
+	alerts  *prometheus.CounterVec
 
 	mu     sync.RWMutex
 	values map[reflect.Type]any
@@ -44,12 +47,18 @@ func NewApp(log *slog.Logger) *App {
 func newApp(service string, log *slog.Logger) *App {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	alerts := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "app", Name: "alerts_total",
+		Help: "Log lines that raised an alert (the logx.AlertKey attribute), by kind.",
+	}, []string{"kind"})
+	reg.MustRegister(alerts)
 
 	return &App{
 		service: service,
 		role:    RoleAll,
-		log:     log,
+		log:     slog.New(logx.Alerts(log.Handler(), func(kind string) { alerts.WithLabelValues(kind).Inc() })),
 		metrics: reg,
+		alerts:  alerts,
 		values:  make(map[reflect.Type]any),
 	}
 }
@@ -65,11 +74,22 @@ func (a *App) Role() string { return a.role }
 // checks worker.
 func (a *App) Serves(role string) bool { return a.role == RoleAll || a.role == role }
 
-// Logger returns the application logger.
+// Logger returns the application logger. Lines carrying logx.AlertKey are counted in
+// app_alerts_total, whichever module or use case writes them.
 func (a *App) Logger() *slog.Logger { return a.log }
 
 // Metrics returns the registry served at /metrics.
 func (a *App) Metrics() *prometheus.Registry { return a.metrics }
+
+// DeclareAlerts starts the series of app_alerts_total at zero for the given kinds.
+// increase() does not see the first sample of a new series, so without it the first
+// alert of each kind after a restart would never fire. The project calls it with every
+// kind it raises; a kind that is not declared is still counted.
+func (a *App) DeclareAlerts(kinds ...string) {
+	for _, kind := range kinds {
+		a.alerts.WithLabelValues(kind)
+	}
+}
 
 // AddHealthCheck registers a check for /health. Modules need not call it: the platform
 // adds a check for every module implementing HealthChecker.
