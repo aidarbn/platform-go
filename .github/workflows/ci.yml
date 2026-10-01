@@ -36,7 +36,7 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1 server /data
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
           for i in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/ready && exit 0; sleep 1; done
           docker logs minio; exit 1
       - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
