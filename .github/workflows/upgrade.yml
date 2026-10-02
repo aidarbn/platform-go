@@ -15,10 +15,11 @@ name: platform upgrade
 # generated files, pinned tools, codemods, the lock. Nothing happens when the project
 # is already on the latest release.
 #
-# A pull request opened with the workflow token starts no workflows (a GitHub rule
-# against loops), so the project CI is started on the branch by workflow_dispatch and
-# its checks show up on the pull request. With the `token` secret — a token that may
-# start workflows — the pull request starts CI the usual way.
+# The CI run of a pull request opened with the workflow token waits for approval (a
+# GitHub rule against loops); the workflow approves it, so the checks show up on the
+# pull request. When approval is not allowed, the project CI is started on the branch
+# by workflow_dispatch and reports on the commit. With the `token` secret — a token
+# that may start workflows — the pull request starts CI the usual way.
 
 on:
   workflow_call:
@@ -154,10 +155,37 @@ jobs:
             }
             core.notice(`pull request: ${pr.html_url}`);
 
-            if (HAS_TOKEN !== 'true' && CI_WORKFLOW) {
-              try {
-                await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: CI_WORKFLOW, ref: BRANCH });
-              } catch (e) {
-                core.warning(`${CI_WORKFLOW} was not started (${e.message}): it needs a workflow_dispatch trigger`);
+            if (HAS_TOKEN === 'true' || !CI_WORKFLOW) return;
+
+            // A pull request opened by the workflow token gets its CI run created but
+            // waiting for approval, like one from a first time contributor. Approving it
+            // is what makes the checks show up on the pull request; when that is not
+            // allowed, CI is started on the branch instead and reports on the commit.
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            for (let i = 0; i < 12; i++) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: CI_WORKFLOW, branch: BRANCH, event: 'pull_request', head_sha: pr.head.sha,
+              });
+              const waiting = runs.data.workflow_runs.filter((r) => r.conclusion === 'action_required' || r.status === 'waiting');
+              if (waiting.length > 0) {
+                try {
+                  for (const r of waiting) await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve', { owner, repo, run_id: r.id });
+                  core.notice(`approved ${CI_WORKFLOW} on the pull request`);
+                  return;
+                } catch (e) {
+                  core.warning(`could not approve the CI run (${e.message}); starting it on the branch`);
+                  break;
+                }
               }
+              if (runs.data.workflow_runs.some((r) => r.status !== 'completed')) {
+                core.notice(`${CI_WORKFLOW} already runs on the pull request`);
+                return;
+              }
+              await sleep(5000);
+            }
+            try {
+              await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: CI_WORKFLOW, ref: BRANCH });
+              core.notice(`${CI_WORKFLOW} started on ${BRANCH}; its checks are on the commit`);
+            } catch (e) {
+              core.warning(`${CI_WORKFLOW} was not started (${e.message}): it needs a workflow_dispatch trigger`);
             }

@@ -42,7 +42,7 @@ A project created by the platform has `.github/workflows/platform-upgrade.yml`. 
 1. `platformgo upgrade latest`; a project already on the latest release ends here;
 2. build, vet and `platformgo verify` — the checks that need no database;
 3. the result goes to a branch and a pull request against the base branch, a draft when the checks failed; a later release replaces the branch;
-4. the project CI is started on the branch through `workflow_dispatch`, because a pull request opened with the workflow token starts no workflows. With a `token` secret that may start workflows the pull request starts CI by itself.
+4. the CI run of the pull request waits for approval, because the pull request was opened with the workflow token; the workflow approves it, and the checks show up on the pull request. When approval is not allowed, it starts the project CI on the branch through `workflow_dispatch` instead, and the checks land on the commit. With a `token` secret that may start workflows the pull request starts CI by itself.
 
 The calling file belongs to the project, so the runner, the base branch and the naming are the project's:
 
