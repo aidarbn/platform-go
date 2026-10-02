@@ -1,4 +1,4 @@
-.PHONY: help test test-db lint fmt tidy ci proto-test apicheck upgrade-matrix
+.PHONY: help test test-db lint fmt tidy ci proto-test apicheck upgrade-matrix release
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-10s %s\n", $$1, $$2}'
@@ -31,3 +31,6 @@ tidy: ## dependencies
 	go mod tidy
 
 ci: lint test ## what CI runs
+
+release: ## release a version: make release VERSION=v0.6.0
+	scripts/release.sh $(VERSION)

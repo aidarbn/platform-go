@@ -70,3 +70,11 @@ Copyright 2026 Aidar Babanov.
 The platform code — the `platformgo` tool and the `kit` libraries — is distributed under the [Apache 2.0](LICENSE) license.
 
 Code that `platformgo` creates inside your project (templates, examples, generated files) belongs to your project: use it, change it and distribute it without any conditions, including without keeping license notices.
+
+## Releasing
+
+```sh
+make release VERSION=v0.6.0
+```
+
+A released binary takes its version from the module it was built from — `go install`, `go run` at a version and `go tool platformgo` inside a project — and writes it into `platformgo.yaml`, `go.mod` and `platformgo.lock`. Only a build from a checkout falls back to `version.Fallback`; `make release` bumps it, runs the checks, commits, tags and pushes, and CI fails a tag that does not match it.

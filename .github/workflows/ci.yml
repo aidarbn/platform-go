@@ -56,6 +56,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # A build from a checkout reports version.Fallback; a tag that left it behind
+      # would stamp the previous version into projects made from source.
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: grep -q "const Fallback = \"$GITHUB_REF_NAME\"" internal/version/version.go || { echo "::error::internal/version Fallback is not $GITHUB_REF_NAME, release with make release"; exit 1; }
       - if: startsWith(github.ref, 'refs/tags/')
         run: scripts/apicheck.sh "" "$GITHUB_REF_NAME"
       - if: ${{ !startsWith(github.ref, 'refs/tags/') }}

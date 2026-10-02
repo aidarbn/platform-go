@@ -97,7 +97,7 @@ func Build(dir string) (*Plan, error) {
 		return nil, err
 	}
 
-	p.wanted = lock.Lock{Platform: version.Platform, Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
+	p.wanted = lock.Lock{Platform: version.Platform(), Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
 	for _, t := range tools {
 		p.wanted.Tools = append(p.wanted.Tools, t.Package)
 	}

@@ -40,7 +40,7 @@ func (o *Options) setDefaults() {
 		o.GoVersion = "1.27"
 	}
 	if o.Require == "" {
-		o.Require = version.Platform
+		o.Require = version.Platform()
 	}
 	slices.Sort(o.Modules)
 }
