@@ -57,7 +57,6 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 30
     env:
-      GH_TOKEN: ${{ secrets.token || github.token }}
       MODULE: github.com/aidarbn/platform-go
     steps:
       - uses: actions/checkout@v7
@@ -94,17 +93,14 @@ jobs:
           go vet ./...
           go tool platformgo verify
 
-      - name: Pull request
+      - name: Branch
+        id: branch
         if: steps.upgrade.outputs.changed == 'true'
         env:
           FROM: ${{ steps.upgrade.outputs.from }}
           TO: ${{ steps.upgrade.outputs.to }}
-          BASE: ${{ inputs.base || github.event.repository.default_branch }}
-          CHECKS: ${{ steps.checks.outcome }}
           TITLE_TEMPLATE: ${{ inputs.title }}
           BRANCH: ${{ inputs.branch-prefix }}${{ steps.upgrade.outputs.to }}
-          CI_WORKFLOW: ${{ inputs.ci-workflow }}
-          HAS_TOKEN: ${{ secrets.token != '' }}
         run: |
           title=${TITLE_TEMPLATE//\{from\}/$FROM}
           title=${title//\{to\}/$TO}
@@ -115,27 +111,53 @@ jobs:
           git commit -m "$title"
           # The branch belongs to the workflow: a rerun replaces it with a fresh upgrade.
           git push --force origin "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
 
-          if [ "$CHECKS" = success ]; then
-            checks="build, vet and \`platformgo verify\` pass"
-          else
-            checks="**build, vet or \`platformgo verify\` failed** — see the workflow run; the pull request is a draft"
-          fi
-          body="Platform upgrade $FROM → $TO by \`platformgo upgrade\`: generated files, pinned tools, codemods and the lock come from the new version.
+      # The GitHub API through github-script rather than the gh command: it needs nothing
+      # on the runner beyond what every runner has, and self-hosted runners often lack gh.
+      - name: Pull request
+        if: steps.upgrade.outputs.changed == 'true'
+        uses: actions/github-script@v8
+        env:
+          FROM: ${{ steps.upgrade.outputs.from }}
+          TO: ${{ steps.upgrade.outputs.to }}
+          BASE: ${{ inputs.base || github.event.repository.default_branch }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          TITLE: ${{ steps.branch.outputs.title }}
+          CHECKS: ${{ steps.checks.outcome }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          HAS_TOKEN: ${{ secrets.token != '' }}
+        with:
+          github-token: ${{ secrets.token || github.token }}
+          script: |
+            const { FROM, TO, BASE, BRANCH, TITLE, CHECKS, CI_WORKFLOW, HAS_TOKEN } = process.env;
+            const { owner, repo } = context.repo;
+            const passed = CHECKS === 'success';
+            const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Platform upgrade ${FROM} → ${TO} by \`platformgo upgrade\`: generated files, pinned tools, codemods and the lock come from the new version.`,
+              '',
+              passed
+                ? '- Quick checks: build, vet and `platformgo verify` pass.'
+                : `- Quick checks: **build, vet or \`platformgo verify\` failed**, see the [workflow run](${run}); the pull request is a draft.`,
+              `- Release notes: https://github.com/aidarbn/platform-go/releases/tag/${TO}`,
+              `- Workflow run: ${run}`,
+            ].join('\n');
 
-          - Quick checks: $checks.
-          - Release notes: https://github.com/aidarbn/platform-go/releases/tag/$TO
-          - Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            const open = await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${BRANCH}` });
+            let pr;
+            if (open.data.length > 0) {
+              pr = (await github.rest.pulls.update({ owner, repo, pull_number: open.data[0].number, title: TITLE, body })).data;
+            } else {
+              pr = (await github.rest.pulls.create({ owner, repo, base: BASE, head: BRANCH, title: TITLE, body, draft: !passed })).data;
+            }
+            core.notice(`pull request: ${pr.html_url}`);
 
-          draft=()
-          [ "$CHECKS" = success ] || draft=(--draft)
-          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
-            gh pr edit "$BRANCH" --title "$title" --body "$body"
-          else
-            gh pr create --base "$BASE" --head "$BRANCH" --title "$title" --body "$body" "${draft[@]}"
-          fi
-
-          if [ "$HAS_TOKEN" != true ] && [ -n "$CI_WORKFLOW" ]; then
-            gh workflow run "$CI_WORKFLOW" --ref "$BRANCH" \
-              || echo "::warning::$CI_WORKFLOW was not started: it needs a workflow_dispatch trigger"
-          fi
+            if (HAS_TOKEN !== 'true' && CI_WORKFLOW) {
+              try {
+                await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: CI_WORKFLOW, ref: BRANCH });
+              } catch (e) {
+                core.warning(`${CI_WORKFLOW} was not started (${e.message}): it needs a workflow_dispatch trigger`);
+              }
+            }
