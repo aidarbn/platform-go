@@ -32,10 +32,11 @@ const DefaultMaxLines = 1000
 
 // Options select what runs.
 type Options struct {
-	Skip         []string // names of checks to skip
-	MaxLines     int      // file length limit; DefaultMaxLines when zero
-	ProtoAgainst string   // git branch to check proto breaking changes against; off when empty
-	Modules      []string // enabled modules
+	Skip     []string // names of checks to skip
+	MaxLines int      // file length limit; DefaultMaxLines when zero
+	Against  string   // base branch: proto breaking changes are checked against it and migrations it lacks are linted
+	Modules  []string // enabled modules
+	Exec     Exec     // runs git and squawk for the migrations check
 }
 
 // Check is one named check.
@@ -80,11 +81,15 @@ func Checks(opts Options, run Runner, verify func(ctx context.Context, dir strin
 			if err := run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "lint"); err != nil {
 				return err
 			}
-			if opts.ProtoAgainst == "" {
+			if opts.Against == "" {
 				return nil
 			}
-			return run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "breaking", "--against", ".git#branch="+opts.ProtoAgainst)
+			return run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "breaking", "--against", ".git#branch="+opts.Against)
 		}})
+	}
+	if slices.Contains(opts.Modules, "postgres") {
+		m := Migrations{Against: opts.Against, Exec: opts.Exec}
+		checks = append(checks, Check{"migrations", m.Run})
 	}
 	checks = append(checks, Check{"security", func(ctx context.Context, dir string) error {
 		return run(ctx, dir, io.Discard, nil, "go", "run", govulncheck, "./...")
@@ -101,7 +106,7 @@ func Checks(opts Options, run Runner, verify func(ctx context.Context, dir strin
 
 // Names lists every check name, for flag help.
 func Names() []string {
-	return []string{"format", "tidy", "build", "generate", "files", "go", "proto", "security"}
+	return []string{"format", "tidy", "build", "generate", "files", "go", "proto", "migrations", "security"}
 }
 
 // Run runs the checks, reports each one and returns an error when any failed. All

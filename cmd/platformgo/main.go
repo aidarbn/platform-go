@@ -96,8 +96,9 @@ func usage(out io.Writer) {
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
   platformgo lint                 every check of the project: format, tidy, build, generation,
-                                  file length, golangci-lint, proto, govulncheck
+                                  file length, golangci-lint, proto, migrations, govulncheck
   platformgo migrate create <name> add an SQL migration to db/migrations
+  platformgo migrate lint         lint the migrations the branch adds (--against <branch>)
   platformgo db generate          migrate the database and generate the jet query builder
   platformgo upgrade [version]    move the project to a platform version, latest by default
   platformgo schema               print the JSON schema of platformgo.yaml
@@ -239,16 +240,22 @@ func cmdLint(args []string, out io.Writer) error {
 	dir := fs.String("dir", ".", "project directory")
 	skip := fs.String("skip", "", "comma separated checks to skip: "+strings.Join(lint.Names(), ", "))
 	maxLines := fs.Int("max-lines", lint.DefaultMaxLines, "longest hand written Go file")
-	against := fs.String("proto-against", "", "git branch to check proto breaking changes against")
+	against := fs.String("against", "", "base branch: proto breaking changes and the migrations it lacks")
+	// The flag before migrations were linted too; Makefiles of existing projects pass it.
+	protoAgainst := fs.String("proto-against", "", "the same as --against")
 	if err := parseFlags(fs, args); err != nil {
 		return err
+	}
+
+	if *against == "" {
+		against = protoAgainst
 	}
 
 	plan, err := apply.Build(*dir)
 	if err != nil {
 		return err
 	}
-	opts := lint.Options{MaxLines: *maxLines, ProtoAgainst: *against, Modules: plan.Modules}
+	opts := lint.Options{MaxLines: *maxLines, Against: *against, Modules: plan.Modules, Exec: lint.ExecCommand}
 	if *skip != "" {
 		for _, name := range strings.Split(*skip, ",") {
 			opts.Skip = append(opts.Skip, strings.TrimSpace(name))
@@ -388,8 +395,11 @@ func cmdUpgrade(args []string, out io.Writer) error {
 }
 
 func cmdMigrate(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "lint" {
+		return cmdMigrateLint(args[1:], out)
+	}
 	if len(args) == 0 || args[0] != "create" {
-		return fmt.Errorf("usage: platformgo migrate create <name>")
+		return fmt.Errorf("usage: platformgo migrate create <name> | platformgo migrate lint [--against <branch>]")
 	}
 	fs := flag.NewFlagSet("migrate create", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
@@ -406,6 +416,24 @@ func cmdMigrate(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(out, "created", path)
+	return nil
+}
+
+// cmdMigrateLint lints the migrations a branch adds. It needs no platformgo.yaml, so a
+// project the platform did not create runs it as well, with go run at a version.
+func cmdMigrateLint(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("migrate lint", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "project directory")
+	against := fs.String("against", "", "base branch; without it the migrations not committed yet are linted")
+	migrations := fs.String("migrations", "", "migrations folder in the project (default db/migrations)")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	m := lint.Migrations{Dir: *migrations, Against: *against, Exec: lint.ExecCommand}
+	if err := m.Run(context.Background(), *dir); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "ok   migrations")
 	return nil
 }
 

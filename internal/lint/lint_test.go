@@ -84,7 +84,7 @@ func TestChecksAndRun(t *testing.T) {
 	write(t, dir, "main.go", "package main\n\nfunc main() {}\n")
 	write(t, dir, "proto/shop/v1/orders.proto", `syntax = "proto3";`)
 
-	checks := lint.Checks(lint.Options{Modules: []string{"api", "postgres"}, ProtoAgainst: "dev", Skip: []string{"security"}}, run, verify)
+	checks := lint.Checks(lint.Options{Modules: []string{"api", "postgres"}, Against: "dev", Skip: []string{"migrations", "security"}}, run, verify)
 	var names []string
 	for _, c := range checks {
 		names = append(names, c.Name)

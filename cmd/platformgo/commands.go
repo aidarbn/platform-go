@@ -35,9 +35,14 @@ func commands() []setup.Command {
 			dir,
 			{Name: "skip", Summary: "checks to skip", Values: lint.Names(), List: true},
 			{Name: "max-lines", Summary: "longest hand written Go file"},
-			{Name: "proto-against", Summary: "git branch for proto breaking changes"},
+			{Name: "against", Summary: "base branch for proto breaking changes and new migrations"},
+			{Name: "proto-against", Summary: "the same as --against"},
 		}},
-		{Name: "migrate", Summary: "add an SQL migration", Sub: []string{"create"}, Flags: []setup.Flag{dir}},
+		{Name: "migrate", Summary: "add or lint SQL migrations", Sub: []string{"create", "lint"}, Flags: []setup.Flag{
+			dir,
+			{Name: "against", Summary: "base branch for migrate lint"},
+			{Name: "migrations", Summary: "migrations folder for migrate lint"},
+		}},
 		{Name: "db", Summary: "generate the jet query builder", Sub: []string{"generate"}, Flags: []setup.Flag{
 			dir, {Name: "dsn", Summary: "database address"},
 		}},

@@ -86,7 +86,9 @@ func TestCompletionKnowsEveryFlag(t *testing.T) {
 			t.Errorf("command %s is missing from commands()", command)
 			continue
 		}
+		// Subcommands of one command (migrate create, migrate lint) share flags like dir.
 		slices.Sort(flags)
+		flags = slices.Compact(flags)
 		slices.Sort(got)
 		if !slices.Equal(flags, got) {
 			t.Errorf("command %s: flags %v, completion knows %v", command, flags, got)
