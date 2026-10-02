@@ -147,6 +147,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The platform upgrade starts CI on its branch: a pull request it opens with the
+  # workflow token starts nothing by itself.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.head_ref || github.ref_name }}
@@ -172,6 +175,26 @@ jobs:
         run: docker compose down -v --remove-orphans || true
 `
 
+// upgradeWorkflow is created once and belongs to the project afterwards: the runner,
+// the base branch and the naming of the upgrade branch are the project's. It calls the
+// upgrade workflow of the platform's main branch, so improvements of the upgrade reach
+// projects without an upgrade of their own.
+const upgradeWorkflow = `name: platform upgrade
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday morning
+  workflow_dispatch:
+
+jobs:
+  upgrade:
+    uses: aidarbn/platform-go/.github/workflows/upgrade.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+`
+
 func readme(o Options) string {
 	return fmt.Sprintf(`# %s
 
@@ -190,6 +213,6 @@ A project built on platform-go.
 - cmd/app/main.go and cmd/app/wire.go are the hand written entry point and wiring
 - cmd/app/*.gen.go, .env.example and docker-compose.yml are generated, do not edit them;
   services of your own go into docker-compose.override.yml
-- Dockerfile, Makefile and .github/workflows/ci.yml are created once and belong to the project
+- Dockerfile, Makefile and the workflows ci.yml and platform-upgrade.yml are created once and belong to the project; platform-upgrade opens a pull request with every platform release
 `, o.Service, specFileName)
 }

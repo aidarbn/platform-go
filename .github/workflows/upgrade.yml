@@ -1,0 +1,141 @@
+name: platform upgrade
+
+# Moves a project to the latest platform release and opens a pull request with the
+# result. Projects call it from a small workflow of their own, so the runner, the base
+# branch and the naming rules stay theirs:
+#
+#   jobs:
+#     upgrade:
+#       uses: aidarbn/platform-go/.github/workflows/upgrade.yml@v0.5.11
+#       permissions: { contents: write, pull-requests: write, actions: write }
+#       with:
+#         base: dev
+#
+# The upgrade is `platformgo upgrade`: go get, then apply by the new version —
+# generated files, pinned tools, codemods, the lock. Nothing happens when the project
+# is already on the latest release.
+#
+# A pull request opened with the workflow token starts no workflows (a GitHub rule
+# against loops), so the project CI is started on the branch by workflow_dispatch and
+# its checks show up on the pull request. With the `token` secret — a token that may
+# start workflows — the pull request starts CI the usual way.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: runner labels as JSON, e.g. '["self-hosted", "linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      base:
+        description: branch to upgrade and to open the pull request against; the default branch when empty
+        type: string
+        default: ""
+      version:
+        description: platform version to move to
+        type: string
+        default: latest
+      branch-prefix:
+        description: name of the upgrade branch before the version
+        type: string
+        default: platform-upgrade/
+      title:
+        description: commit and pull request title; {from} and {to} are replaced
+        type: string
+        default: "chore: platform-go {from} → {to}"
+      ci-workflow:
+        description: workflow file of the project CI, started on the branch; empty skips it
+        type: string
+        default: ci.yml
+    secrets:
+      token:
+        description: a token that may start workflows; the workflow token otherwise
+        required: false
+
+jobs:
+  upgrade:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      MODULE: github.com/aidarbn/platform-go
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base || github.event.repository.default_branch }}
+          token: ${{ secrets.token || github.token }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Upgrade
+        id: upgrade
+        run: |
+          from=$(go list -m -f '{{.Version}}' "$MODULE")
+          go tool platformgo upgrade "${{ inputs.version }}"
+          to=$(go list -m -f '{{.Version}}' "$MODULE")
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+          echo "to=$to" >> "$GITHUB_OUTPUT"
+          if [ "$from" = "$to" ] && git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "already on $to"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Quick checks that need no database; the full checks are the project CI.
+      - name: Checks
+        id: checks
+        if: steps.upgrade.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          CGO_ENABLED=0 go build ./...
+          go vet ./...
+          go tool platformgo verify
+
+      - name: Pull request
+        if: steps.upgrade.outputs.changed == 'true'
+        env:
+          FROM: ${{ steps.upgrade.outputs.from }}
+          TO: ${{ steps.upgrade.outputs.to }}
+          BASE: ${{ inputs.base || github.event.repository.default_branch }}
+          CHECKS: ${{ steps.checks.outcome }}
+          TITLE_TEMPLATE: ${{ inputs.title }}
+          BRANCH: ${{ inputs.branch-prefix }}${{ steps.upgrade.outputs.to }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          HAS_TOKEN: ${{ secrets.token != '' }}
+        run: |
+          title=${TITLE_TEMPLATE//\{from\}/$FROM}
+          title=${title//\{to\}/$TO}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -A
+          git commit -m "$title"
+          # The branch belongs to the workflow: a rerun replaces it with a fresh upgrade.
+          git push --force origin "$BRANCH"
+
+          if [ "$CHECKS" = success ]; then
+            checks="build, vet and \`platformgo verify\` pass"
+          else
+            checks="**build, vet or \`platformgo verify\` failed** — see the workflow run; the pull request is a draft"
+          fi
+          body="Platform upgrade $FROM → $TO by \`platformgo upgrade\`: generated files, pinned tools, codemods and the lock come from the new version.
+
+          - Quick checks: $checks.
+          - Release notes: https://github.com/aidarbn/platform-go/releases/tag/$TO
+          - Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          draft=()
+          [ "$CHECKS" = success ] || draft=(--draft)
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --title "$title" --body "$body"
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" --title "$title" --body "$body" "${draft[@]}"
+          fi
+
+          if [ "$HAS_TOKEN" != true ] && [ -n "$CI_WORKFLOW" ]; then
+            gh workflow run "$CI_WORKFLOW" --ref "$BRANCH" \
+              || echo "::warning::$CI_WORKFLOW was not started: it needs a workflow_dispatch trigger"
+          fi

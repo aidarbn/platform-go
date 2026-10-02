@@ -54,7 +54,7 @@ func TestNewCreatesProject(t *testing.T) {
 	for _, want := range []string{
 		spec.FileName, "go.mod", "cmd/app/main.go", "cmd/app/wire.go",
 		"cmd/app/config.gen.go", "cmd/app/modules.gen.go", ".env.example", "Makefile", "README.md",
-		"docker-compose.yml", "Dockerfile", ".dockerignore", ".gitignore", ".github/workflows/ci.yml", ".golangci.yml",
+		"docker-compose.yml", "Dockerfile", ".dockerignore", ".gitignore", ".github/workflows/ci.yml", ".github/workflows/platform-upgrade.yml", ".golangci.yml",
 	} {
 		if !contains(created, want) {
 			t.Errorf("%s was not created (created: %v)", want, created)

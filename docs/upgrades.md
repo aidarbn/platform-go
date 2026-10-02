@@ -35,6 +35,31 @@ checks      go build, go test, platformgo verify
 | Pinned tool versions | a platform version pins buf, templ and the other generators, so generated code is identical everywhere |
 | One upgrade, one commit | upgrade runs on a branch and lands as a single commit; rollback is `git revert` |
 
+## Automatic upgrades
+
+A project created by the platform has `.github/workflows/platform-upgrade.yml`. Every Monday, and by hand from the Actions tab, it calls the upgrade workflow of the platform (`.github/workflows/upgrade.yml`):
+
+1. `platformgo upgrade latest`; a project already on the latest release ends here;
+2. build, vet and `platformgo verify` — the checks that need no database;
+3. the result goes to a branch and a pull request against the base branch, a draft when the checks failed; a later release replaces the branch;
+4. the project CI is started on the branch through `workflow_dispatch`, because a pull request opened with the workflow token starts no workflows. With a `token` secret that may start workflows the pull request starts CI by itself.
+
+The calling file belongs to the project, so the runner, the base branch and the naming are the project's:
+
+```yaml
+jobs:
+  upgrade:
+    uses: aidarbn/platform-go/.github/workflows/upgrade.yml@main
+    permissions: { contents: write, pull-requests: write, actions: write }
+    with:
+      runs-on: '["self-hosted", "linux", "x64"]'
+      base: dev
+      branch-prefix: chore/GEN-00000-platform-
+      title: "chore GEN-00000: platform-go {from} → {to}"
+```
+
+A project created before this workflow adds the file by hand, together with `workflow_dispatch:` among the triggers of its CI.
+
 ## 3. Platform tests
 
 | Check | What it catches |

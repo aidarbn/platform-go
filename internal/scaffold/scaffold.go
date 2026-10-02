@@ -80,7 +80,8 @@ func New(o Options) ([]string, error) {
 		"Dockerfile":      []byte(dockerfile(o)),
 		"README.md":       []byte(readme(o)),
 
-		".github/workflows/ci.yml": []byte(ciWorkflow),
+		".github/workflows/ci.yml":               []byte(ciWorkflow),
+		".github/workflows/platform-upgrade.yml": []byte(upgradeWorkflow),
 	}
 
 	created, err := gen.Apply(o.Dir, files)
