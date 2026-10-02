@@ -44,6 +44,10 @@ on:
         description: commit and pull request title; {from} and {to} are replaced
         type: string
         default: "chore: platform-go {from} → {to}"
+      setup-go:
+        description: install Go with actions/setup-go; false uses the Go of the runner (GOTOOLCHAIN=auto), whose module cache outlives the run on a self-hosted runner
+        type: boolean
+        default: true
       ci-workflow:
         description: workflow file of the project CI, started on the branch; empty skips it
         type: string
@@ -66,6 +70,7 @@ jobs:
           token: ${{ secrets.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-go@v7
+        if: inputs.setup-go
         with:
           go-version-file: go.mod
 

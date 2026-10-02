@@ -53,6 +53,7 @@ jobs:
     permissions: { contents: write, pull-requests: write, actions: write }
     with:
       runs-on: '["self-hosted", "linux", "x64"]'
+      setup-go: false # the Go and the module cache of the runner: actions/setup-go caches slowly there
       base: dev
       branch-prefix: chore/GEN-00000-platform-
       title: "chore GEN-00000: platform-go {from} → {to}"
