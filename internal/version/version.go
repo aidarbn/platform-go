@@ -15,7 +15,7 @@ const Module = "github.com/aidarbn/platform-go"
 // Fallback is the version of a build from a checkout, which carries no module version.
 // `make release` bumps it and CI fails a tag that does not match it; a released binary
 // — go tool, go run or go install at a version — never reads it.
-const Fallback = "v0.5.9"
+const Fallback = "v0.5.10"
 
 // Platform returns the platform version of the running binary.
 func Platform() string {
