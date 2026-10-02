@@ -119,8 +119,9 @@ func TestMigrationsOwnRules(t *testing.T) {
 	}{
 		{"index concurrently in a transaction", "-- +goose Up\nCREATE INDEX CONCURRENTLY i ON a (b);\n", "add -- +goose NO TRANSACTION", true},
 		{"index concurrently without a transaction", "-- +goose NO TRANSACTION\n-- +goose Up\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON a (b);\n", "", false},
-		{"function", "-- +goose Up\nCREATE OR REPLACE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;\n", "functions, procedures and triggers", true},
-		{"constraint trigger", "-- +goose Up\ncreate constraint trigger t after insert on a for each row execute function f();\n", "functions, procedures and triggers", true},
+		{"function", "-- +goose Up\nCREATE OR REPLACE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;\n", "functions, procedures, triggers and rules", true},
+		{"constraint trigger", "-- +goose Up\ncreate constraint trigger t after insert on a for each row execute function f();\n", "functions, procedures, triggers and rules", true},
+		{"rule", "-- +goose Up\nCREATE RULE r AS ON DELETE TO a DO INSTEAD NOTHING;\n", "functions, procedures, triggers and rules", true},
 		{"mentioned in a comment", "-- +goose Up\n-- CREATE FUNCTION is not allowed, CONCURRENTLY neither\nSELECT 1;\n", "", true},
 		{"dropped in Down", "-- +goose Up\nSELECT 1;\n-- +goose Down\nDROP FUNCTION IF EXISTS f;\nCREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;\n", "", true},
 	}

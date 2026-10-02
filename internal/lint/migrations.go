@@ -61,7 +61,7 @@ type Migrations struct {
 var (
 	gooseDown    = regexp.MustCompile(`(?i)^--\s*\+goose\s+down\b`)
 	gooseNoTx    = regexp.MustCompile(`(?im)^--\s*\+goose\s+no\s+transaction\b`)
-	dbLogic      = regexp.MustCompile(`(?i)^\s*create\s+(or\s+replace\s+)?(function|procedure|(constraint\s+)?trigger)\b`)
+	dbLogic      = regexp.MustCompile(`(?i)^\s*create\s+(or\s+replace\s+)?(function|procedure|rule|(constraint\s+)?trigger)\b`)
 	concurrently = regexp.MustCompile(`(?i)\bconcurrently\b`)
 )
 
@@ -151,7 +151,8 @@ func upSection(content []byte) []byte {
 	return b.Bytes()
 }
 
-// ownRules are the rules squawk does not know: logic does not live in the database,
+// ownRules are the rules squawk does not know: logic (functions, procedures,
+// triggers, rules) does not live in the database,
 // and goose wraps every migration in a transaction, where an index cannot be built
 // concurrently.
 func ownRules(rel string, up []byte, noTx bool) []string {
@@ -162,7 +163,7 @@ func ownRules(rel string, up []byte, noTx bool) []string {
 			code = code[:idx]
 		}
 		if dbLogic.MatchString(code) {
-			findings = append(findings, fmt.Sprintf("%s:%d: functions, procedures and triggers are not created in migrations: the logic lives in Go", rel, i+1))
+			findings = append(findings, fmt.Sprintf("%s:%d: functions, procedures, triggers and rules are not created in migrations: the logic lives in Go", rel, i+1))
 		}
 		if !noTx && concurrently.MatchString(code) {
 			findings = append(findings, fmt.Sprintf("%s:%d: CONCURRENTLY cannot run inside a transaction, which goose opens for every migration: add -- +goose NO TRANSACTION", rel, i+1))
