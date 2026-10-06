@@ -9,7 +9,7 @@ name: platform upgrade
 #       uses: aidarbn/platform-go/.github/workflows/upgrade.yml@v0.5.11
 #       permissions: { contents: write, pull-requests: write, actions: write }
 #       with:
-#         base: dev
+#         base: main
 #
 # The upgrade is `platformgo upgrade`: go get, then apply by the new version —
 # generated files, pinned tools, codemods, the lock. Nothing happens when the project
