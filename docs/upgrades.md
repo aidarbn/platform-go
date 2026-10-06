@@ -54,7 +54,7 @@ jobs:
     with:
       runs-on: '["self-hosted", "linux", "x64"]'
       setup-go: false # the Go and the module cache of the runner: actions/setup-go caches slowly there
-      base: dev
+      base: main
       branch-prefix: chore/GEN-00000-platform-
       title: "chore GEN-00000: platform-go {from} → {to}"
 ```
