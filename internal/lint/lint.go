@@ -23,7 +23,7 @@ import (
 // protoc-gen-connect-openapi needs gobwas/glob v1, the linters inside golangci-lint
 // need v0.2.
 const (
-	golangciLint = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2"
+	golangciLint = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
 	govulncheck  = "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
 )
 
