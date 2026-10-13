@@ -5,7 +5,7 @@ var translations = map[string]map[string]string{
 	"ru": {
 		"Sign in": "Вход", "Sign out": "Выйти", "Email": "Почта", "Password": "Пароль",
 		"Signed in as": "Вы вошли как", "roles": "роли", "Business settings": "Бизнес-настройки",
-		"total": "всего", "changed": "изменено", "the settings module is off": "модуль настроек выключен", "Accounts": "Учётные записи",
+		"changed": "изменено", "the settings module is off": "модуль настроек выключен", "Accounts": "Учётные записи",
 		"Recent actions": "Последние действия", "The project has no business settings: describe them in settings.yaml.": "У проекта нет бизнес-настроек: опишите их в settings.yaml.",
 		"Setting": "Настройка", "Value": "Значение", "Default": "По умолчанию", "applies after a restart": "применится после перезапуска",
 		"Save": "Сохранить", "min": "мин.", "max": "макс.", "Reset": "Сбросить", "Roles": "Роли",
