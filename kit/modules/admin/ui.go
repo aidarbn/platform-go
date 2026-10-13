@@ -94,8 +94,6 @@ button:hover { border-color: var(--accent); }
   <input id="email" name="email" type="email" autocomplete="username" autofocus required>
   <label for="password">{{t "Password"}}</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <label for="code">{{t "One time code"}} <span class="muted">{{t "if enabled"}}</span></label>
-  <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code">
   <button>{{t "Sign in"}}</button>
 </form>
 </div>
@@ -159,12 +157,11 @@ var contentTemplates = map[string]string{
 `,
 	"users": `
 <table>
-  <tr><th>{{t "Email"}}</th><th>{{t "Roles"}}</th><th>{{t "Two factor"}}</th><th>{{t "State"}}</th><th>{{t "Last sign in"}}</th><th></th></tr>
+  <tr><th>{{t "Email"}}</th><th>{{t "Roles"}}</th><th>{{t "State"}}</th><th>{{t "Last sign in"}}</th><th></th></tr>
   {{range .Data.Users}}
   <tr>
     <td>{{.Email}}</td>
     <td>{{range $i, $r := .Roles}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}</td>
-    <td>{{if .TwoFactor}}{{t "on"}}{{else}}<span class="muted">{{t "off"}}</span>{{end}}</td>
     <td>{{if .Disabled}}<span class="muted">{{t "disabled"}}</span>{{else}}{{t "active"}}{{end}}</td>
     <td class="muted">{{if .LastLoginAt.IsZero}}{{t "never"}}{{else}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{end}}</td>
     <td class="row">
@@ -189,15 +186,8 @@ var contentTemplates = map[string]string{
   <input name="email" type="email" placeholder="{{t "email"}}" required>
   <input name="password" type="password" placeholder="{{t "password"}}" required>
   <input name="roles" placeholder="{{t "roles, comma separated"}}">
-  <label class="row"><input type="checkbox" name="twofactor" value="1" checked> {{t "two factor"}}</label>
   <button>{{t "Add"}}</button>
 </form>
-`,
-	"secret": `
-<p><strong>{{.Data.Email}}</strong>: {{t "the account is created. The secret is shown once: add it to an authenticator app now."}}</p>
-<p class="secret"><code>{{.Data.Secret}}</code></p>
-<p class="muted">{{t "Link for a QR code"}}: <code>{{.Data.URI}}</code></p>
-<p><a href="/users">{{t "Back to the accounts"}}</a></p>
 `,
 	"audit": `
 {{template "audit-table" .Data.Entries}}

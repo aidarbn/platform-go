@@ -147,8 +147,7 @@ func (s *server) showLogin(w http.ResponseWriter, r *http.Request) {
 func (s *server) doLogin(w http.ResponseWriter, r *http.Request) {
 	next := r.FormValue("next")
 	token, err := s.auth.Login(r.Context(),
-		r.FormValue("email"), r.FormValue("password"), r.FormValue("code"),
-		clientIP(r), r.UserAgent())
+		r.FormValue("email"), r.FormValue("password"), clientIP(r), r.UserAgent())
 
 	if err != nil {
 		s.log.Info("failed sign in attempt", "email", adminx.NormalizeEmail(r.FormValue("email")), "ip", clientIP(r), "err", err)
@@ -180,12 +179,6 @@ func (s *server) doLogin(w http.ResponseWriter, r *http.Request) {
 // and precise where it helps the person signing in.
 func loginError(err error) string {
 	switch {
-	case errors.Is(err, adminx.ErrCodeRequired):
-		return "The account needs a one time code."
-	case errors.Is(err, adminx.ErrCodeReused):
-		return "This code has already been used: wait for the next one."
-	case errors.Is(err, adminx.ErrInvalidCode):
-		return "Wrong one time code."
 	case errors.Is(err, adminx.ErrUserDisabled):
 		return "The account is disabled."
 	default:
@@ -306,26 +299,13 @@ func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
 			roles = append(roles, role)
 		}
 	}
-	twoFactor := r.FormValue("twofactor") != ""
-
-	created, secret, err := s.auth.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"), roles, twoFactor)
+	created, err := s.auth.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"), roles)
 	if err != nil {
 		s.back(w, r, "users", "", err.Error())
 		return
 	}
 	s.record(r, actor, adminx.ActionUserCreate, created.Email, strings.Join(roles, ", "))
-
-	if !twoFactor {
-		s.back(w, r, "users", fmt.Sprintf(s.t("%s added"), created.Email), "")
-		return
-	}
-	// The secret is shown once and never again: it is not stored anywhere a person can
-	// read it later.
-	s.render(w, r, actor, "secret", s.t("Two factor authentication"), map[string]any{
-		"Email":  created.Email,
-		"Secret": secret,
-		"URI":    adminx.TOTPURI(s.service, created.Email, secret),
-	})
+	s.back(w, r, "users", fmt.Sprintf(s.t("%s added"), created.Email), "")
 }
 
 func (s *server) toggleUser(w http.ResponseWriter, r *http.Request) {

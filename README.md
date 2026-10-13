@@ -32,7 +32,7 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 |---|---|
 | `postgres` — pool, health, metrics, transactions, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
 | `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
-| `admin` — admin panel: sign in with one time codes, roles, accounts, audit log, settings pages, project pages | ready |
+| `admin` — admin panel: sign in with a password, roles, accounts, audit log, settings pages, project pages | ready |
 | `api` — gRPC and REST gateway from proto files, OpenAPI 3.1 with validation rules, interceptors, health, CORS, docs | ready |
 | `river` — background jobs, periodic jobs scheduled from business settings, job options carried by the job as in taply | ready |
 | `s3` — object storage with taply's storage API: public and private buckets, streaming uploads, signed links, MinIO in compose | ready |

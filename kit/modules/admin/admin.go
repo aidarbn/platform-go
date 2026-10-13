@@ -196,12 +196,12 @@ func (m *Module) bootstrap(ctx context.Context) error {
 		return nil
 	}
 
-	user, _, err := m.auth.CreateUser(ctx, m.cfg.BootstrapEmail, m.cfg.BootstrapPassword, []string{adminx.RoleAdmin}, false)
+	user, err := m.auth.CreateUser(ctx, m.cfg.BootstrapEmail, m.cfg.BootstrapPassword, []string{adminx.RoleAdmin})
 	if err != nil {
 		return fmt.Errorf("admin: create the first account: %w", err)
 	}
 	m.log.Info("the first admin account is created", "email", user.Email,
-		"note", "set up two factor authentication and change the password")
+		"note", "change the password")
 	return nil
 }
 

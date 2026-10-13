@@ -29,7 +29,7 @@ type fixture struct {
 
 // The fixture is returned by pointer: the clock closure and the test must see the
 // same time, otherwise moving the clock forward changes nothing.
-func newFixture(t *testing.T, twoFactor bool) (*fixture, adminx.User) {
+func newFixture(t *testing.T) (*fixture, adminx.User) {
 	t.Helper()
 
 	store := adminx.NewMemoryStore()
@@ -38,14 +38,6 @@ func newFixture(t *testing.T, twoFactor bool) (*fixture, adminx.User) {
 	auth.Now = func() time.Time { return f.now }
 
 	user := adminx.User{Email: "Admin@Example.com", PasswordHash: testHash(), Roles: []string{adminx.RoleAdmin}}
-	if twoFactor {
-		secret, err := adminx.NewTOTPSecret()
-		if err != nil {
-			t.Fatalf("NewTOTPSecret: %v", err)
-		}
-		user.TOTPSecret = secret
-	}
-
 	created, err := store.Create(context.Background(), user)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -55,10 +47,10 @@ func newFixture(t *testing.T, twoFactor bool) (*fixture, adminx.User) {
 
 func TestLogin(t *testing.T) {
 	ctx := context.Background()
-	f, user := newFixture(t, false)
+	f, user := newFixture(t)
 
 	// The address is normalised, so a capital letter in the form still logs in.
-	token, err := f.auth.Login(ctx, "  ADMIN@example.com ", "hunter2", "", "10.0.0.1", "curl")
+	token, err := f.auth.Login(ctx, "  ADMIN@example.com ", "hunter2", "10.0.0.1", "curl")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -93,11 +85,11 @@ func TestLogin(t *testing.T) {
 // which accounts exist.
 func TestLoginFailures(t *testing.T) {
 	ctx := context.Background()
-	f, user := newFixture(t, false)
+	f, user := newFixture(t)
 
 	for name, email := range map[string]string{"wrong password": "admin@example.com", "no such user": "nobody@example.com"} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := f.auth.Login(ctx, email, "wrong", "", "", ""); !errors.Is(err, adminx.ErrWrongPassword) {
+			if _, err := f.auth.Login(ctx, email, "wrong", "", ""); !errors.Is(err, adminx.ErrWrongPassword) {
 				t.Fatalf("err = %v", err)
 			}
 		})
@@ -107,54 +99,16 @@ func TestLoginFailures(t *testing.T) {
 	if err := f.store.Update(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "", ""); !errors.Is(err, adminx.ErrUserDisabled) {
+	if _, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", ""); !errors.Is(err, adminx.ErrUserDisabled) {
 		t.Errorf("a disabled account logged in: %v", err)
-	}
-}
-
-func TestLoginWithTwoFactor(t *testing.T) {
-	ctx := context.Background()
-	f, user := newFixture(t, true)
-
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", "", "", ""); !errors.Is(err, adminx.ErrCodeRequired) {
-		t.Fatalf("without a code: %v", err)
-	}
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", "000000", "", ""); err == nil {
-		t.Fatal("a made up code was accepted")
-	}
-
-	code, err := adminx.TOTPCode(user.TOTPSecret, f.now)
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", code, "", ""); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	// The used code must not work a second time: an intercepted code is then useless.
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", code, "", ""); !errors.Is(err, adminx.ErrCodeReused) {
-		t.Errorf("the code worked twice: %v", err)
-	}
-
-	// The next step gives a new code, and that one works.
-	f.now = f.now.Add(30 * time.Second)
-	next, err := adminx.TOTPCode(user.TOTPSecret, f.now)
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
-	if next == code {
-		t.Skip("the codes of two steps coincided")
-	}
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", next, "", ""); err != nil {
-		t.Errorf("the next code: %v", err)
 	}
 }
 
 func TestSessionExpires(t *testing.T) {
 	ctx := context.Background()
-	f, _ := newFixture(t, false)
+	f, _ := newFixture(t)
 
-	token, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "", "")
+	token, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -171,7 +125,7 @@ func TestSessionExpires(t *testing.T) {
 
 func TestSessionUnknownToken(t *testing.T) {
 	ctx := context.Background()
-	f, _ := newFixture(t, false)
+	f, _ := newFixture(t)
 
 	for name, token := range map[string]string{"empty": "", "made up": "nonsense"} {
 		t.Run(name, func(t *testing.T) {
@@ -186,9 +140,9 @@ func TestSessionUnknownToken(t *testing.T) {
 // session to expire.
 func TestDisablingUserEndsSessions(t *testing.T) {
 	ctx := context.Background()
-	f, user := newFixture(t, false)
+	f, user := newFixture(t)
 
-	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "", "")
+	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -212,9 +166,9 @@ func TestDisablingUserEndsSessions(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	ctx := context.Background()
-	f, _ := newFixture(t, false)
+	f, _ := newFixture(t)
 
-	token, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "", "")
+	token, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -239,15 +193,12 @@ func TestCreateUser(t *testing.T) {
 	store := adminx.NewMemoryStore()
 	auth := adminx.NewAuth(store.Users(), store.Sessions(), 0)
 
-	user, secret, err := auth.CreateUser(ctx, " Support@Example.com ", "letmein", []string{"support"}, true)
+	user, err := auth.CreateUser(ctx, " Support@Example.com ", "letmein", []string{"support"})
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	if user.Email != "support@example.com" {
 		t.Errorf("email = %q", user.Email)
-	}
-	if secret == "" || user.TOTPSecret != secret {
-		t.Error("the secret was not returned")
 	}
 	if user.Has(adminx.RoleAdmin) {
 		t.Error("support must not be an admin")
@@ -256,27 +207,23 @@ func TestCreateUser(t *testing.T) {
 		t.Error("the role was not set")
 	}
 
-	code, err := adminx.TOTPCode(secret, time.Now())
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
-	if _, err := auth.Login(ctx, "support@example.com", "letmein", code, "", ""); err != nil {
+	if _, err := auth.Login(ctx, "support@example.com", "letmein", "", ""); err != nil {
 		t.Errorf("Login: %v", err)
 	}
 
-	if _, _, err := auth.CreateUser(ctx, "support@example.com", "other", nil, false); err == nil {
+	if _, err := auth.CreateUser(ctx, "support@example.com", "other", nil); err == nil {
 		t.Error("a duplicate address was accepted")
 	}
-	if _, _, err := auth.CreateUser(ctx, "  ", "other", nil, false); err == nil {
+	if _, err := auth.CreateUser(ctx, "  ", "other", nil); err == nil {
 		t.Error("an empty address was accepted")
 	}
 }
 
 func TestSetPassword(t *testing.T) {
 	ctx := context.Background()
-	f, user := newFixture(t, false)
+	f, user := newFixture(t)
 
-	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "", "")
+	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -288,10 +235,10 @@ func TestSetPassword(t *testing.T) {
 	if _, _, err := f.auth.Session(ctx, token); !errors.Is(err, adminx.ErrNoSession) {
 		t.Errorf("the session survived the password change: %v", err)
 	}
-	if _, err := f.auth.Login(ctx, user.Email, "hunter2", "", "", ""); !errors.Is(err, adminx.ErrWrongPassword) {
+	if _, err := f.auth.Login(ctx, user.Email, "hunter2", "", ""); !errors.Is(err, adminx.ErrWrongPassword) {
 		t.Errorf("the old password still works: %v", err)
 	}
-	if _, err := f.auth.Login(ctx, user.Email, "correcthorse", "", "", ""); err != nil {
+	if _, err := f.auth.Login(ctx, user.Email, "correcthorse", "", ""); err != nil {
 		t.Errorf("the new password: %v", err)
 	}
 	if err := f.auth.SetPassword(ctx, 999, "whatever"); !errors.Is(err, adminx.ErrNoUser) {
@@ -301,9 +248,9 @@ func TestSetPassword(t *testing.T) {
 
 func TestCleanupRemovesExpiredSessions(t *testing.T) {
 	ctx := context.Background()
-	f, _ := newFixture(t, false)
+	f, _ := newFixture(t)
 
-	if _, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", "", ""); err != nil {
+	if _, err := f.auth.Login(ctx, "admin@example.com", "hunter2", "", ""); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	if n, err := f.auth.Cleanup(ctx); err != nil || n != 0 {
@@ -341,9 +288,9 @@ func TestRoles(t *testing.T) {
 
 func TestUserDeletionRemovesSessions(t *testing.T) {
 	ctx := context.Background()
-	f, user := newFixture(t, false)
+	f, user := newFixture(t)
 
-	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "", "")
+	token, err := f.auth.Login(ctx, user.Email, "hunter2", "", "")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
