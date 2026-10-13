@@ -23,8 +23,6 @@ type User struct {
 	ID           int64
 	Email        string
 	PasswordHash string
-	TOTPSecret   string // empty when two factor authentication is off
-	TOTPCounter  int64  // the last used code, so it cannot be used again
 	Roles        []string
 	Disabled     bool
 	CreatedAt    time.Time
@@ -49,9 +47,6 @@ func (u User) HasAny(roles []string) bool {
 	}
 	return false
 }
-
-// TwoFactor reports whether the account has two factor authentication.
-func (u User) TwoFactor() bool { return u.TOTPSecret != "" }
 
 // UserRepo stores the accounts.
 type UserRepo interface {

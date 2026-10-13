@@ -177,38 +177,17 @@ func TestLoginAndLogout(t *testing.T) {
 	}
 }
 
-// A one time code that is asked for must actually be checked.
-func TestLoginWithTwoFactor(t *testing.T) {
+// Signing in takes only the address and the password: the panel has no one time codes.
+func TestLoginFormHasNoOneTimeCode(t *testing.T) {
 	p := newPanel(t)
 
-	ctx := context.Background()
-	user, err := p.store.ByEmail(ctx, "admin@example.com")
-	if err != nil {
-		t.Fatal(err)
+	code, body := p.get("/login")
+	if code != http.StatusOK || strings.Contains(body, `name="code"`) {
+		t.Fatalf("login: %d\n%s", code, body)
 	}
-	secret, err := adminx.NewTOTPSecret()
-	if err != nil {
-		t.Fatal(err)
-	}
-	user.TOTPSecret = secret
-	if err := p.store.Update(ctx, user); err != nil {
-		t.Fatal(err)
-	}
-
 	resp, body := p.post("/login", url.Values{"email": {"admin@example.com"}, "password": {"hunter2"}})
-	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(body, "needs a one time code") {
-		t.Fatalf("without a code: %d\n%s", resp.StatusCode, body)
-	}
-
-	code, err := adminx.TOTPCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, body = p.post("/login", url.Values{
-		"email": {"admin@example.com"}, "password": {"hunter2"}, "code": {code},
-	})
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Overview") {
-		t.Fatalf("with a code: %d\n%s", resp.StatusCode, body)
+		t.Fatalf("sign in: %d\n%s", resp.StatusCode, body)
 	}
 }
 
@@ -329,23 +308,19 @@ func TestUsersPage(t *testing.T) {
 		t.Fatalf("code = %d\n%s", code, body)
 	}
 
-	// The secret of a new account is shown once, right after it is created.
 	resp, body := p.post("/users/create", url.Values{
 		"csrf": {csrf}, "email": {"ops@example.com"}, "password": {"letmein1"},
-		"roles": {"support, billing"}, "twofactor": {"1"},
+		"roles": {"support, billing"},
 	})
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "ops@example.com added") {
 		t.Fatalf("create: %d\n%s", resp.StatusCode, body)
-	}
-	if !strings.Contains(body, "otpauth://totp/shop-api:ops@example.com") {
-		t.Errorf("no link for the authenticator app:\n%s", body)
 	}
 
 	created, err := p.store.ByEmail(context.Background(), "ops@example.com")
 	if err != nil {
 		t.Fatalf("the account was not created: %v", err)
 	}
-	if !created.TwoFactor() || !created.Has("billing") {
+	if !created.Has("billing") {
 		t.Errorf("account = %+v", created)
 	}
 

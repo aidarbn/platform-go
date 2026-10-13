@@ -8,7 +8,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **postgres** | pgx pool, goose migrations, application migrations, database in docker-compose, query generation (sqlc and jet) |
 | **river** | queues, periodic jobs, workers, riverui, test helpers |
 | **api** | gRPC server with an interceptor chain, REST gateway, multipart, OpenAPI 3.1, documentation page |
-| **admin** | admin shell: login, roles, TOTP, audit log; pages for settings, jobs and state; a place for project pages |
+| **admin** | admin shell: login, roles, audit log; pages for settings, jobs and state; a place for project pages |
 | **settings** | business settings: the `settings.yaml` schema, values in the database, cache, change notifications, typed access from code |
 | **s3** | object storage (MinIO), file uploads, service in docker-compose |
 | **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
@@ -30,9 +30,9 @@ modules:
 
 Everything else is an environment parameter: `ADMIN_ADDR` (`127.0.0.1:8081` by default, so the panel is not on the public network), `ADMIN_SESSION_TTL`, `ADMIN_INSECURE_COOKIES` for local development over plain HTTP, and `ADMIN_BOOTSTRAP_EMAIL` with `ADMIN_BOOTSTRAP_PASSWORD`, which create the first account while there are none.
 
-Out of the box: sign in with a password and an optional one time code, roles, accounts, an append-only audit log, business settings pages built from the schema, and an overview. The panel is server rendered HTML with no external assets — it opens on a locked down network — and it creates no files in the project.
+Out of the box: sign in with a password, roles, accounts, an append-only audit log, business settings pages built from the schema, and an overview. The panel is server rendered HTML with no external assets — it opens on a locked down network — and it creates no files in the project. The menu is a sidebar that turns into a bar on top on a phone, and the panel follows the light or dark theme of the system.
 
-Security of the panel: passwords are PBKDF2-HMAC-SHA256, only the hash of a session token is stored, a used one time code cannot be used again, forms are protected by a double submit token, the cookie is `HttpOnly` and `SameSite=Strict`, and disabling an account revokes its sessions at once.
+Security of the panel: passwords are PBKDF2-HMAC-SHA256, only the hash of a session token is stored, forms are protected by a double submit token, the cookie is `HttpOnly` and `SameSite=Strict`, and disabling an account revokes its sessions at once.
 
 Project pages are added from project code:
 
@@ -47,7 +47,7 @@ admin.AddPage(app, admin.Page{
 
 Removing the admin panel means deleting the section and running `apply`.
 
-**Project pages** are registered with `admin.AddPage` and drawn inside the panel: `admin.Render` puts the body the project renders — `html/template`, templ, anything that writes HTML — under the menu, the account and the `?ok=` / `?error=` banners. Forms carry `admin.CSRFField` with `admin.CSRFToken(r)`; `admin.Record(r, action, target, details)` writes to the audit log; `admin.UserFrom(ctx)` tells who is acting. A path ending in `/` takes the whole subtree, so a list and its detail pages are one page.
+**Project pages** are registered with `admin.AddPage` and drawn inside the panel: `admin.Render` puts the body the project renders — `html/template`, templ, anything that writes HTML — under the menu, the account and the `?ok=` / `?error=` banners. Forms carry `admin.CSRFField` with `admin.CSRFToken(r)`; `admin.Record(r, action, target, details)` writes to the audit log; `admin.UserFrom(ctx)` tells who is acting. A path ending in `/` takes the whole subtree, so a list and its detail pages are one page. Plain tables, forms and buttons are styled by the panel; the helper classes are `row` (a line of controls), `muted`, `banner` and `banner error`, `secret` (a block of code or a payload, scrolls when long), and `cards` with `card` for figures.
 
 ```go
 admin.AddPage(app, admin.Page{Title: "Customers", Path: "/customers/", Roles: []string{"support"}, Handler: customers})

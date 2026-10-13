@@ -10,12 +10,7 @@ import (
 // DefaultSessionTTL is how long a session lives.
 const DefaultSessionTTL = 12 * time.Hour
 
-// ErrCodeRequired is returned when the account has two factor authentication and no
-// code was given.
-var ErrCodeRequired = errors.New("a one time code is required")
-
-// Auth is the sign in of the admin panel: it checks the password and the one time code
-// and issues sessions.
+// Auth is the sign in of the admin panel: it checks the password and issues sessions.
 type Auth struct {
 	users    UserRepo
 	sessions SessionRepo
@@ -44,7 +39,7 @@ func (a *Auth) now() time.Time {
 //
 // An unknown address and a wrong password give the same error, so the answer does not
 // tell whether an account exists.
-func (a *Auth) Login(ctx context.Context, email, password, code, ip, userAgent string) (string, error) {
+func (a *Auth) Login(ctx context.Context, email, password, ip, userAgent string) (string, error) {
 	user, err := a.users.ByEmail(ctx, NormalizeEmail(email))
 	switch {
 	case errors.Is(err, ErrNoUser):
@@ -60,19 +55,6 @@ func (a *Auth) Login(ctx context.Context, email, password, code, ip, userAgent s
 	}
 
 	now := a.now()
-	if user.TwoFactor() {
-		if code == "" {
-			return "", ErrCodeRequired
-		}
-		counter, err := VerifyTOTP(user.TOTPSecret, code, now, user.TOTPCounter)
-		if err != nil {
-			return "", err
-		}
-		// The used counter is stored before the session is issued: a code that let
-		// someone in must not let anyone in a second time.
-		user.TOTPCounter = counter
-	}
-
 	user.LastLoginAt = now
 	if err := a.users.Update(ctx, user); err != nil {
 		return "", err
@@ -140,37 +122,24 @@ func (a *Auth) Logout(ctx context.Context, token string) error {
 	return err
 }
 
-// CreateUser adds an account and returns it together with the TOTP secret to show
-// once. With twoFactor off the secret is empty.
-func (a *Auth) CreateUser(ctx context.Context, email, password string, roles []string, twoFactor bool) (User, string, error) {
+// CreateUser adds an account.
+func (a *Auth) CreateUser(ctx context.Context, email, password string, roles []string) (User, error) {
 	email = NormalizeEmail(email)
 	if email == "" {
-		return User{}, "", errors.New("an empty address")
+		return User{}, errors.New("an empty address")
 	}
 
 	hash, err := HashPassword(password)
 	if err != nil {
-		return User{}, "", err
+		return User{}, err
 	}
 
-	var secret string
-	if twoFactor {
-		if secret, err = NewTOTPSecret(); err != nil {
-			return User{}, "", err
-		}
-	}
-
-	user, err := a.users.Create(ctx, User{
+	return a.users.Create(ctx, User{
 		Email:        email,
 		PasswordHash: hash,
-		TOTPSecret:   secret,
 		Roles:        roles,
 		CreatedAt:    a.now(),
 	})
-	if err != nil {
-		return User{}, "", err
-	}
-	return user, secret, nil
 }
 
 // SetPassword changes a password and revokes every session of that user: after a

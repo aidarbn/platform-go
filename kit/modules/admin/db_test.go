@@ -47,6 +47,59 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// A table made by a release with one time codes still has totp_secret and totp_counter.
+// The columns stay, so a rolled back release keeps working, and this release must work
+// on such a table too.
+func TestRepositoriesOnTableWithOneTimeCodeColumns(t *testing.T) {
+	ctx := context.Background()
+	base := testPool(t)
+	schema := fmt.Sprintf("admin_legacy_%d", time.Now().UnixNano())
+	if _, err := base.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() { _, _ = base.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE") })
+
+	dsn := os.Getenv("DATABASE_TEST_URL")
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	pool, err := pgdb.Open(ctx, pgdb.Config{URL: dsn + sep + "search_path=" + schema})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `CREATE TABLE platform_admin_users (
+	id            bigserial   PRIMARY KEY,
+	email         text        NOT NULL UNIQUE,
+	password_hash text        NOT NULL,
+	totp_secret   text        NOT NULL DEFAULT '',
+	totp_counter  bigint      NOT NULL DEFAULT 0,
+	roles         text[]      NOT NULL DEFAULT '{}',
+	disabled      boolean     NOT NULL DEFAULT false,
+	created_at    timestamptz NOT NULL DEFAULT now(),
+	last_login_at timestamptz
+)`); err != nil {
+		t.Fatalf("old table: %v", err)
+	}
+	if err := admin.EnsureSchema(ctx, pool); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	users := admin.NewUserRepo(pool)
+	created, err := users.Create(ctx, adminx.User{Email: "old@example.com", PasswordHash: "hash", Roles: []string{"support"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	created.Disabled = true
+	if err := users.Update(ctx, created); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got, err := users.ByEmail(ctx, "old@example.com"); err != nil || !got.Disabled {
+		t.Fatalf("ByEmail = %+v, %v", got, err)
+	}
+}
+
 // The PostgreSQL repositories must behave exactly like the in memory ones the HTTP
 // tests run on.
 func TestRepositoriesWithRealDatabase(t *testing.T) {
@@ -75,7 +128,6 @@ func TestRepositoriesWithRealDatabase(t *testing.T) {
 
 	got.Roles = []string{"support", "billing"}
 	got.Disabled = true
-	got.TOTPSecret, got.TOTPCounter = "SECRET", 42
 	got.LastLoginAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := users.Update(ctx, got); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -84,7 +136,7 @@ func TestRepositoriesWithRealDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
-	if !again.Disabled || again.TOTPCounter != 42 || len(again.Roles) != 2 || !again.LastLoginAt.Equal(got.LastLoginAt) {
+	if !again.Disabled || len(again.Roles) != 2 || !again.LastLoginAt.Equal(got.LastLoginAt) {
 		t.Errorf("after Update = %+v", again)
 	}
 

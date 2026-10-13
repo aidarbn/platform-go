@@ -27,8 +27,6 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	id            bigserial   PRIMARY KEY,
 	email         text        NOT NULL UNIQUE,
 	password_hash text        NOT NULL,
-	totp_secret   text        NOT NULL DEFAULT '',
-	totp_counter  bigint      NOT NULL DEFAULT 0,
 	roles         text[]      NOT NULL DEFAULT '{}',
 	disabled      boolean     NOT NULL DEFAULT false,
 	created_at    timestamptz NOT NULL DEFAULT now(),
@@ -74,15 +72,17 @@ func NewAuditRepo(pool *pgxpool.Pool) adminx.AuditRepo { return &auditRepo{pool:
 
 type userRepo struct{ pool *pgxpool.Pool }
 
-const userColumns = "id, email, password_hash, totp_secret, totp_counter, roles, disabled, created_at, last_login_at"
+// Tables created by releases with one time codes still have totp_secret and
+// totp_counter. The columns are left alone: they have defaults, so inserts here work,
+// and an older release rolled back to keeps reading them.
+const userColumns = "id, email, password_hash, roles, disabled, created_at, last_login_at"
 
 func scanUser(row pgx.Row) (adminx.User, error) {
 	var (
 		u    adminx.User
 		last *time.Time
 	)
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPCounter,
-		&u.Roles, &u.Disabled, &u.CreatedAt, &last)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Roles, &u.Disabled, &u.CreatedAt, &last)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return adminx.User{}, adminx.ErrNoUser
 	}
@@ -116,9 +116,9 @@ func (r *userRepo) Create(ctx context.Context, u adminx.User) (adminx.User, erro
 	}
 
 	row := r.pool.QueryRow(ctx,
-		"INSERT INTO "+usersTable+" (email, password_hash, totp_secret, totp_counter, roles, disabled, created_at) "+
-			"VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING "+userColumns,
-		adminx.NormalizeEmail(u.Email), u.PasswordHash, u.TOTPSecret, u.TOTPCounter, roles, u.Disabled, created)
+		"INSERT INTO "+usersTable+" (email, password_hash, roles, disabled, created_at) "+
+			"VALUES ($1, $2, $3, $4, $5) RETURNING "+userColumns,
+		adminx.NormalizeEmail(u.Email), u.PasswordHash, roles, u.Disabled, created)
 	return scanUser(row)
 }
 
@@ -133,9 +133,9 @@ func (r *userRepo) Update(ctx context.Context, u adminx.User) error {
 	}
 
 	tag, err := r.pool.Exec(ctx,
-		"UPDATE "+usersTable+" SET email = $2, password_hash = $3, totp_secret = $4, totp_counter = $5, "+
-			"roles = $6, disabled = $7, last_login_at = $8 WHERE id = $1",
-		u.ID, adminx.NormalizeEmail(u.Email), u.PasswordHash, u.TOTPSecret, u.TOTPCounter, roles, u.Disabled, last)
+		"UPDATE "+usersTable+" SET email = $2, password_hash = $3, roles = $4, disabled = $5, "+
+			"last_login_at = $6 WHERE id = $1",
+		u.ID, adminx.NormalizeEmail(u.Email), u.PasswordHash, roles, u.Disabled, last)
 	if err != nil {
 		return err
 	}
