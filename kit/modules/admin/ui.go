@@ -1,5 +1,13 @@
 package admin
 
+// lightPalette is the light scheme of the panel. A theme with colours starts from it, so
+// that the dark scheme does not leak into a brand palette.
+const lightPalette = `  --bg: #f5f6f8; --surface: #fff; --side: #fff; --text: #18181b; --muted: #6b7280; --line: #e5e7eb; --hover: #f3f4f6;
+  --accent: #2563eb; --accent-hover: #1d4ed8; --on-accent: #fff; --accent-soft: #eef3fe;
+  --bad: #b91c1c; --bad-soft: #fef2f2; --good: #15803d; --good-soft: #f0fdf4; --chip: #f1f2f4;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05);
+`
+
 // The panel is server rendered HTML with no external assets: an admin panel must open
 // on a locked down network, and a page that needs a CDN does not.
 //
@@ -9,11 +17,7 @@ const pageSrc = `
 {{define "style"}}<style>
 :root {
   color-scheme: light dark;
-  --bg: #f5f6f8; --surface: #fff; --side: #fff; --text: #18181b; --muted: #6b7280; --line: #e5e7eb; --hover: #f3f4f6;
-  --accent: #2563eb; --accent-hover: #1d4ed8; --on-accent: #fff; --accent-soft: #eef3fe;
-  --bad: #b91c1c; --bad-soft: #fef2f2; --good: #15803d; --good-soft: #f0fdf4; --chip: #f1f2f4;
-  --shadow: 0 1px 2px rgba(16, 24, 40, .05);
-}
+` + lightPalette + `}
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0e1014; --surface: #161920; --side: #12151a; --text: #e6e8ec; --muted: #9aa1ad; --line: #272c35; --hover: #1d2129;
@@ -112,7 +116,7 @@ td.row > form { display: inline-block; margin: 0 .35rem .35rem 0; }
   th, td { white-space: nowrap; }
   h1 { font-size: 1.3rem; }
 }
-</style>{{end}}
+{{themeCSS}}</style>{{end}}
 
 {{define "layout"}}<!doctype html>
 <html lang="{{lang}}">
@@ -124,9 +128,9 @@ td.row > form { display: inline-block; margin: 0 .35rem .35rem 0; }
 </head>
 <body class="shell">
 <aside class="side">
-  <div class="brand">{{.Service}}</div>
+  <div class="brand">{{if .Brand}}<span class="brand-name">{{.Brand}}</span>{{with .Caption}} <span class="caption">{{.}}</span>{{end}}{{else}}{{.Service}}{{end}}</div>
   <nav>
-    {{- range .Nav}}<a href="{{.Path}}"{{if .Active}} class="on"{{end}}>{{.Title}}</a>{{end}}
+    {{- range .Nav}}{{if .Sep}}<span class="sep" role="separator"></span>{{end}}<a href="{{.Path}}"{{if .Active}} class="on"{{end}}>{{.Title}}</a>{{end}}
   </nav>
   <div class="me">
     <span class="email" title="{{.User.Email}}">{{.User.Email}}</span>
@@ -155,7 +159,7 @@ td.row > form { display: inline-block; margin: 0 .35rem .35rem 0; }
 </head>
 <body class="login-page">
 <div class="login">
-<div class="brand">{{.Service}}</div>
+<div class="brand">{{if .Brand}}<span class="brand-name">{{.Brand}}</span>{{with .Caption}} <span class="caption">{{.}}</span>{{end}}{{else}}{{.Service}}{{end}}</div>
 <h1>{{t "Sign in"}}</h1>
 {{- with .Error}}<p class="banner error">{{.}}</p>{{end}}
 <form method="post">

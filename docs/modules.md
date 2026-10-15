@@ -30,7 +30,7 @@ modules:
 
 Everything else is an environment parameter: `ADMIN_ADDR` (`127.0.0.1:8081` by default, so the panel is not on the public network), `ADMIN_SESSION_TTL`, `ADMIN_INSECURE_COOKIES` for local development over plain HTTP, and `ADMIN_BOOTSTRAP_EMAIL` with `ADMIN_BOOTSTRAP_PASSWORD`, which create the first account while there are none.
 
-Out of the box: sign in with a password, roles, accounts, an append-only audit log, business settings pages built from the schema, and an overview. The panel is server rendered HTML with no external assets — it opens on a locked down network — and it creates no files in the project. The menu is a sidebar that turns into a bar on top on a phone, and the panel follows the light or dark theme of the system.
+Out of the box: sign in with a password, roles, accounts, an append-only audit log, business settings pages built from the schema, and an overview. The panel is server rendered HTML with no external assets — it opens on a locked down network — and it creates no files in the project. The menu is a sidebar that turns into a bar on top on a phone, and the panel follows the light or dark theme of the system unless a project theme pins it (below).
 
 Security of the panel: passwords are PBKDF2-HMAC-SHA256, only the hash of a session token is stored, forms are protected by a double submit token, the cookie is `HttpOnly` and `SameSite=Strict`, and disabling an account revokes its sessions at once.
 
@@ -58,6 +58,32 @@ func (h *Customers) show(w http.ResponseWriter, r *http.Request) {
 ```
 
 `ADMIN_LANGUAGE` (`en` or `ru`) sets the language of the panel itself.
+
+**A theme** gives the panel the look of the project. It is code, not an environment parameter: `admin.SetTheme` in `wireDomain`, next to `AddPage`.
+
+```go
+admin.SetTheme(app, admin.Theme{
+	Brand: "dămdala", Caption: "админка", BrandColor: "#F7931E",
+	Menu: "#343A4D", MenuText: "#FFFFFF", MenuMuted: "rgba(255, 255, 255, .6)", MenuLine: "rgba(255, 255, 255, .12)",
+	Active: "rgba(247, 147, 30, .18)", ActiveText: "#FFB566",
+	Button: "#E84E1B", ButtonHover: "#C9400F", ButtonText: "#FFFFFF",
+	Background: "#F4F4F4", Radius: "14px", ControlRadius: "10px",
+	PagesFirst: true,
+	CSS: viewsCSS, // the project's own classes for its pages
+})
+```
+
+| Field | What it changes |
+|---|---|
+| `Brand`, `Caption` | the name in the menu and on the sign in card instead of the service name, and a small word next to it; the title of the tab keeps the service name |
+| `Background`, `Surface`, `Text`, `Muted`, `Line`, `Accent`, `AccentHover` | the content: the page, cards and tables, text, borders, links and focus |
+| `Menu`, `MenuText`, `MenuMuted`, `MenuHover`, `MenuLine`, `Active`, `ActiveText`, `BrandColor` | the menu: its background and items, the account, the current item, the name |
+| `Button`, `ButtonHover`, `ButtonText` | the primary buttons; buttons inside tables stay quiet |
+| `Radius`, `ControlRadius` | cards, tables and blocks; buttons, inputs and menu items |
+| `PagesFirst` | the project pages at the top of the menu, the overview, settings, accounts and audit under a separator |
+| `CSS` | rules for the project pages, added after the panel's own |
+
+Every empty field keeps the panel's value, and without a theme the pages are byte for byte what they were. A theme with any colour pins the light scheme. The rules go into the stylesheet the page already has — no extra request, no `style` attributes — and a value that could end its declaration (`;`, `{`, `<`) panics on start, like a bad page path.
 
 ## The `monitoring` module
 
