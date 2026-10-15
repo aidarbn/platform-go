@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -37,6 +38,7 @@ type server struct {
 	pages    []Page
 	tmpl     map[string]*template.Template
 	login    *template.Template
+	brand    string // the name in the menu when the theme brands it
 }
 
 // NewServer builds the panel handler. Everything it needs is passed in, so tests run it
@@ -45,12 +47,19 @@ func NewServer(cfg Config, service string, auth *adminx.Auth, users adminx.UserR
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	if err := cfg.Theme.Validate(); err != nil {
+		panic(err.Error())
+	}
 	s := &server{
 		cfg: cfg, service: service, log: log,
 		auth: auth, users: users, audit: aud, settings: settings, pages: pages,
 		tmpl: make(map[string]*template.Template, len(contentTemplates)),
 	}
-	funcs := template.FuncMap{"t": s.t, "lang": func() string { return s.language() }}
+	if cfg.Theme.branded() {
+		s.brand = cmp.Or(cfg.Theme.Brand, service)
+	}
+	css := cfg.Theme.stylesheet()
+	funcs := template.FuncMap{"t": s.t, "lang": func() string { return s.language() }, "themeCSS": func() template.CSS { return css }}
 	for name, content := range contentTemplates {
 		s.tmpl[name] = template.Must(template.New(name).Funcs(funcs).Parse(
 			pageSrc + auditTableTmpl + `{{define "content"}}` + content + `{{end}}`))
@@ -394,6 +403,8 @@ func (s *server) record(r *http.Request, user adminx.User, action, target, detai
 
 type pageData struct {
 	Service string
+	Brand   string // the name of a branded menu, empty for the plain service name
+	Caption string
 	Title   string
 	User    adminx.User
 	Nav     []navItem
@@ -407,6 +418,7 @@ type navItem struct {
 	Title  string
 	Path   string
 	Active bool
+	Sep    bool // a separator goes before the item
 }
 
 func (s *server) render(w http.ResponseWriter, r *http.Request, user adminx.User, name, title string, data map[string]any) {
@@ -422,6 +434,8 @@ func (s *server) render(w http.ResponseWriter, r *http.Request, user adminx.User
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err := tmpl.ExecuteTemplate(w, "layout", pageData{
 		Service: s.service,
+		Brand:   s.brand,
+		Caption: s.cfg.Theme.Caption,
 		Title:   title,
 		User:    user,
 		Nav:     s.nav(r, user),
@@ -439,6 +453,8 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, next, messa
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err := s.login.ExecuteTemplate(w, "login", loginData{
 		Service: s.service,
+		Brand:   s.brand,
+		Caption: s.cfg.Theme.Caption,
 		Error:   s.t(message),
 		Next:    next,
 	})
@@ -450,6 +466,8 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, next, messa
 // loginData is what the sign in page needs: there is no session and no menu yet.
 type loginData struct {
 	Service string
+	Brand   string
+	Caption string
 	Error   string
 	Next    string
 }
@@ -464,10 +482,17 @@ func (s *server) nav(r *http.Request, user adminx.User) []navItem {
 			navItem{Title: s.t("Audit"), Path: "/audit"},
 		)
 	}
+	var project []navItem
 	for _, p := range s.pages {
 		if user.HasAny(p.Roles) {
-			items = append(items, navItem{Title: p.Title, Path: p.Path})
+			project = append(project, navItem{Title: p.Title, Path: p.Path})
 		}
+	}
+	if s.cfg.Theme.PagesFirst && len(project) > 0 {
+		items[0].Sep = true
+		items = append(project, items...)
+	} else {
+		items = append(items, project...)
 	}
 	for i := range items {
 		items[i].Active = items[i].Path == r.URL.Path || (strings.HasSuffix(items[i].Path, "/") && items[i].Path != "/" && strings.HasPrefix(r.URL.Path, items[i].Path))

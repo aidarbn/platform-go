@@ -51,6 +51,10 @@ type Config struct {
 
 	// Language of the panel: en or ru.
 	Language string
+
+	// Theme is the look of the panel. Load leaves it empty: the project sets it in code
+	// with SetTheme.
+	Theme Theme
 }
 
 // Load reads the module settings from environment variables.
@@ -88,6 +92,7 @@ type Page struct {
 type Registry struct {
 	mu     sync.RWMutex
 	pages  []Page
+	theme  *Theme
 	sealed bool
 }
 
@@ -105,6 +110,21 @@ func (r *Registry) Add(p Page) {
 	r.pages = append(r.pages, p)
 }
 
+// SetTheme sets the look of the panel. A value that is not a plain CSS value panics,
+// like a bad page path: both are mistakes in the code, found on the first start.
+func (r *Registry) SetTheme(t Theme) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.sealed {
+		panic("admin: set the theme in wireDomain, before the modules start")
+	}
+	if err := t.Validate(); err != nil {
+		panic(err.Error())
+	}
+	r.theme = &t
+}
+
 // Pages returns the registered pages.
 func (r *Registry) Pages() []Page {
 	r.mu.RLock()
@@ -112,15 +132,19 @@ func (r *Registry) Pages() []Page {
 	return slices.Clone(r.pages)
 }
 
-func (r *Registry) seal() []Page {
+func (r *Registry) seal() ([]Page, *Theme) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sealed = true
-	return slices.Clone(r.pages)
+	return slices.Clone(r.pages), r.theme
 }
 
 // AddPage registers a project page in the admin panel.
 func AddPage(app *platform.App, p Page) { platform.Get[*Registry](app).Add(p) }
+
+// SetTheme gives the admin panel the look of the project: call it in wireDomain, next to
+// AddPage.
+func SetTheme(app *platform.App, t Theme) { platform.Get[*Registry](app).SetTheme(t) }
 
 // Module implements platform.Module.
 type Module struct {
@@ -226,7 +250,12 @@ func (m *Module) Start(context.Context) error {
 		return fmt.Errorf("admin panel on %s: %w", m.cfg.Addr, err)
 	}
 	m.ln = ln
-	handler := NewServer(m.cfg, m.service, m.auth, m.users, m.audit, m.settings, m.registry.seal(), m.log)
+	pages, theme := m.registry.seal()
+	cfg := m.cfg
+	if theme != nil {
+		cfg.Theme = *theme
+	}
+	handler := NewServer(cfg, m.service, m.auth, m.users, m.audit, m.settings, pages, m.log)
 	m.srv = &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout}
 
 	go func() {
