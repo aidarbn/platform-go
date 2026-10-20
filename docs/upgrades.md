@@ -13,7 +13,7 @@ The guarantee rests on three layers: an architecture that leaves almost nothing 
 | Managed files must not be edited by hand | `platformgo verify` in the project CI compares hashes from `platformgo.lock` and fails on a mismatch, so rewriting is always safe |
 | Extension points instead of edits | the project `Makefile` includes `platform.mk` and adds its own targets; CI is a shared workflow with inputs; linters and `buf.gen.yaml` are assembled from `platformgo.yaml`, which has `extra` sections |
 | Owned code is never touched without a codemod | a scaffold created once belongs to the project; the platform changes it only through automated rewriting |
-| Tables a module owns are versioned | `admin`, `settings`, the idempotency table of `api` and the translations of `i18n` bring their tables up with `pgdb.MigrateSchema`: numbered steps per module, the version in `platform_schema_versions`, applied on start under an advisory lock. A release adds a step, never edits one, and a step stays readable by the release before it, so a rollback works on the newer schema |
+| Tables a module owns are versioned | `admin`, `settings`, the idempotency table of `api`, the translations of `i18n` and the processed ids of `webhookx` bring their tables up with `pgdb.MigrateSchema`: numbered steps per module, the version in `platform_schema_versions`, applied on start under an advisory lock. A release adds a step, never edits one, and a step stays readable by the release before it, so a rollback works on the newer schema |
 
 ## 2. What `platformgo upgrade` does
 
