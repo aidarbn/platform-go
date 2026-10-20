@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
 // ErrInvalidArgs is returned when an entity, id, field or locale is empty.
@@ -56,10 +58,23 @@ func New(pool *pgxpool.Pool, defaultLocale Locale, locales ...Locale) *Client {
 	return c
 }
 
-// EnsureSchema creates taply's translations table on the first run.
+// EnsureSchema brings taply's translations table to the current version. db must also
+// start transactions, as *pgxpool.Pool and pgx.Tx do.
 func EnsureSchema(ctx context.Context, db DBTX) error {
-	for _, sql := range []string{
-		`CREATE TABLE IF NOT EXISTS ` + Table + ` (
+	b, ok := db.(pgdb.Beginner)
+	if !ok {
+		return fmt.Errorf("i18n: create table: %T cannot start a transaction", db)
+	}
+	if err := pgdb.MigrateSchema(ctx, b, "i18n", schemaSteps); err != nil {
+		return fmt.Errorf("i18n: %w", err)
+	}
+	return nil
+}
+
+// schemaSteps are the versions of the translations table. Version 1 is the schema
+// releases before versioning created, so it keeps IF NOT EXISTS; later steps only append.
+var schemaSteps = []pgdb.SchemaStep{{Version: 1, Statements: []string{
+	`CREATE TABLE IF NOT EXISTS ` + Table + ` (
 	id         bigserial   PRIMARY KEY,
 	entity     text        NOT NULL,
 	entity_id  text        NOT NULL,
@@ -70,14 +85,8 @@ func EnsureSchema(ctx context.Context, db DBTX) error {
 	updated_at timestamptz NOT NULL DEFAULT now(),
 	UNIQUE (entity, entity_id, field, locale)
 )`,
-		`CREATE INDEX IF NOT EXISTS idx_i18n_translations_lookup ON ` + Table + ` (entity, entity_id, locale)`,
-	} {
-		if _, err := db.Exec(ctx, sql); err != nil {
-			return fmt.Errorf("i18n: create table: %w", err)
-		}
-	}
-	return nil
-}
+	`CREATE INDEX IF NOT EXISTS idx_i18n_translations_lookup ON ` + Table + ` (entity, entity_id, locale)`,
+}}}
 
 // DefaultLocale is the locale of the base columns and the fallback of every lookup.
 func (c *Client) DefaultLocale() Locale { return c.defaultLocale }
