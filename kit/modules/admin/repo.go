@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/aidarbn/platform-go/kit/adminx"
+	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
 // Table names of the admin panel. They are platform state rather than project data, so
@@ -20,10 +21,18 @@ const (
 	auditTable    = "platform_admin_audit"
 )
 
-// EnsureSchema creates the tables of the admin panel on the first run.
+// EnsureSchema brings the tables of the admin panel to the current version.
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS ` + usersTable + ` (
+	if err := pgdb.MigrateSchema(ctx, pool, "admin", schemaSteps); err != nil {
+		return fmt.Errorf("admin: %w", err)
+	}
+	return nil
+}
+
+// schemaSteps are the versions of the admin tables. Version 1 is the schema releases
+// before versioning created, so it keeps IF NOT EXISTS; later steps only append.
+var schemaSteps = []pgdb.SchemaStep{{Version: 1, Statements: []string{
+	`CREATE TABLE IF NOT EXISTS ` + usersTable + ` (
 	id            bigserial   PRIMARY KEY,
 	email         text        NOT NULL UNIQUE,
 	password_hash text        NOT NULL,
@@ -32,7 +41,7 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	created_at    timestamptz NOT NULL DEFAULT now(),
 	last_login_at timestamptz
 )`,
-		`CREATE TABLE IF NOT EXISTS ` + sessionsTable + ` (
+	`CREATE TABLE IF NOT EXISTS ` + sessionsTable + ` (
 	id         text        PRIMARY KEY,
 	user_id    bigint      NOT NULL REFERENCES ` + usersTable + `(id) ON DELETE CASCADE,
 	created_at timestamptz NOT NULL,
@@ -40,9 +49,9 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	ip         text        NOT NULL DEFAULT '',
 	user_agent text        NOT NULL DEFAULT ''
 )`,
-		`CREATE INDEX IF NOT EXISTS ` + sessionsTable + `_user_id_idx ON ` + sessionsTable + ` (user_id)`,
-		`CREATE INDEX IF NOT EXISTS ` + sessionsTable + `_expires_at_idx ON ` + sessionsTable + ` (expires_at)`,
-		`CREATE TABLE IF NOT EXISTS ` + auditTable + ` (
+	`CREATE INDEX IF NOT EXISTS ` + sessionsTable + `_user_id_idx ON ` + sessionsTable + ` (user_id)`,
+	`CREATE INDEX IF NOT EXISTS ` + sessionsTable + `_expires_at_idx ON ` + sessionsTable + ` (expires_at)`,
+	`CREATE TABLE IF NOT EXISTS ` + auditTable + ` (
 	id      bigserial   PRIMARY KEY,
 	at      timestamptz NOT NULL DEFAULT now(),
 	actor   text        NOT NULL,
@@ -51,15 +60,7 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	details text        NOT NULL DEFAULT '',
 	ip      text        NOT NULL DEFAULT ''
 )`,
-	}
-
-	for _, sql := range statements {
-		if _, err := pool.Exec(ctx, sql); err != nil {
-			return fmt.Errorf("admin: create schema: %w", err)
-		}
-	}
-	return nil
-}
+}}}
 
 // NewUserRepo returns the accounts stored in PostgreSQL.
 func NewUserRepo(pool *pgxpool.Pool) adminx.UserRepo { return &userRepo{pool: pool} }

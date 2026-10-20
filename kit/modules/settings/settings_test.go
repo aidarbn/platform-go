@@ -118,6 +118,10 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 		if _, err := own.Exec(context.Background(), "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Errorf("drop %s: %v", table, err)
 		}
+		// The recorded version goes with the table, or the next run would not create it.
+		// Before the first run the versions table does not exist, so the error is ignored.
+		_, _ = own.Exec(context.Background(),
+			"DELETE FROM "+pgdb.SchemaVersionsTable+" WHERE owner = $1", "settings:"+table)
 	}
 	dropTable()
 	t.Cleanup(func() {

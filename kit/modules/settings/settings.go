@@ -18,6 +18,7 @@ import (
 
 	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/modules/postgres"
+	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
 	"github.com/aidarbn/platform-go/kit/settingsx"
 )
@@ -217,19 +218,25 @@ func (r *repo) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-// ensureTable creates the table on the first run: overrides are platform state, not
-// project data, so the module owns the table instead of the project migrations.
+// ensureTable brings the table to the current version: overrides are platform state, not
+// project data, so the module owns the table instead of the project migrations. The
+// table name is configurable, so it is part of the owner.
 func ensureTable(ctx context.Context, pool *pgxpool.Pool, table string) error {
-	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS `+table+` (
+	if err := pgdb.MigrateSchema(ctx, pool, "settings:"+table, schemaSteps(table)); err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+	return nil
+}
+
+// schemaSteps are the versions of the settings table. Version 1 is the schema releases
+// before versioning created, so it keeps IF NOT EXISTS; later steps only append.
+func schemaSteps(table string) []pgdb.SchemaStep {
+	return []pgdb.SchemaStep{{Version: 1, Statements: []string{`CREATE TABLE IF NOT EXISTS ` + table + ` (
 	key        text        PRIMARY KEY,
 	value      text        NOT NULL,
 	updated_by text        NOT NULL DEFAULT '',
 	updated_at timestamptz NOT NULL DEFAULT now()
-)`)
-	if err != nil {
-		return fmt.Errorf("settings: create table %s: %w", table, err)
-	}
-	return nil
+)`}}}
 }
 
 // validTable guards the table name: it goes into SQL as text, so anything but a plain

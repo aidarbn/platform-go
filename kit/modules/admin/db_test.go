@@ -235,6 +235,17 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM platform_admin_audit WHERE actor = $1", email)
 	})
 
+	// The settings table goes with its recorded version, before and after the run: a
+	// version left without its table would keep the next run from creating it. Before the
+	// first run the versions table does not exist, so the errors are ignored.
+	dropSettings := func() {
+		_, _ = pool.Exec(context.Background(), "DROP TABLE IF EXISTS platform_settings_admin_test")
+		_, _ = pool.Exec(context.Background(),
+			"DELETE FROM "+pgdb.SchemaVersionsTable+" WHERE owner = 'settings:platform_settings_admin_test'")
+	}
+	dropSettings()
+	t.Cleanup(dropSettings)
+
 	panel := admin.New(admin.Config{
 		Addr: "127.0.0.1:0", Insecure: true,
 		BootstrapEmail: email, BootstrapPassword: "first-password",
@@ -292,9 +303,6 @@ func TestLifecycleWithRealDatabase(t *testing.T) {
 	if page.StatusCode != http.StatusOK || !strings.Contains(string(pageBody), "maintenance") {
 		t.Errorf("the settings page does not show the settings: %d\n%s", page.StatusCode, pageBody)
 	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), "DROP TABLE IF EXISTS platform_settings_admin_test")
-	})
 
 	health, err := http.Get("http://" + ops + "/health")
 	if err != nil {

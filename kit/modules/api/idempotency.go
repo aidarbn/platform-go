@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
@@ -321,9 +322,10 @@ func NewPostgresIdempotencyStore(ctx context.Context, pool *pgxpool.Pool) (Idemp
 	return newPGIdempotencyStore(ctx, pool)
 }
 
-func newPGIdempotencyStore(ctx context.Context, pool *pgxpool.Pool) (*pgIdempotencyStore, error) {
-	for _, sql := range []string{
-		`CREATE TABLE IF NOT EXISTS ` + idempotencyTable + ` (
+// idempotencySchema are the versions of the idempotency table. Version 1 is the schema
+// releases before versioning created, so it keeps IF NOT EXISTS; later steps only append.
+var idempotencySchema = []pgdb.SchemaStep{{Version: 1, Statements: []string{
+	`CREATE TABLE IF NOT EXISTS ` + idempotencyTable + ` (
 	id          bigserial   PRIMARY KEY,
 	user_id     text        NOT NULL,
 	method      text        NOT NULL,
@@ -338,11 +340,12 @@ func newPGIdempotencyStore(ctx context.Context, pool *pgxpool.Pool) (*pgIdempote
 	expires_at  timestamptz NOT NULL,
 	UNIQUE (user_id, method, key)
 )`,
-		`CREATE INDEX IF NOT EXISTS ` + idempotencyTable + `_expires_at_idx ON ` + idempotencyTable + ` (expires_at)`,
-	} {
-		if _, err := pool.Exec(ctx, sql); err != nil {
-			return nil, fmt.Errorf("api: idempotency table: %w", err)
-		}
+	`CREATE INDEX IF NOT EXISTS ` + idempotencyTable + `_expires_at_idx ON ` + idempotencyTable + ` (expires_at)`,
+}}}
+
+func newPGIdempotencyStore(ctx context.Context, pool *pgxpool.Pool) (*pgIdempotencyStore, error) {
+	if err := pgdb.MigrateSchema(ctx, pool, "api:idempotency", idempotencySchema); err != nil {
+		return nil, fmt.Errorf("api: idempotency table: %w", err)
 	}
 	return &pgIdempotencyStore{pool: pool}, nil
 }
