@@ -313,6 +313,14 @@ func withDefaults(opts []registry.Option, values map[string]any) map[string]any 
 		}
 		if set {
 			out[o.Name] = fillDefaults(o, v)
+			continue
+		}
+		// An object left out still has the defaults of its fields: a generator reads
+		// sqlc.dir whether or not the file mentions sqlc.
+		if o.Kind == registry.KindObject && len(o.OneOf) == 0 {
+			if inner := withDefaults(o.Fields, nil); len(inner) > 0 {
+				out[o.Name] = inner
+			}
 		}
 	}
 	return out

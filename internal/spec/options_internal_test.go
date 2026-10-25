@@ -308,6 +308,15 @@ sqlc:
 	if section["proto_dir"] != "" {
 		t.Error("the section itself was changed")
 	}
+	// an object left out gets the defaults of its fields; one without any stays out
+	absent := withDefaults(fake.Options, map[string]any{})
+	if g, ok := absent["openapi"].(map[string]any); !ok || g["generator"] != "connect" {
+		t.Errorf("an absent object = %#v", absent["openapi"])
+	}
+	if _, ok := absent["sqlc"]; ok {
+		t.Errorf("an absent object without defaults was filled: %#v", absent["sqlc"])
+	}
+
 	// values of an unexpected shape are left to the validator
 	if v := fillDefaults(opts[5], "x"); v != "x" {
 		t.Errorf("object over a string = %v", v)

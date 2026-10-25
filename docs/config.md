@@ -69,7 +69,7 @@ Every option of a module has a type, declared once in the module registry. Today
 | map | a mapping with any keys, values of one type | `renames: {url: URL}` |
 | one of | a value of one of several shapes, told apart by the shape | `go_type: int64` or `go_type: {type: int64, pointer: true}` |
 
-An option left out takes its default, which the schema shows; an empty string counts as left out. An empty value (`schema:` with nothing after it) is an error, not the default: delete the key instead. A module section with nothing in it (`monitoring:`) is the same as `{}`. YAML anchors, aliases and merge keys (`<<`) work and are checked as the merged result.
+An option left out takes its default, which the schema shows; an empty string counts as left out, and an object left out still gets the defaults of its keys. An empty value (`schema:` with nothing after it) is an error, not the default: delete the key instead. A module section with nothing in it (`monitoring:`) is the same as `{}`. YAML anchors, aliases and merge keys (`<<`) work and are checked as the merged result.
 
 Errors say where and what:
 
