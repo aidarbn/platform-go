@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	pgxdecimal "github.com/jackc/pgx-shopspring-decimal"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,6 +23,16 @@ type Config struct {
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
 	ConnectTimeout  time.Duration
+
+	// AfterConnect runs on every new connection, after the platform has registered its
+	// types (numeric as decimal.Decimal). Projects register their own types here, such as
+	// enums or composite types. An error discards the connection.
+	AfterConnect func(ctx context.Context, conn *pgx.Conn) error
+
+	// ConfigurePool adjusts the pgx pool settings once the fields above are applied, for
+	// what Config does not cover: BeforeAcquire, a tracer, runtime parameters. An
+	// AfterConnect set here runs after the platform types and before Config.AfterConnect.
+	ConfigurePool func(*pgxpool.Config)
 }
 
 func (c *Config) setDefaults() {
@@ -57,6 +68,10 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
 	poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 	poolCfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
+	if cfg.ConfigurePool != nil {
+		cfg.ConfigurePool(poolCfg)
+	}
+	poolCfg.AfterConnect = afterConnect(poolCfg.AfterConnect, cfg.AfterConnect)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -70,6 +85,32 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("pgdb: database is unreachable: %w", err)
 	}
 	return pool, nil
+}
+
+// RegisterTypes registers the types the platform maps for every project on a connection:
+// numeric as decimal.Decimal, the type the generated sqlc config uses for it. The codec
+// sends numeric in the binary format, also inside arrays, instead of the text fallback
+// through sql.Scanner. Open calls
+// it on every connection; call it yourself on a connection made without Open.
+func RegisterTypes(conn *pgx.Conn) {
+	pgxdecimal.Register(conn.TypeMap())
+}
+
+// afterConnect chains the platform types with the hooks of the project, in order. A
+// failing hook stops the chain, and pgx discards the connection.
+func afterConnect(hooks ...func(context.Context, *pgx.Conn) error) func(context.Context, *pgx.Conn) error {
+	return func(ctx context.Context, conn *pgx.Conn) error {
+		RegisterTypes(conn)
+		for _, hook := range hooks {
+			if hook == nil {
+				continue
+			}
+			if err := hook(ctx, conn); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // InTx runs fn inside a transaction: it rolls back on error or panic and commits otherwise.
