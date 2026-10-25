@@ -55,7 +55,7 @@ func TestNumericAsWithoutPlatformTypes(t *testing.T) {
 	read := func(scan func(dst any) error, mk func() any) string {
 		dst := mk()
 		if err := scan(dst); err != nil {
-			return "error"
+			return "error: " + err.Error()
 		}
 		v := reflect.ValueOf(dst).Elem()
 		for v.Kind() == reflect.Pointer && !v.IsNil() {
@@ -73,17 +73,24 @@ func TestNumericAsWithoutPlatformTypes(t *testing.T) {
 			}
 		}
 		q := "select " + value
-		rp, _ := plain.Query(ctx, q)
-		rq, _ := platform.Query(ctx, q)
-		for rp.Next() && rq.Next() {
-			vp, _ := rp.Values()
-			vq, _ := rq.Values()
-			if fmt.Sprintf("%T %v", vp[0], vp[0]) != fmt.Sprintf("%T %v", vq[0], vq[0]) {
-				t.Errorf("%s through Values: %T %v, without platform types %T %v", value, vq[0], vq[0], vp[0], vp[0])
-			}
+		if got, want := rowValues(t, platform, q), rowValues(t, plain, q); got != want {
+			t.Errorf("%s through Values: %s, without platform types %s", value, got, want)
 		}
-		rp.Close()
-		rq.Close()
+	}
+
+	// Stated outright, not only as parity: any and RowToMap give pgtype.Numeric, NaN too.
+	for _, q := range []string{"select 'NaN'::numeric as n", "select 1.5::numeric as n"} {
+		rows, err := platform.Query(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := pgx.CollectOneRow(rows, pgx.RowToMap)
+		if err != nil {
+			t.Fatalf("%s: RowToMap: %v", q, err)
+		}
+		if _, ok := m["n"].(pgtype.Numeric); !ok {
+			t.Errorf("%s: RowToMap gives %T", q, m["n"])
+		}
 	}
 
 	params := map[string]any{"float64": 1.5, "string": "2.25", "int": 3, "pgtype.Numeric": pgtype.Numeric{Valid: true, Int: bigInt(45), Exp: -1},
@@ -116,6 +123,37 @@ func TestNumericAsWithoutPlatformTypes(t *testing.T) {
 	}
 }
 
+// decimal.Decimal and decimal.NullDecimal travel as numeric, scalars and arrays, NULL
+// included; NaN does not fit a decimal and fails. These targets go through the scan
+// plans of pgx-shopspring-decimal, which RegisterTypes keeps while it puts the codec of
+// pgx back for numeric.
+func TestDecimalTargets(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgdb.Open(ctx, pgdb.Config{URL: testURL(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var d decimal.Decimal
+	if err := pool.QueryRow(ctx, "select $1::numeric", decimal.RequireFromString("-0.000123")).Scan(&d); err != nil || d.String() != "-0.000123" {
+		t.Errorf("scalar: %s %v", d, err)
+	}
+	var nd decimal.NullDecimal
+	if err := pool.QueryRow(ctx, "select $1::numeric", decimal.NullDecimal{}).Scan(&nd); err != nil || nd.Valid {
+		t.Errorf("NULL: %v %v", nd, err)
+	}
+	if err := pool.QueryRow(ctx, "select $1::numeric", decimal.NewNullDecimal(decimal.RequireFromString("7.25"))).Scan(&nd); err != nil || !nd.Valid || nd.Decimal.String() != "7.25" {
+		t.Errorf("NullDecimal: %v %v", nd, err)
+	}
+	if err := pool.QueryRow(ctx, "select 'NaN'::numeric").Scan(&d); err == nil {
+		t.Error("NaN fits a decimal.Decimal")
+	}
+	var text string
+	if err := pool.QueryRow(ctx, "select $1::numeric::text", decimal.RequireFromString("12345678901234567890.0123456789")).Scan(&text); err != nil || text != "12345678901234567890.0123456789" {
+		t.Errorf("parameter: %s %v", text, err)
+	}
+}
+
 // Arrays of numeric travel as decimal.Decimal too.
 func TestDecimalArrays(t *testing.T) {
 	ctx := context.Background()
@@ -142,3 +180,26 @@ func deref(s *string) any {
 }
 
 func bigInt(v int64) *big.Int { return big.NewInt(v) }
+
+// rowValues returns what rows.Values gives for every row of q, failing on errors.
+func rowValues(t *testing.T, conn *pgx.Conn, q string) string {
+	t.Helper()
+	rows, err := conn.Query(context.Background(), q)
+	if err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		v, err := rows.Values()
+		if err != nil {
+			out = append(out, "error: "+err.Error())
+			continue
+		}
+		out = append(out, fmt.Sprintf("%T %v", v[0], v[0]))
+	}
+	if err := rows.Err(); err != nil {
+		out = append(out, "rows error: "+err.Error())
+	}
+	return fmt.Sprint(out)
+}

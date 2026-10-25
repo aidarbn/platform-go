@@ -111,6 +111,9 @@ func RegisterTypes(conn *pgx.Conn) {
 	// would also turn numeric scanned into any — rows.Values, pgx.RowToMap — into
 	// decimal.Decimal, which JSON writes as a string and which has no NaN or Infinity.
 	// The codec of pgx keeps those as pgtype.Numeric, as without the platform types.
+	// This rests on the library's codec changing only DecodeValue, with the decimal
+	// plans added to the map apart from it; TestNumericAsWithoutPlatformTypes and
+	// TestDecimalTargets fail when an upgrade of either library breaks that.
 	m.RegisterType(&pgtype.Type{Name: "numeric", OID: pgtype.NumericOID, Codec: pgtype.NumericCodec{}})
 }
 
