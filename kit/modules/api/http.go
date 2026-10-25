@@ -312,17 +312,21 @@ func newCORS(cfg Config, registered []string) *corsPolicy {
 
 func (p *corsPolicy) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// Unless every origin gets the same "*", the answer depends on the origin, even
+		// when it carries no CORS headers: a shared cache must not hand it to another one.
+		if !p.anyOrigin {
+			h.Add("Vary", "Origin")
+		}
 		origin := r.Header.Get("Origin")
 		if origin == "" || !p.allowed(origin) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		h := w.Header()
 		if p.anyOrigin {
 			h.Set("Access-Control-Allow-Origin", "*")
 		} else {
 			h.Set("Access-Control-Allow-Origin", origin)
-			h.Add("Vary", "Origin")
 		}
 		if p.credentials {
 			h.Set("Access-Control-Allow-Credentials", "true")
@@ -354,6 +358,17 @@ func joinHeaders(lists ...[]string) string {
 		}
 	}
 	return strings.Join(out, ", ")
+}
+
+// checkCORSHeaders refuses header names of a Config written in code, which Load did
+// not check.
+func checkCORSHeaders(cfg Config) error {
+	for _, name := range slices.Concat(cfg.CORSHeaders, cfg.CORSExpose) {
+		if !validHeaderName(name) {
+			return fmt.Errorf("api: CORS: %q is not a header name", name)
+		}
+	}
+	return nil
 }
 
 // validHeaderName reports whether name is an HTTP field name: a token of RFC 9110.

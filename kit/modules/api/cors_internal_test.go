@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,7 @@ type corsCase struct {
 	method    string
 	origin    string
 	preflight bool
+	preVary   string // Vary already set by an outer layer
 
 	status      int
 	allowOrigin string
@@ -47,11 +49,11 @@ func TestCORSPolicy(t *testing.T) {
 		{
 			name: "foreign origin, preflight goes on untouched", cfg: Config{CORSOrigins: exact},
 			method: "OPTIONS", origin: "https://evil.example.com", preflight: true,
-			status: 200, reached: true,
+			status: 200, vary: "Origin", reached: true,
 		},
 		{
 			name: "no origin is not a CORS call", cfg: Config{CORSOrigins: star},
-			method: "GET", status: 200, reached: true,
+			method: "GET", status: 200, vary: "Origin", reached: true,
 		},
 		{
 			name: "OPTIONS without Access-Control-Request-Method is not a preflight", cfg: Config{CORSOrigins: exact},
@@ -86,6 +88,12 @@ func TestCORSPolicy(t *testing.T) {
 			status: 200, allowOrigin: "https://app.example.com", vary: "Origin", expose: "X-Request-ID", reached: true,
 		},
 		{
+			name: "a Vary set further out is kept", cfg: Config{CORSOrigins: exact}, preVary: "Accept-Encoding",
+			method: "GET", origin: "https://app.example.com",
+			status: 200, allowOrigin: "https://app.example.com", vary: "Accept-Encoding, Origin", credentials: "true",
+			expose: "X-Request-ID", reached: true,
+		},
+		{
 			name: "project and environment headers, expose, max age",
 			cfg: Config{
 				CORSOrigins: exact, CORSHeaders: []string{"X-Device", "x-restaurant-id", "authorization"},
@@ -114,6 +122,9 @@ func TestCORSPolicy(t *testing.T) {
 				r.Header.Set("Access-Control-Request-Headers", "x-restaurant-id")
 			}
 			w := httptest.NewRecorder()
+			if c.preVary != "" {
+				w.Header().Set("Vary", c.preVary)
+			}
 			h.ServeHTTP(w, r)
 
 			got := w.Result().Header
@@ -122,7 +133,6 @@ func TestCORSPolicy(t *testing.T) {
 			}
 			for header, want := range map[string]string{
 				"Access-Control-Allow-Origin":      c.allowOrigin,
-				"Vary":                             c.vary,
 				"Access-Control-Allow-Credentials": c.credentials,
 				"Access-Control-Allow-Headers":     c.headers,
 				"Access-Control-Expose-Headers":    c.expose,
@@ -131,6 +141,9 @@ func TestCORSPolicy(t *testing.T) {
 				if g := got.Get(header); g != want {
 					t.Errorf("%s = %q, want %q", header, g, want)
 				}
+			}
+			if g := strings.Join(got.Values("Vary"), ", "); g != c.vary {
+				t.Errorf("Vary = %q, want %q", g, c.vary)
 			}
 			if c.preflight && c.status == 204 && got.Get("Access-Control-Allow-Methods") != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
 				t.Errorf("Allow-Methods = %q", got.Get("Access-Control-Allow-Methods"))

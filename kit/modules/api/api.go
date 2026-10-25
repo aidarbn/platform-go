@@ -434,6 +434,9 @@ func (m *Module) Start(ctx context.Context) error {
 		m.log.Info("the API is not served in this role")
 		return nil
 	}
+	if err := checkCORSHeaders(m.cfg); err != nil {
+		return err
+	}
 	if !m.cfg.CORSNoCredentials && slices.Contains(m.cfg.CORSOrigins, "*") {
 		m.log.Warn("API_CORS_ORIGINS has * with credentials: every origin is echoed back and may call the API with the user's cookies; set API_CORS_CREDENTIALS=false for a public API")
 	}

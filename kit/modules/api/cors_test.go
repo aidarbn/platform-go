@@ -1,11 +1,13 @@
 package api_test
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/modules/api"
@@ -91,4 +93,21 @@ func TestCORSHeadersRefusesABadName(t *testing.T) {
 		}
 	}()
 	api.CORSHeaders(platform.NewApp(slog.Default()), "X Restaurant")
+}
+
+// A Config written in code is not read by Load, so the start checks its header names.
+func TestCORSBadHeaderInConfigStopsTheStart(t *testing.T) {
+	for _, cfg := range []api.Config{
+		{CORSOrigins: []string{"*"}, CORSHeaders: []string{"X-A, X-B"}},
+		{CORSOrigins: []string{"*"}, CORSExpose: []string{"X-Total\r\nSet-Cookie: x"}},
+	} {
+		cfg.GRPCAddr, cfg.HTTPAddr = "127.0.0.1:0", "127.0.0.1:0"
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := platform.RunContext(ctx, platform.Config{Service: "echo", OpsAddr: "127.0.0.1:0", ShutdownTimeout: time.Second},
+			[]platform.Module{api.New(cfg)}, func(*platform.App) error { return nil })
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "is not a header name") {
+			t.Errorf("%+v: %v", cfg, err)
+		}
+	}
 }
