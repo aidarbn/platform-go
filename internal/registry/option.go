@@ -122,7 +122,9 @@ func checkOption(errs *[]error, path string, o Option) {
 			fail("one_of excludes kind, items, fields, values and enum")
 		}
 		kinds := map[Kind]bool{}
+		fits := o.Default == nil
 		for i, alt := range o.OneOf {
+			fits = fits || defaultFits(alt.Kind, o.Default)
 			if alt.Name != "" || alt.Required || len(alt.OneOf) > 0 {
 				fail("alternative %d: no name, required or nested one_of", i)
 			}
@@ -131,6 +133,12 @@ func checkOption(errs *[]error, path string, o Option) {
 			}
 			kinds[alt.Kind] = true
 			checkOption(errs, fmt.Sprintf("%s|%s", path, alt.Kind), alt)
+		}
+		if kinds[KindObject] && kinds[KindMap] {
+			fail("an object and a map cannot be told apart")
+		}
+		if !fits {
+			fail("default %#v fits none of the alternatives", o.Default)
 		}
 		return
 	}

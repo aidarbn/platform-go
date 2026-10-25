@@ -85,6 +85,8 @@ func TestCheckOptionsRejectsMalformed(t *testing.T) {
 		{"same kinds", registry.Option{Name: "a", Description: "d", OneOf: []registry.Option{{}, {}}}, "cannot be told apart"},
 		{"named alternative", registry.Option{Name: "a", Description: "d", OneOf: []registry.Option{{Name: "n"}, {Kind: registry.KindBool}}}, "alternative 0: no name"},
 		{"bad alternative", registry.Option{Name: "a", Description: "d", OneOf: []registry.Option{{}, {Kind: list}}}, "x.a|list: items go with a list"},
+		{"object or map", registry.Option{Name: "a", Description: "d", OneOf: []registry.Option{{Kind: registry.KindObject, Fields: []registry.Option{str("f")}}, {Kind: registry.KindMap, Values: &registry.Option{}}}}, "an object and a map cannot be told apart"},
+		{"one_of default", registry.Option{Name: "a", Description: "d", Default: 5, OneOf: []registry.Option{{}, {Kind: registry.KindBool}}}, "fits none of the alternatives"},
 		{"bad field", registry.Option{Name: "a", Description: "d", Kind: registry.KindObject, Fields: []registry.Option{{Name: "f"}}}, "x.a.f: no description"},
 	}
 	for _, tc := range cases {

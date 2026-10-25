@@ -12,13 +12,19 @@
           "additionalProperties": false,
           "description": "platform module admin; requires postgres",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "api": {
           "additionalProperties": false,
           "description": "platform module api",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "enums": {
           "additionalProperties": false,
@@ -30,43 +36,64 @@
               "type": "string"
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "i18n": {
           "additionalProperties": false,
           "description": "platform module i18n; requires postgres, api",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "monitoring": {
           "additionalProperties": false,
           "description": "platform module monitoring",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "postgres": {
           "additionalProperties": false,
           "description": "platform module postgres",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "rbac": {
           "additionalProperties": false,
           "description": "platform module rbac; requires api",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "river": {
           "additionalProperties": false,
           "description": "platform module river; requires postgres",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "s3": {
           "additionalProperties": false,
           "description": "platform module s3",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "settings": {
           "additionalProperties": false,
@@ -78,13 +105,19 @@
               "type": "string"
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "web": {
           "additionalProperties": false,
           "description": "platform module web; requires api",
           "properties": {},
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": [

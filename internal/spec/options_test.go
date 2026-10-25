@@ -17,6 +17,7 @@ func TestOldFilesStillParse(t *testing.T) {
 		"sendkz.yaml":              "postgres,admin,api,river,settings,web",
 		"scaffold-no-modules.yaml": "",
 		"every-module.yaml":        "postgres,admin,api,enums,i18n,monitoring,rbac,river,s3,settings,web",
+		"anchors.yaml":             "api,enums,postgres,settings",
 	}
 	for name, modules := range want {
 		t.Run(name, func(t *testing.T) {
@@ -105,6 +106,45 @@ func TestOptionErrorsNameTheLine(t *testing.T) {
 
 // The registry is what the published schema and the validator are built from: every
 // module described there passes the well-formedness check.
+// A merge key at the root or in modules must not hide a section from the check: the
+// decoder sees the merged modules, so the validator must see them too.
+func TestMergedModulesAreChecked(t *testing.T) {
+	for _, src := range []string{
+		"schema: 1\nproject: {module: x.com/a}\nmodules:\n  postgres: {}\n  <<: {enums: {domian: foo}, api: {}}\n",
+		"schema: 1\nproject: {module: x.com/a}\n<<:\n  modules:\n    api: {}\n    enums: {domian: x}\n",
+	} {
+		if _, err := spec.Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), `unknown option "domian"`) {
+			t.Errorf("%q: %v", src, err)
+		}
+	}
+}
+
+func TestDecodeOptionsDefaults(t *testing.T) {
+	f, err := spec.Parse([]byte("schema: 1\nproject: {module: x.com/a}\nmodules:\n  postgres: {}\n  settings: {schema: \"\"}\n  api:\n  enums:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Schema string `yaml:"schema"`
+	}
+	if err := f.DecodeOptions("settings", &s); err != nil || s.Schema != "settings.yaml" {
+		t.Errorf("an empty string = %+v, %v", s, err)
+	}
+	if f.StringOption("settings", "schema", "settings.yaml") != s.Schema {
+		t.Error("StringOption and DecodeOptions disagree on an empty string")
+	}
+	var e struct {
+		Domain string `yaml:"domain"`
+	}
+	if err := f.DecodeOptions("enums", &e); err != nil || e.Domain != "internal/domain" {
+		t.Errorf("an empty section = %+v, %v", e, err)
+	}
+	f.Modules["nope"] = nil
+	if err := f.DecodeOptions("nope", &e); err == nil || !strings.Contains(err.Error(), "unknown module") {
+		t.Errorf("an unknown module: %v", err)
+	}
+}
+
 func TestRegistryOptionsWellFormed(t *testing.T) {
 	for _, m := range registry.All() {
 		if err := registry.CheckOptions(m); err != nil {
@@ -116,5 +156,18 @@ func TestRegistryOptionsWellFormed(t *testing.T) {
 func TestParseRejectsBrokenYAML(t *testing.T) {
 	if _, err := spec.Parse([]byte("schema: 1\nproject:\n  module: [\n")); err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAnchorsReadLikeBefore(t *testing.T) {
+	f, err := spec.Load(filepath.Join("testdata", "old", "anchors.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.StringOption("settings", "schema", ""); got != "config/settings.yaml" {
+		t.Errorf("a merged option = %q", got)
+	}
+	if got := f.StringOption("enums", "domain", ""); got != "internal/core" {
+		t.Errorf("an anchored section = %q", got)
 	}
 }

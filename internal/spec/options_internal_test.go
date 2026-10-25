@@ -107,9 +107,11 @@ func TestTypedOptionErrors(t *testing.T) {
 		{"inside an alternative", "sqlc: {overrides: [{db_type: a, go_type: {type: b, pointr: true}}]}", `option sqlc.overrides[0].go_type: unknown key "pointr", known keys: type, pointer`},
 		{"map value", "sqlc: {renames: {url: [x]}}", "option sqlc.renames.url must be a string, got a list"},
 		{"map for a map", "sqlc: {renames: x}", `option sqlc.renames must be a map, got a string "x"`},
-		{"merge key in a section", "<<: {strict: true}", "module fake: section: merge keys (<<) are not supported"},
-		{"merge key in an object", "openapi: {<<: {generator: none}}", "option openapi: merge keys (<<) are not supported"},
-		{"merge key in a map", "sqlc: {renames: {<<: {a: b}}}", "option sqlc.renames: merge keys (<<) are not supported"},
+		{"merged into a section", "<<: {strict: 1}", "option strict must be true or false, got an integer 1"},
+		{"merged into an object", "openapi: {<<: {generater: none}}", `option openapi: unknown key "generater"`},
+		{"merged into a map", "sqlc: {renames: {<<: {a: [b]}}}", "option sqlc.renames.a must be a string, got a list"},
+		{"the earlier merge wins", "<<: [{proto_dir: 5}, {proto_dir: ok}]", "option proto_dir must be a string, got an integer 5"},
+		{"timestamp", "proto_dir: 2026-10-26", `got a date 2026-10-26: quote it, "2026-10-26"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,5 +211,114 @@ func TestOptionSchemaFragments(t *testing.T) {
 			gj, _ := json.Marshal(g)
 			t.Errorf("%s:\n got %s\nwant %s", path, gj, w)
 		}
+	}
+}
+
+// Merge keys are read the way the decoder reads them: a key written in the mapping wins,
+// then the earlier merged mapping.
+func TestMergeKeysFollowTheDecoder(t *testing.T) {
+	for _, src := range []string{
+		"<<: {strict: true, proto_dir: x}",
+		"proto_dir: ok\n    <<: {proto_dir: 5}",
+		"<<: {proto_dir: 5}\n    proto_dir: ok",
+		"<<: [{proto_dir: ok}, {proto_dir: 5}]",
+		"openapi: {<<: {generator: none}}",
+		"sqlc: {renames: {<<: {a: b}, c: d}}",
+	} {
+		if errs := check(t, "modules:\n  fake:\n    "+src+"\n"); len(errs) > 0 {
+			t.Errorf("%s: %v", src, errs)
+		}
+	}
+	// A merge source that is not a mapping is the decoder's error; here it adds nothing.
+	if got := pairs(&yaml.Node{Kind: yaml.ScalarNode}); got != nil {
+		t.Errorf("pairs of a scalar = %v", got)
+	}
+}
+
+func TestAliasErrorNamesTheUse(t *testing.T) {
+	errs := check(t, "x: &bad 5\nmodules:\n  fake:\n    strict: true\n    proto_dir: *bad\n")
+	if len(errs) != 1 || !strings.HasPrefix(errs[0], "line 5: ") {
+		t.Errorf("errs = %q", errs)
+	}
+}
+
+var withRequired = registry.Module{Name: "req", Options: []registry.Option{
+	{Name: "dir", Description: "a directory", Required: true},
+}}
+
+func TestRequiredOptionInAnEmptySection(t *testing.T) {
+	for _, src := range []string{"modules:\n  req:\n", "modules:\n  req: {}\n", "s: &s {}\nmodules:\n  req: *s\n"} {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+			t.Fatal(err)
+		}
+		errs := checkOptions(withRequired, moduleNodes(&doc)["req"])
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "module req: missing required option dir") {
+			t.Errorf("%q: %v", src, errs)
+		}
+	}
+	if errs := checkOptions(withRequired, nil); len(errs) != 1 {
+		t.Errorf("no node at all: %v", errs)
+	}
+}
+
+func TestWithDefaults(t *testing.T) {
+	var section map[string]any
+	if err := yaml.Unmarshal([]byte(`
+proto_dir: ""
+openapi: {}
+sqlc:
+  overrides:
+    - {db_type: a, go_type: b}
+    - {db_type: a, go_type: {type: c}}
+  renames: {a: b}
+`), &section); err != nil {
+		t.Fatal(err)
+	}
+	opts := append([]registry.Option(nil), fake.Options...)
+	// defaults deep inside: a field of the object alternative, a map value, a list element
+	sqlc := opts[5]
+	sqlc.Fields = append([]registry.Option(nil), sqlc.Fields...)
+	items := *sqlc.Fields[1].Items
+	items.Fields = append([]registry.Option(nil), items.Fields...)
+	goType := items.Fields[2]
+	alts := append([]registry.Option(nil), goType.OneOf...)
+	obj := alts[1]
+	obj.Fields = append([]registry.Option(nil), obj.Fields...)
+	obj.Fields[1].Default = false
+	alts[1] = obj
+	goType.OneOf = alts
+	items.Fields[2] = goType
+	sqlc.Fields[1].Items = &items
+	sqlc.Fields[2].Values = &registry.Option{Description: "new name", Default: "x"}
+	sqlc.Fields = append(sqlc.Fields, registry.Option{Name: "tags", Description: "t", Kind: registry.KindList, Items: &registry.Option{Description: "t"}, Default: []any{"a"}})
+	opts[5] = sqlc
+	opts = append(opts, registry.Option{Name: "plain", Description: "no default"},
+		registry.Option{Name: "pick", Description: "p", OneOf: []registry.Option{{}, {Kind: registry.KindBool}}, Default: "s"})
+
+	got := withDefaults(opts, section)
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"openapi":{"generator":"connect"},"pick":"s","proto_dir":"proto","sqlc":{"overrides":[{"db_type":"a","go_type":"b"},{"db_type":"a","go_type":{"pointer":false,"type":"c"}}],"renames":{"a":"b"},"tags":["a"]},"strict":true}`
+	if string(raw) != want {
+		t.Errorf("withDefaults:\n got %s\nwant %s", raw, want)
+	}
+	if section["proto_dir"] != "" {
+		t.Error("the section itself was changed")
+	}
+	// values of an unexpected shape are left to the validator
+	if v := fillDefaults(opts[5], "x"); v != "x" {
+		t.Errorf("object over a string = %v", v)
+	}
+	if v := fillDefaults(*opts[5].Fields[1].Items, map[string]any{}); v == nil {
+		t.Error("an object element")
+	}
+	if v := fillDefaults(registry.Option{Kind: registry.KindList, Items: &registry.Option{}}, "x"); v != "x" {
+		t.Errorf("list over a string = %v", v)
+	}
+	if v := fillDefaults(registry.Option{Kind: registry.KindMap, Values: &registry.Option{}}, "x"); v != "x" {
+		t.Errorf("map over a string = %v", v)
 	}
 }

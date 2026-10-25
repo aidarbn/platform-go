@@ -2,6 +2,7 @@
 package spec
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -46,7 +47,7 @@ func Load(path string) (*File, error) {
 // Parse reads the description from bytes.
 func Parse(raw []byte) (*File, error) {
 	var f File
-	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true) // a typo in a field name is an error, not a silently ignored key
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("%s: parse: %w", FileName, err)

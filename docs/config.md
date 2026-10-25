@@ -69,7 +69,7 @@ Every option of a module has a type, declared once in the module registry. Today
 | map | a mapping with any keys, values of one type | `renames: {url: URL}` |
 | one of | a value of one of several shapes, told apart by the shape | `go_type: int64` or `go_type: {type: int64, pointer: true}` |
 
-An option left out takes its default, which the schema shows. An empty value (`schema:` with nothing after it) is an error, not the default: delete the key instead. YAML anchors and aliases work; merge keys (`<<`) are not supported in module sections.
+An option left out takes its default, which the schema shows; an empty string counts as left out. An empty value (`schema:` with nothing after it) is an error, not the default: delete the key instead. A module section with nothing in it (`monitoring:`) is the same as `{}`. YAML anchors, aliases and merge keys (`<<`) work and are checked as the merged result.
 
 Errors say where and what:
 
@@ -79,7 +79,7 @@ line 11: module enums: unknown option "domian", known options: domain
 line 8: module settings: option schema must be a string, got a number 1.5: quote it, "1.5"
 ```
 
-Code that generates files reads the options of a module into a typed struct with `spec.File.DecodeOptions`, strictly: a struct that misses an option the registry declares fails in tests.
+Code that generates files reads the options of a module into a typed struct with `spec.File.DecodeOptions`: the registry defaults fill what the file leaves out, and a key the struct has no field for is an error rather than silently dropped.
 
 ## Schema version
 

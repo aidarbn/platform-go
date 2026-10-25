@@ -24,7 +24,7 @@ func JSONSchema() ([]byte, error) {
 			description += "; requires " + joinNames(m.Requires)
 		}
 		section := map[string]any{
-			"type":                 "object",
+			"type":                 []string{"object", "null"}, // "monitoring:" with nothing after it enables the module
 			"description":          description,
 			"properties":           options,
 			"additionalProperties": false,

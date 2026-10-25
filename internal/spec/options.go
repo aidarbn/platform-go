@@ -31,26 +31,58 @@ func moduleNodes(doc *yaml.Node) map[string]*yaml.Node {
 	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
 		root = resolve(root.Content[0])
 	}
-	modules := mappingValue(root, "modules")
-	if modules == nil || modules.Kind != yaml.MappingNode {
-		return out
-	}
-	for i := 0; i+1 < len(modules.Content); i += 2 {
-		out[modules.Content[i].Value] = resolve(modules.Content[i+1])
+	for _, p := range pairs(root) {
+		if p.key.Value != "modules" {
+			continue
+		}
+		for _, m := range pairs(resolve(p.value)) {
+			out[m.key.Value] = m.value
+		}
 	}
 	return out
 }
 
-func mappingValue(n *yaml.Node, key string) *yaml.Node {
+// pair is a key of a mapping and its value, the value possibly an alias.
+type pair struct{ key, value *yaml.Node }
+
+// pairs lists the keys of a mapping the way the decoder sees them: merge keys (<<) are
+// expanded, a key written in the mapping wins over a merged one, and of several merged
+// mappings the earlier wins. Anything but a mapping has no pairs.
+func pairs(n *yaml.Node) []pair {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
 	}
+	var out, merges []pair
+	seen := map[string]bool{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value == key {
-			return resolve(n.Content[i+1])
+		p := pair{n.Content[i], n.Content[i+1]}
+		if isMerge(p.key) {
+			merges = append(merges, p)
+			continue
+		}
+		seen[p.key.Value] = true
+		out = append(out, p)
+	}
+	for _, m := range merges {
+		sources := []*yaml.Node{resolve(m.value)}
+		if sources[0].Kind == yaml.SequenceNode {
+			sources = sources[0].Content
+		}
+		for _, src := range sources {
+			for _, p := range pairs(resolve(src)) {
+				if !seen[p.key.Value] {
+					seen[p.key.Value] = true
+					out = append(out, p)
+				}
+			}
 		}
 	}
-	return nil
+	return out
+}
+
+// isMerge matches the merge key as yaml.v3 does.
+func isMerge(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && n.Value == "<<" && (n.Tag == "" || n.Tag == "!" || n.ShortTag() == "!!merge")
 }
 
 // resolve follows an alias to the node it names.
@@ -62,12 +94,18 @@ func resolve(n *yaml.Node) *yaml.Node {
 }
 
 // checkOptions rejects an option the module does not have and a value of the wrong
-// type: a typo in platformgo.yaml must fail rather than be ignored.
+// type: a typo in platformgo.yaml must fail rather than be ignored. An empty section
+// (null) is checked as {}, so a required option is required there too.
 func checkOptions(m registry.Module, section *yaml.Node) []error {
-	if section == nil || section.Kind != yaml.MappingNode {
-		return nil // an empty section; anything else does not decode into File
-	}
 	c := checker{module: m.Name}
+	at := section
+	section = resolve(section)
+	if section == nil || section.Kind != yaml.MappingNode {
+		if at == nil {
+			at = &yaml.Node{}
+		}
+		section = &yaml.Node{Kind: yaml.MappingNode, Line: at.Line}
+	}
 	c.mapping(section, "", m.Options, "option", "options")
 	return c.errs
 }
@@ -85,12 +123,8 @@ func (c *checker) fail(n *yaml.Node, format string, args ...any) {
 // names a key in messages: "option" at the top of a section, "key" inside an object.
 func (c *checker) mapping(n *yaml.Node, path string, fields []registry.Option, word, words string) {
 	seen := map[string]bool{}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		key, value := n.Content[i], resolve(n.Content[i+1])
-		if key.ShortTag() == "!!merge" {
-			c.fail(key, "%s: merge keys (<<) are not supported, write the keys out", where(path))
-			continue
-		}
+	for _, p := range pairs(n) {
+		key, value := p.key, p.value
 		o, ok := findField(fields, key.Value)
 		if !ok {
 			known := "none"
@@ -109,16 +143,13 @@ func (c *checker) mapping(n *yaml.Node, path string, fields []registry.Option, w
 	}
 	for _, o := range fields {
 		if o.Required && !seen[o.Name] {
-			c.fail(n, "%s: missing required key %s", where(path), o.Name)
+			if path == "" {
+				c.fail(n, "missing required option %s", o.Name)
+			} else {
+				c.fail(n, "option %s: missing required key %s", path, o.Name)
+			}
 		}
 	}
-}
-
-func where(path string) string {
-	if path == "" {
-		return "section"
-	}
-	return "option " + path
 }
 
 func findField(fields []registry.Option, name string) (registry.Option, bool) {
@@ -137,12 +168,14 @@ func join(path, name string) string {
 	return path + "." + name
 }
 
-// value checks one value against its description.
-func (c *checker) value(n *yaml.Node, path string, o registry.Option) {
+// value checks one value against its description. at is the node as written: for an
+// alias, errors name the line of the alias, not of the anchor.
+func (c *checker) value(at *yaml.Node, path string, o registry.Option) {
+	n := resolve(at)
 	if len(o.OneOf) > 0 {
 		for _, alt := range o.OneOf {
 			if shapeFits(alt.Kind, n) {
-				c.value(n, path, alt)
+				c.value(at, path, alt)
 				return
 			}
 		}
@@ -150,7 +183,7 @@ func (c *checker) value(n *yaml.Node, path string, o registry.Option) {
 		for _, alt := range o.OneOf {
 			kinds = append(kinds, article(alt.Kind))
 		}
-		c.fail(n, "option %s must be %s, got %s", path, strings.Join(kinds, " or "), describe(n))
+		c.fail(at, "option %s must be %s, got %s", path, strings.Join(kinds, " or "), describe(n))
 		return
 	}
 	if !shapeFits(o.Kind, n) {
@@ -158,28 +191,23 @@ func (c *checker) value(n *yaml.Node, path string, o registry.Option) {
 		if o.Kind == registry.KindString && n.Kind == yaml.ScalarNode && n.ShortTag() != "!!null" {
 			hint = fmt.Sprintf(": quote it, \"%s\"", n.Value)
 		}
-		c.fail(n, "option %s must be %s, got %s%s", path, article(o.Kind), describe(n), hint)
+		c.fail(at, "option %s must be %s, got %s%s", path, article(o.Kind), describe(n), hint)
 		return
 	}
 	switch o.Kind {
 	case registry.KindString:
 		if len(o.Enum) > 0 && !slices.Contains(o.Enum, n.Value) {
-			c.fail(n, "option %s must be one of %s, got %q", path, strings.Join(o.Enum, ", "), n.Value)
+			c.fail(at, "option %s must be one of %s, got %q", path, strings.Join(o.Enum, ", "), n.Value)
 		}
 	case registry.KindList:
 		for i, item := range n.Content {
-			c.value(resolve(item), fmt.Sprintf("%s[%d]", path, i), *o.Items)
+			c.value(item, fmt.Sprintf("%s[%d]", path, i), *o.Items)
 		}
 	case registry.KindObject:
 		c.mapping(n, path, o.Fields, "key", "keys")
 	case registry.KindMap:
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			key := n.Content[i]
-			if key.ShortTag() == "!!merge" {
-				c.fail(key, "option %s: merge keys (<<) are not supported, write the keys out", path)
-				continue
-			}
-			c.value(resolve(n.Content[i+1]), path+"."+key.Value, *o.Values)
+		for _, p := range pairs(n) {
+			c.value(p.value, path+"."+p.key.Value, *o.Values)
 		}
 	}
 }
@@ -239,20 +267,27 @@ func describe(n *yaml.Node) string {
 		return n.Value
 	case "!!null":
 		return "nothing: remove the key to use the default"
+	case "!!timestamp":
+		return "a date " + n.Value
 	}
 	return n.ShortTag() + " " + n.Value
 }
 
 // DecodeOptions reads the section of a module into a typed struct with yaml tags, the
-// way generators read their options. The file is already validated against the
-// registry; decoding is strict as well, so a struct that lags behind the registry fails
-// in tests instead of dropping an option. A module without a section leaves out as is.
+// way generators read their options. Defaults declared in the registry fill what the
+// file leaves out, and an empty string counts as left out, as in StringOption. Decoding
+// is strict: a key the struct has no field for is an error. A disabled module leaves
+// out as it is.
 func (f *File) DecodeOptions(module string, out any) error {
 	section, ok := f.Modules[module]
-	if !ok || len(section) == 0 {
+	if !ok {
 		return nil
 	}
-	raw, err := yaml.Marshal(section)
+	m, known := registry.Get(module)
+	if !known {
+		return fmt.Errorf("module %s options: unknown module", module)
+	}
+	raw, err := yaml.Marshal(withDefaults(m.Options, section))
 	if err != nil {
 		return fmt.Errorf("module %s options: %w", module, err)
 	}
@@ -262,6 +297,59 @@ func (f *File) DecodeOptions(module string, out any) error {
 		return fmt.Errorf("module %s options: %w", module, err)
 	}
 	return nil
+}
+
+// withDefaults returns a copy of values with the defaults of opts filled in, also inside
+// objects, list elements and map values.
+func withDefaults(opts []registry.Option, values map[string]any) map[string]any {
+	out := make(map[string]any, len(opts))
+	for k, v := range values {
+		out[k] = v
+	}
+	for _, o := range opts {
+		v, set := out[o.Name]
+		if s, isString := v.(string); o.Default != nil && (!set || isString && s == "") {
+			v, set = o.Default, true
+		}
+		if set {
+			out[o.Name] = fillDefaults(o, v)
+		}
+	}
+	return out
+}
+
+func fillDefaults(o registry.Option, v any) any {
+	if len(o.OneOf) > 0 {
+		for _, alt := range o.OneOf {
+			if alt.Kind == registry.KindObject {
+				return fillDefaults(alt, v)
+			}
+		}
+		return v
+	}
+	switch o.Kind {
+	case registry.KindObject:
+		if m, ok := v.(map[string]any); ok {
+			return withDefaults(o.Fields, m)
+		}
+	case registry.KindList:
+		if items, ok := v.([]any); ok {
+			out := make([]any, len(items))
+			for i, item := range items {
+				out[i] = fillDefaults(*o.Items, item)
+			}
+			return out
+		}
+	case registry.KindMap:
+		if m, ok := v.(map[string]any); ok {
+			out := make(map[string]any, len(m))
+			for k, item := range m {
+				out[k] = fillDefaults(*o.Values, item)
+			}
+			return out
+		}
+	}
+	return v
 }
 
 // StringOption returns a string option of a module, or def when the module is off, the
