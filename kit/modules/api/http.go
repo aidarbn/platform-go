@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -277,31 +278,113 @@ func (m *Module) gatewayErrors() runtime.ErrorHandlerFunc {
 	}
 }
 
-// cors lets browsers on the allowed origins call the REST API. Patterns follow taply:
-// https://*.example.com for any subdomain, http://localhost:* for any port, * for any
-// origin.
-func cors(origins []string, next http.Handler) http.Handler {
-	allowed := originMatcher(origins)
+// The headers a browser may always send and a page may always read.
+var (
+	corsBaseHeaders = []string{"Authorization", "Content-Type", "Accept", requestIDHeader, "Idempotency-Key"}
+	corsBaseExpose  = []string{requestIDHeader}
+)
+
+const defaultCORSMaxAge = 86400
+
+// corsPolicy lets browsers on the allowed origins call the REST API. Patterns follow
+// taply: https://*.example.com for any subdomain, http://localhost:* for any port, *
+// for any origin.
+type corsPolicy struct {
+	allowed     func(string) bool
+	anyOrigin   bool // answer a literal "*": "*" is allowed and credentials are off
+	credentials bool
+	headers     string
+	expose      string
+	maxAge      string
+}
+
+// newCORS builds the policy from the settings and the headers the project registered.
+func newCORS(cfg Config, registered []string) *corsPolicy {
+	return &corsPolicy{
+		allowed:     originMatcher(cfg.CORSOrigins),
+		anyOrigin:   cfg.CORSNoCredentials && slices.Contains(cfg.CORSOrigins, "*"),
+		credentials: !cfg.CORSNoCredentials,
+		headers:     joinHeaders(corsBaseHeaders, registered, cfg.CORSHeaders),
+		expose:      joinHeaders(corsBaseExpose, cfg.CORSExpose),
+		maxAge:      strconv.Itoa(cfg.CORSMaxAge),
+	}
+}
+
+func (p *corsPolicy) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// Unless every origin gets the same "*", the answer depends on the origin, even
+		// when it carries no CORS headers: a shared cache must not hand it to another one.
+		if !p.anyOrigin {
+			h.Add("Vary", "Origin")
+		}
 		origin := r.Header.Get("Origin")
-		if origin == "" || !allowed(origin) {
+		if origin == "" || !p.allowed(origin) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		h := w.Header()
-		h.Set("Access-Control-Allow-Origin", origin)
-		h.Add("Vary", "Origin")
-		h.Set("Access-Control-Allow-Credentials", "true")
-		h.Set("Access-Control-Expose-Headers", requestIDHeader)
+		if p.anyOrigin {
+			h.Set("Access-Control-Allow-Origin", "*")
+		} else {
+			h.Set("Access-Control-Allow-Origin", origin)
+		}
+		if p.credentials {
+			h.Set("Access-Control-Allow-Credentials", "true")
+		}
+		h.Set("Access-Control-Expose-Headers", p.expose)
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Request-ID, Idempotency-Key")
-			h.Set("Access-Control-Max-Age", "86400")
+			h.Set("Access-Control-Allow-Headers", p.headers)
+			h.Set("Access-Control-Max-Age", p.maxAge)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// joinHeaders lists header names once each, in the order given; header names do not
+// depend on case.
+func joinHeaders(lists ...[]string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, name := range list {
+			key := strings.ToLower(name)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// checkCORSHeaders refuses header names of a Config written in code, which Load did
+// not check.
+func checkCORSHeaders(cfg Config) error {
+	for _, name := range slices.Concat(cfg.CORSHeaders, cfg.CORSExpose) {
+		if !validHeaderName(name) {
+			return fmt.Errorf("api: CORS: %q is not a header name", name)
+		}
+	}
+	return nil
+}
+
+// validHeaderName reports whether name is an HTTP field name: a token of RFC 9110.
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range []byte(name) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func originMatcher(origins []string) func(string) bool {

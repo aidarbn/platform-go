@@ -89,3 +89,11 @@ codemod.RenameSymbol("v0.3.0", "github.com/aidarbn/platform-go/kit/modules/river
 | Deprecation before removal | a `kit` API is first marked `// Deprecated:` and lives for at least one minor version |
 | Support window | upgrades are guaranteed from the last N minor versions; older ones go step by step |
 | Release notes | a human `CHANGELOG` and the machine readable manifest of steps are built from one source |
+
+## Behaviour changes
+
+Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
+
+### v0.9.0 (unreleased)
+
+- **CORS: `Vary: Origin` on every answer.** Before, the REST API added `Vary: Origin` only to answers for an allowed origin; now every answer carries it while `API_CORS_ORIGINS` is set, unless the origins are `*` with `API_CORS_CREDENTIALS=false` and every caller gets the same literal `*`. A shared cache can no longer hand an answer without CORS headers to a page on an allowed origin. Affects only caches in front of the API, which now keep one copy per origin; nothing to do in a project. The new `API_CORS_HEADERS`, `API_CORS_EXPOSE`, `API_CORS_CREDENTIALS`, `API_CORS_MAX_AGE` and `api.CORSHeaders` are opt-in: without them the allowed headers, credentials and the preflight max age are as before.

@@ -48,6 +48,17 @@ type Config struct {
 	Docs        bool     // serve /openapi.yaml and the /docs page
 	Reflection  bool     // gRPC server reflection, for grpcurl and similar tools
 
+	// CORS beyond the allowed origins. CORSHeaders are request headers a browser may
+	// send on top of the platform's and those of api.CORSHeaders; CORSExpose are
+	// response headers a page may read on top of X-Request-ID. CORSNoCredentials drops
+	// Access-Control-Allow-Credentials, and with "*" among the origins the answer is a
+	// literal "*" instead of the caller's origin. CORSMaxAge is how long a browser may
+	// cache a preflight, in seconds; zero means a day.
+	CORSHeaders       []string
+	CORSExpose        []string
+	CORSNoCredentials bool
+	CORSMaxAge        int
+
 	// RateLimit per client address; zero rates turn it off.
 	RateLimit RateLimit
 
@@ -97,6 +108,11 @@ func Load(l *confx.Loader) Config {
 		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
 		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
 
+		CORSHeaders:       headerNames(l, "API_CORS_HEADERS"),
+		CORSExpose:        headerNames(l, "API_CORS_EXPOSE"),
+		CORSNoCredentials: !l.Bool("API_CORS_CREDENTIALS", true),
+		CORSMaxAge:        corsMaxAge(l),
+
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
@@ -127,7 +143,30 @@ func trustedProxies(l *confx.Loader) []netip.Prefix {
 	return out
 }
 
+// headerNames reads a comma separated list of HTTP header names.
+func headerNames(l *confx.Loader, key string) []string {
+	names := l.Strings(key, nil)
+	for _, name := range names {
+		if !validHeaderName(name) {
+			l.Fail(fmt.Errorf("%s: %q is not a header name", l.Key(key), name))
+		}
+	}
+	return names
+}
+
+// corsMaxAge reads API_CORS_MAX_AGE in seconds.
+func corsMaxAge(l *confx.Loader) int {
+	age := l.Int("API_CORS_MAX_AGE", defaultCORSMaxAge)
+	if age <= 0 {
+		l.Fail(fmt.Errorf("%s: %d is not a positive number of seconds", l.Key("API_CORS_MAX_AGE"), age))
+	}
+	return age
+}
+
 func (c *Config) setDefaults() {
+	if c.CORSMaxAge <= 0 {
+		c.CORSMaxAge = defaultCORSMaxAge
+	}
 	if c.GRPCAddr == "" {
 		c.GRPCAddr = "127.0.0.1:9091"
 	}
@@ -179,6 +218,7 @@ type Registry struct {
 	public       func(method string) bool
 	idemRequired []string
 	idemUser     func(context.Context) string
+	corsHeaders  []string
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
 	errorHandler runtime.ErrorHandlerFunc
@@ -286,6 +326,23 @@ func UseHTTP(app *platform.App, mw func(http.Handler) http.Handler) {
 	r.add(func() { r.middleware = append(r.middleware, mw) })
 }
 
+// CORSHeaders lets browsers send the request headers the API cannot work without, such
+// as a tenant header, on top of the platform's: Authorization, Content-Type, Accept,
+// X-Request-ID and Idempotency-Key. They belong in code rather than in the environment
+// of every stand; API_CORS_HEADERS adds more. It takes effect where API_CORS_ORIGINS
+// allows an origin.
+//
+//	api.CORSHeaders(app, "X-Restaurant-Id")
+func CORSHeaders(app *platform.App, names ...string) {
+	for _, name := range names {
+		if !validHeaderName(name) {
+			panic(fmt.Sprintf("api: %q is not a header name", name))
+		}
+	}
+	r := registry(app)
+	r.add(func() { r.corsHeaders = append(r.corsHeaders, names...) })
+}
+
 // HTTPErrorHandler replaces how the REST side writes an error, for an API whose contract
 // has its own error body. It receives every error of the gateway: from the handlers,
 // from request decoding and routing, and a body over the limit as a
@@ -376,6 +433,12 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.skipped {
 		m.log.Info("the API is not served in this role")
 		return nil
+	}
+	if err := checkCORSHeaders(m.cfg); err != nil {
+		return err
+	}
+	if !m.cfg.CORSNoCredentials && slices.Contains(m.cfg.CORSOrigins, "*") {
+		m.log.Warn("API_CORS_ORIGINS has * with credentials: every origin is echoed back and may call the API with the user's cookies; set API_CORS_CREDENTIALS=false for a public API")
 	}
 
 	validator, err := protovalidate.New()
@@ -581,7 +644,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	h = recoverHTTP(m.log, m.metrics, h)
 	h = m.http.observe(m.log, m.cfg.AccessLog, m.cfg.LogBodies, h)
 	if len(m.cfg.CORSOrigins) > 0 {
-		h = cors(m.cfg.CORSOrigins, h)
+		h = newCORS(m.cfg, m.registry.corsHeaders).wrap(h)
 	}
 	if m.cfg.SecurityHeaders {
 		h = securityHeaders(h)
