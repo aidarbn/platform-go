@@ -68,6 +68,8 @@ func newPrincipalLimiter(cfg RateLimit, key func(context.Context) string, reg *p
 
 func newLimiter(key func(context.Context) string, normal tier, public func(string) bool, publicTier tier, opts prometheus.CounterOpts, reg *prometheus.Registry) (*rateLimiter, error) {
 	normal.entries, publicTier.entries = map[string]*limiterEntry{}, map[string]*limiterEntry{}
+	// A bucket that holds no token refuses every call: a burst under one is a mistake.
+	normal.burst, publicTier.burst = max(normal.burst, 1), max(publicTier.burst, 1)
 	l := &rateLimiter{
 		key:     key,
 		public:  public,

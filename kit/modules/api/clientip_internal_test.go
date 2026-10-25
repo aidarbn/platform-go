@@ -285,3 +285,32 @@ func TestForwardHeaderDropsClientAddress(t *testing.T) {
 		t.Errorf("X-Request-ID: %q %v", got, ok)
 	}
 }
+
+// The default trusted proxies, every private network, do not name the client over
+// gRPC; networks the operator set do.
+func TestGRPCTrustsOnlyListedProxies(t *testing.T) {
+	if m := New(Config{}); m.grpcTrusted != nil || len(m.cfg.TrustedProxies) == 0 {
+		t.Errorf("default: grpc %v, http %v", m.grpcTrusted, m.cfg.TrustedProxies)
+	}
+	listed := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+	if m := New(Config{TrustedProxies: listed}); len(m.grpcTrusted) != 1 || m.grpcTrusted[0] != listed[0] {
+		t.Errorf("listed: %v", m.grpcTrusted)
+	}
+	c := &clientIPResolver{trusted: New(Config{}).grpcTrusted}
+	if got := c.resolve(fromPeer("10.1.2.3:4000", ClientIPMetadataKey, "1.1.1.1")); got != "10.1.2.3" {
+		t.Errorf("a private peer named the client by default: %q", got)
+	}
+}
+
+// A burst under one would refuse every call; it is taken as one.
+func TestRateLimitBurstAtLeastOne(t *testing.T) {
+	l, err := newRateLimiter(RateLimit{RPS: 0.001, Burst: 0, PublicRPS: 0.001, PublicBurst: -1},
+		func(m string) bool { return m == "/p" }, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.stop)
+	if !l.allow("a", "/n") || l.allow("a", "/n") || !l.allow("a", "/p") {
+		t.Error("a burst under one is not taken as one")
+	}
+}

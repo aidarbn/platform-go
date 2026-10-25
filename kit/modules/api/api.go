@@ -71,12 +71,13 @@ type Config struct {
 	LogBodies       bool // put the bodies of failed requests into the access log
 	SecurityHeaders bool // taply's security response headers
 
-	// TrustedProxies are the networks whose X-Forwarded-For is believed, and the gRPC
-	// peers whose ClientIPMetadataKey is. A request from anywhere else is identified by
-	// its connection address, so a client reaching the service directly cannot pose as
-	// another address. Empty means the private networks and loopback, where a reverse
-	// proxy normally runs. Loopback is always trusted on the gRPC side, since the gateway
-	// of this process connects from it.
+	// TrustedProxies are the networks whose X-Forwarded-For is believed. A request from
+	// anywhere else is identified by its connection address, so a client reaching the
+	// service directly cannot pose as another address. Empty means the private networks
+	// and loopback, where a reverse proxy normally runs. On the gRPC side the networks
+	// set here, never the default, may name the client with ClientIPMetadataKey;
+	// loopback and the server's own address always may, since the gateway of this
+	// process connects from them.
 	TrustedProxies []netip.Prefix
 }
 
@@ -383,10 +384,12 @@ func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys 
 
 // Module implements platform.Module.
 type Module struct {
-	cfg     Config
-	skipped bool
-	http    *httpMetrics
-	app     *platform.App
+	cfg Config
+	// grpcTrusted are the networks given in TrustedProxies, without the default.
+	grpcTrusted []netip.Prefix
+	skipped     bool
+	http        *httpMetrics
+	app         *platform.App
 
 	idemStore  IdempotencyStore
 	limiter    *rateLimiter
@@ -410,8 +413,12 @@ type Module struct {
 
 // New creates the module from ready settings.
 func New(cfg Config, opts ...Option) *Module {
+	// The default trusted proxies, every private network, are not trusted to name the
+	// client over gRPC: a gRPC port open to the private network would let any host
+	// there pick its own bucket. Only networks the operator listed are.
+	grpcTrusted := cfg.TrustedProxies
 	cfg.setDefaults()
-	m := &Module{cfg: cfg, registry: &Registry{}}
+	m := &Module{cfg: cfg, registry: &Registry{}, grpcTrusted: grpcTrusted}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -479,7 +486,7 @@ func (m *Module) Start(ctx context.Context) error {
 	// address comes before project interceptors, so a flood never reaches token
 	// validation; the one by principal comes after them, once the principal is known;
 	// idempotency comes last, so a rejected call is not remembered.
-	m.clientIP = &clientIPResolver{trusted: m.cfg.TrustedProxies}
+	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted}
 	platformUnary := []grpc.UnaryServerInterceptor{m.clientIP.unary, m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
 	if m.cfg.RateLimit.RPS > 0 {
 		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {

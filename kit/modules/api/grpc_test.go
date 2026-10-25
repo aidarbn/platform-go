@@ -250,6 +250,7 @@ func TestForgedAddressHeadersOverREST(t *testing.T) {
 	for _, forged := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
 		code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"x"}`, map[string]string{
 			"X-Client-IP": forged, "X-Platform-Client-IP": forged,
+			"Grpc-Metadata-X-Platform-Client-Ip": forged, "Grpc-Metadata-X-Client-Ip": forged,
 		})
 		codes = append(codes, code)
 	}

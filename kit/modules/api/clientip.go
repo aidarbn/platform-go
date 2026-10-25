@@ -16,8 +16,9 @@ import (
 // REST gateway to the gRPC server. The gateway sets it from the address the HTTP side
 // resolved and drops an HTTP header of the same name, so a REST client cannot choose
 // it. The gRPC server believes it only from a trusted peer: loopback, the address the
-// server itself listens on, or API_TRUSTED_PROXIES — a gRPC proxy in that list may set
-// it too. From anyone else it is ignored and the peer address is the client.
+// server itself listens on, or the networks set in API_TRUSTED_PROXIES — a gRPC proxy
+// there may set it too; the default of every private network does not count. From
+// anyone else it is ignored and the peer address is the client.
 //
 // x-forwarded-for metadata cannot serve this purpose: grpc-gateway appends the address
 // of the HTTP peer to it, so its last entry is the proxy, the same for every client,
@@ -150,8 +151,8 @@ func (c *clientIPResolver) resolve(ctx context.Context) string {
 	return host
 }
 
-// unary puts the client address into the context first, so the rate limit, the logs
-// and the handlers all see the same, checked address through ClientIP.
+// unary puts the client address into the context first, so the rate limit, the log of
+// deprecated calls and the handlers all see the same, checked address through ClientIP.
 func (c *clientIPResolver) unary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	return handler(context.WithValue(ctx, clientIPKey, c.resolve(ctx)), req)
 }
