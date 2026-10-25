@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,7 +69,12 @@ func TestResolveGRPCClientIP(t *testing.T) {
 		{"untrusted peer, legacy key", fromPeer("203.0.113.5:4000", "x-client-ip", "1.1.1.1"), "203.0.113.5"},
 		{"loopback gateway", fromPeer("127.0.0.1:4000", ClientIPMetadataKey, "198.51.100.7"), "198.51.100.7"},
 		{"loopback v6", fromPeer("[::1]:4000", ClientIPMetadataKey, "2001:db8::7"), "2001:db8::7"},
-		{"loopback, legacy key ignored", fromPeer("127.0.0.1:4000", "x-client-ip", "1.1.1.1"), "127.0.0.1"},
+		{"loopback, legacy key", fromPeer("127.0.0.1:4000", "x-client-ip", "1.1.1.1"), "1.1.1.1"},
+		{"trusted proxy, legacy key", fromPeer("10.20.3.4:4000", "x-client-ip", "198.51.100.8"), "198.51.100.8"},
+		{"loopback, new key wins over legacy", fromPeer("127.0.0.1:4000", "x-client-ip", "1.1.1.1", ClientIPMetadataKey, "198.51.100.7"), "198.51.100.7"},
+		{"loopback, garbage new key, legacy not consulted", fromPeer("127.0.0.1:4000", ClientIPMetadataKey, "x", "x-client-ip", "1.1.1.1"), "127.0.0.1"},
+		{"loopback, garbage legacy key", fromPeer("127.0.0.1:4000", "x-client-ip", "not-an-ip"), "127.0.0.1"},
+		{"private peer, legacy key, default proxies", fromPeer("10.1.2.3:4000", "x-client-ip", "1.1.1.1"), "10.1.2.3"},
 		{"loopback, no key", fromPeer("127.0.0.1:4000"), "127.0.0.1"},
 		{"loopback, last value wins", fromPeer("127.0.0.1:4000", ClientIPMetadataKey, "1.1.1.1", ClientIPMetadataKey, "198.51.100.7"), "198.51.100.7"},
 		{"loopback, garbage key", fromPeer("127.0.0.1:4000", ClientIPMetadataKey, "not-an-ip"), "127.0.0.1"},
@@ -169,18 +177,63 @@ func TestAnnotateClientIP(t *testing.T) {
 }
 
 func TestAddressKey(t *testing.T) {
-	cases := map[string]string{
-		"":                     "unknown",
-		"198.51.100.7":         "198.51.100.7",
-		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
-		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64",
-		"2001:db8:1:3::1":      "2001:db8:1:3::/64",
-		"/run/api.sock":        "/run/api.sock",
+	cases := []struct {
+		in   string
+		bits int
+		want string
+	}{
+		{"", 64, "unknown"},
+		{"198.51.100.7", 64, "198.51.100.7"},
+		{"198.51.100.7", 128, "198.51.100.7"},
+		{"2001:db8:1:2:3:4:5:6", 64, "2001:db8:1:2::/64"},
+		{"2001:db8:1:2:ffff::1", 64, "2001:db8:1:2::/64"},
+		{"2001:db8:1:3::1", 64, "2001:db8:1:3::/64"},
+		{"2001:db8:1:3::1", 48, "2001:db8:1::/48"},
+		{"2001:db8:1:2:3:4:5:6", 128, "2001:db8:1:2:3:4:5:6"},
+		{"/run/api.sock", 64, "/run/api.sock"},
 	}
-	for in, want := range cases {
-		if got := addressKey(in); got != want {
-			t.Errorf("addressKey(%q) = %q, want %q", in, got, want)
+	for _, tc := range cases {
+		if got := addressKey(tc.in, tc.bits); got != tc.want {
+			t.Errorf("addressKey(%q, %d) = %q, want %q", tc.in, tc.bits, got, tc.want)
 		}
+	}
+}
+
+// API_RATE_IPV6_PREFIX=128 gives every IPv6 address its own bucket, as before /64.
+func TestRateLimitIPv6Prefix(t *testing.T) {
+	info := &grpc.UnaryServerInfo{FullMethod: "/x.v1.S/M"}
+	ok := func(context.Context, any) (any, error) { return "ok", nil }
+	for _, tc := range []struct {
+		bits    int
+		refused bool
+	}{{0, true}, {64, true}, {128, false}} {
+		l, err := newRateLimiter(RateLimit{RPS: 0.001, Burst: 1, IPv6Prefix: tc.bits}, nil, prometheus.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.unary(fromPeer("[2001:db8::1]:1"), nil, info, ok); err != nil {
+			t.Fatalf("bits %d: first call: %v", tc.bits, err)
+		}
+		_, err = l.unary(fromPeer("[2001:db8::2]:1"), nil, info, ok)
+		if got := status.Code(err) == codes.ResourceExhausted; got != tc.refused {
+			t.Errorf("bits %d: a neighbour address of the block refused = %v, want %v", tc.bits, got, tc.refused)
+		}
+		l.stop()
+	}
+}
+
+// The old key is read from a trusted peer, with one warning however many calls use it.
+func TestLegacyClientIPKeyWarnsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	c := &clientIPResolver{log: slog.New(slog.NewTextHandler(&buf, nil))}
+	for range 3 {
+		if got := c.resolve(fromPeer("127.0.0.1:4000", "x-client-ip", "198.51.100.7")); got != "198.51.100.7" {
+			t.Fatalf("legacy key: %q", got)
+		}
+	}
+	c.resolve(fromPeer("203.0.113.5:4000", "x-client-ip", "1.1.1.1"))
+	if n := strings.Count(buf.String(), "x-client-ip"); n != 1 {
+		t.Errorf("%d warnings:\n%s", n, buf.String())
 	}
 }
 

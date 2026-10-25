@@ -181,6 +181,43 @@ func TestUntrustedForwardedFor(t *testing.T) {
 	}
 }
 
+// A plain route reads X-Client-IP as before: the resolved address, never the client's.
+func TestPlainRouteSeesResolvedClientIP(t *testing.T) {
+	got := make(chan string, 2)
+	extraWire = func(app *platform.App) {
+		api.HandleHTTP(app, "GET /whoami", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- r.Header.Get("X-Client-IP") + "|" + r.Header.Get(api.ClientIPMetadataKey) + "|" + api.ClientIP(r.Context())
+		}))
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{})
+	s.do("GET", "/whoami", "", map[string]string{"X-Client-IP": "1.2.3.4", "X-Platform-Client-IP": "1.2.3.4", "X-Forwarded-For": "6.6.6.6, 10.0.0.9"})
+	s.do("GET", "/whoami", "", map[string]string{"X-Client-IP": "1.2.3.4"})
+	for _, want := range []string{"10.0.0.9||10.0.0.9", "127.0.0.1||127.0.0.1"} {
+		if g := <-got; g != want {
+			t.Errorf("plain route saw %q, want %q", g, want)
+		}
+	}
+}
+
+func TestIPv6PrefixFromEnvironment(t *testing.T) {
+	if cfg := api.Load(confx.New("")); cfg.RateLimit.IPv6Prefix != 64 {
+		t.Errorf("default %d", cfg.RateLimit.IPv6Prefix)
+	}
+	t.Setenv("API_RATE_IPV6_PREFIX", "128")
+	if cfg := api.Load(confx.New("")); cfg.RateLimit.IPv6Prefix != 128 {
+		t.Errorf("128: %d", cfg.RateLimit.IPv6Prefix)
+	}
+	for _, bad := range []string{"0", "129"} {
+		t.Setenv("API_RATE_IPV6_PREFIX", bad)
+		l := confx.New("")
+		api.Load(l)
+		if l.Err() == nil {
+			t.Errorf("%s is accepted", bad)
+		}
+	}
+}
+
 func TestTrustedProxiesFromEnvironment(t *testing.T) {
 	t.Setenv("API_TRUSTED_PROXIES", "10.1.0.0/16, 192.0.2.7")
 	l := confx.New("")

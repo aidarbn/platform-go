@@ -81,8 +81,9 @@ func newRequestID() string {
 
 // identify gives the request its id and client address, for the HTTP side through the
 // context and for the gRPC side through the request id header and the client address
-// annotator of the gateway. The client address headers a client sent are removed, so
-// neither a plain route nor a gRPC handler can mistake them for the platform's.
+// annotator of the gateway. X-Client-IP is overwritten with the resolved address, as
+// before, so plain routes can read it; an incoming header of ClientIPMetadataKey is
+// removed, so neither a plain route nor a gRPC handler can mistake it for the platform's.
 func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
@@ -92,7 +93,7 @@ func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 		ip := resolveClientIP(r, trusted)
 
 		r.Header.Set(requestIDHeader, id)
-		r.Header.Del(legacyClientIPHeader)
+		r.Header.Set(legacyClientIPHeader, ip)
 		r.Header.Del(ClientIPMetadataKey)
 		w.Header().Set(requestIDHeader, id)
 

@@ -230,7 +230,7 @@ func TestTraceContinuesThroughGateway(t *testing.T) {
 }
 
 // A REST client cannot pick its own bucket with the client address headers: the gateway
-// drops them and names the client itself, once.
+// drops them and names the client itself, once, under the new key and the old one.
 func TestForgedAddressHeadersOverREST(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
@@ -259,7 +259,7 @@ func TestForgedAddressHeadersOverREST(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(seen) == 0 || seen[0] != "[127.0.0.1] [] 127.0.0.1" {
+	if len(seen) == 0 || seen[0] != "[127.0.0.1] [127.0.0.1] 127.0.0.1" {
 		t.Errorf("the handler saw %v", seen)
 	}
 }

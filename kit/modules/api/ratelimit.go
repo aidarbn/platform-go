@@ -23,7 +23,14 @@ type RateLimit struct {
 	// RateLimitKey, whatever address the calls come from. Zero turns it off.
 	PrincipalRPS   float64
 	PrincipalBurst int
+
+	// IPv6Prefix is how many leading bits of an IPv6 address make one client: 64 by
+	// default, the block one subscriber normally gets, so a client cannot take a new
+	// bucket with every address of its block. 128 limits every address on its own.
+	IPv6Prefix int
 }
+
+const defaultIPv6Prefix = 64
 
 type limiterEntry struct {
 	limiter  *rate.Limiter
@@ -49,9 +56,13 @@ type rateLimiter struct {
 }
 
 // newRateLimiter limits by client address: ClientIP, with an IPv6 address taken as its
-// /64, the block a single client normally owns.
+// network of IPv6Prefix bits, by default the /64 a single client normally owns.
 func newRateLimiter(cfg RateLimit, public func(string) bool, reg *prometheus.Registry) (*rateLimiter, error) {
-	return newLimiter(func(ctx context.Context) string { return addressKey(ClientIP(ctx)) },
+	bits := cfg.IPv6Prefix
+	if bits <= 0 || bits > 128 {
+		bits = defaultIPv6Prefix
+	}
+	return newLimiter(func(ctx context.Context) string { return addressKey(ClientIP(ctx), bits) },
 		tier{rps: rate.Limit(cfg.RPS), burst: cfg.Burst},
 		public, tier{rps: rate.Limit(cfg.PublicRPS), burst: cfg.PublicBurst},
 		prometheus.CounterOpts{Namespace: "api", Name: "rate_limited_total", Help: "calls refused by the rate limit"},
@@ -85,17 +96,18 @@ func newLimiter(key func(context.Context) string, normal tier, public func(strin
 	return l, nil
 }
 
-// addressKey is the bucket of an address: IPv6 by its /64, since one subscriber gets a
-// whole block and could otherwise take a new bucket with every address in it.
-func addressKey(ip string) string {
+// addressKey is the bucket of an address: IPv6 by its network of bits, by default the
+// /64, since one subscriber gets a whole block and could otherwise take a new bucket
+// with every address in it.
+func addressKey(ip string, bits int) string {
 	if ip == "" {
 		return "unknown" // calls without a peer share one bucket, they are not let through
 	}
 	addr, err := netip.ParseAddr(ip)
-	if err != nil || !addr.Is6() {
+	if err != nil || !addr.Is6() || bits >= 128 {
 		return ip
 	}
-	return netip.PrefixFrom(addr, 64).Masked().String()
+	return netip.PrefixFrom(addr, bits).Masked().String()
 }
 
 // cleanup forgets keys not seen for ten minutes, so the map does not grow with every

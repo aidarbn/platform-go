@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -26,8 +28,15 @@ import (
 const ClientIPMetadataKey = "x-platform-client-ip"
 
 // legacyClientIPHeader is the header that carried the address before
-// ClientIPMetadataKey. It is dropped from requests and never believed.
-const legacyClientIPHeader = "X-Client-IP"
+// ClientIPMetadataKey, and legacyClientIPKey its metadata key. The HTTP side still sets
+// the header to the resolved address for plain routes, overwriting whatever the client
+// sent; the gateway never forwards it, but passes the resolved address under both keys.
+// The gRPC server reads the old key, from trusted peers only, when the new one is
+// missing: a gRPC proxy or a client of the same host written for an older release.
+const (
+	legacyClientIPHeader = "X-Client-IP"
+	legacyClientIPKey    = "x-client-ip"
+)
 
 // ClientIP returns the address of the client. For a REST call it is the address the
 // HTTP side resolved: the last X-Forwarded-For hop when the connection comes from a
@@ -95,13 +104,14 @@ func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
 }
 
 // annotateClientIP is a gateway metadata annotator: it hands the address the HTTP side
-// resolved to the gRPC server under ClientIPMetadataKey.
+// resolved to the gRPC server under ClientIPMetadataKey, and under the old key too, for
+// handlers that read the metadata themselves.
 func annotateClientIP(ctx context.Context, _ *http.Request) metadata.MD {
 	ip, _ := ctx.Value(clientIPKey).(string)
 	if ip == "" {
 		return nil
 	}
-	return metadata.Pairs(ClientIPMetadataKey, ip)
+	return metadata.Pairs(ClientIPMetadataKey, ip, legacyClientIPKey, ip)
 }
 
 // peerAddr returns the host of the gRPC peer, and the parsed address when it is one.
@@ -128,6 +138,9 @@ type clientIPResolver struct {
 	// gateway in this process then connects from it rather than from loopback. It is
 	// set before the server serves.
 	self netip.Addr
+
+	log        *slog.Logger
+	legacyOnce sync.Once
 }
 
 func (c *clientIPResolver) trustedPeer(addr netip.Addr) bool {
@@ -135,17 +148,28 @@ func (c *clientIPResolver) trustedPeer(addr netip.Addr) bool {
 }
 
 // resolve returns ClientIPMetadataKey from a trusted peer — the last value, since the
-// gateway annotator comes after forwarded headers — and the peer address otherwise.
+// gateway annotator comes after forwarded headers —, the old x-client-ip key from a
+// trusted peer that sent no new one, and the peer address otherwise.
 func (c *clientIPResolver) resolve(ctx context.Context) string {
 	host, addr := peerAddr(ctx)
 	if !c.trustedPeer(addr) {
 		return host
 	}
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if v := md.Get(ClientIPMetadataKey); len(v) > 0 {
-			if ip, ok := parseIP(v[len(v)-1]); ok {
-				return ip.String()
-			}
+	md, _ := metadata.FromIncomingContext(ctx)
+	if v := md.Get(ClientIPMetadataKey); len(v) > 0 {
+		if ip, ok := parseIP(v[len(v)-1]); ok {
+			return ip.String()
+		}
+		return host
+	}
+	if v := md.Get(legacyClientIPKey); len(v) > 0 {
+		if ip, ok := parseIP(v[len(v)-1]); ok {
+			c.legacyOnce.Do(func() {
+				if c.log != nil {
+					c.log.Warn("a trusted gRPC peer names the client with the old x-client-ip metadata; send "+ClientIPMetadataKey+" instead", "peer", host)
+				}
+			})
+			return ip.String()
 		}
 	}
 	return host

@@ -110,6 +110,8 @@ func Load(l *confx.Loader) Config {
 
 			PrincipalRPS:   float64(l.Int("API_PRINCIPAL_RATE_RPS", 50)),
 			PrincipalBurst: l.Int("API_PRINCIPAL_RATE_BURST", 100),
+
+			IPv6Prefix: ipv6Prefix(l),
 		},
 		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
 		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
@@ -124,6 +126,16 @@ func Load(l *confx.Loader) Config {
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
 		TrustedProxies:  trustedProxies(l),
 	}
+}
+
+// ipv6Prefix reads API_RATE_IPV6_PREFIX: how many leading bits of an IPv6 address make
+// one client of the rate limit.
+func ipv6Prefix(l *confx.Loader) int {
+	bits := l.Int("API_RATE_IPV6_PREFIX", defaultIPv6Prefix)
+	if bits < 1 || bits > 128 {
+		l.Fail(fmt.Errorf("%s: %d is not a prefix length from 1 to 128", l.Key("API_RATE_IPV6_PREFIX"), bits))
+	}
+	return bits
 }
 
 // trustedProxies reads API_TRUSTED_PROXIES: comma separated networks or addresses, or
@@ -193,6 +205,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.IdempotencyLock <= 0 {
 		c.IdempotencyLock = time.Minute
+	}
+	if c.RateLimit.IPv6Prefix <= 0 || c.RateLimit.IPv6Prefix > 128 {
+		c.RateLimit.IPv6Prefix = defaultIPv6Prefix
 	}
 }
 
@@ -486,7 +501,7 @@ func (m *Module) Start(ctx context.Context) error {
 	// address comes before project interceptors, so a flood never reaches token
 	// validation; the one by principal comes after them, once the principal is known;
 	// idempotency comes last, so a rejected call is not remembered.
-	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted}
+	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted, log: m.log}
 	platformUnary := []grpc.UnaryServerInterceptor{m.clientIP.unary, m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
 	if m.cfg.RateLimit.RPS > 0 {
 		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {

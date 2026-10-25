@@ -148,6 +148,7 @@ var all = []Module{
 			{Key: "API_PUBLIC_RATE_BURST", Example: "60", Comment: "burst per client for public methods"},
 			{Key: "API_PRINCIPAL_RATE_RPS", Example: "50", Comment: "calls per second per principal named by api.RateLimitKey; 0 turns it off"},
 			{Key: "API_PRINCIPAL_RATE_BURST", Example: "100", Comment: "burst per principal"},
+			{Key: "API_RATE_IPV6_PREFIX", Example: "64", Comment: "leading bits of an IPv6 address that make one client of the rate limit; 128 limits every address on its own"},
 			{Key: "API_IDEMPOTENCY_RETENTION", Example: "24h", Comment: "how long an Idempotency-Key call is remembered"},
 			{Key: "API_IDEMPOTENCY_LOCK", Example: "1m", Comment: "how long a running call holds its key"},
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
