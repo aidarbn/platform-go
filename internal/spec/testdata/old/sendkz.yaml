@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.5.11/schema/platformgo.schema.json
+schema: 1
+platform: v0.5.11
+
+project:
+  module: github.com/aidarbn/sendkz
+  service: sendkz
+  go: "1.27"
+
+modules:
+  admin: {}
+  api: {}
+  postgres: {}
+  river: {}
+  settings: {}
+  web: {}

@@ -48,12 +48,7 @@ type enumEntity struct {
 
 // DomainDir is the directory the enums module scans.
 func DomainDir(f *spec.File) string {
-	if cfg := f.Modules["enums"]; cfg != nil {
-		if v, ok := cfg["domain"].(string); ok && v != "" {
-			return strings.TrimSuffix(v, "/")
-		}
-	}
-	return DefaultDomainDir
+	return strings.TrimSuffix(f.StringOption("enums", "domain", DefaultDomainDir), "/")
 }
 
 // EnumsCode scans the domain package of the project for go-enum markers and generates

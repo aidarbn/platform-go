@@ -41,7 +41,7 @@ Modules document their variables in the generated `.env.example`. Variables of t
 
 ## Rules
 
-- **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones: a typo fails `plan` instead of being ignored.
+- **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones, and an option of the wrong type is an error with its line: a typo fails `plan` instead of being ignored. See [Module options](#module-options).
 - **A JSON schema** is published for every platform version (`schema/platformgo.schema.json`, also printed by `platformgo schema`); the first line of a new project points editors at it, which turns on completion and validation.
 - **No secrets in the file.** Only structure and technical options; values come from environment variables, and `.env.example` is generated from the enabled modules.
 - **A module is enabled** by adding its section under `modules` and removed by deleting it. `apply` removes what generation produced for it and the tools it added to `go.mod`; files that belong to the project stay.
@@ -53,6 +53,37 @@ Modules document their variables in the generated `.env.example`. Variables of t
 | `postgres`, `admin`, `api`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 | `enums` | `domain` — the Go package scanned for go-enum markers, `internal/domain` by default |
+
+## Module options
+
+Every option of a module has a type, declared once in the module registry. Today `settings` and `enums` have one string option each (the table above); the other types are there for the options that follow, and the examples below show their shape. The same declaration checks `platformgo.yaml` and builds the JSON schema, so the editor and `plan` never disagree.
+
+| Type | In YAML | Example |
+|---|---|---|
+| string | a scalar the YAML reads as a string; quote numbers and versions | `schema: settings.yaml`, `go_type: "1.5"` |
+| string with allowed values | one of the listed strings | `generator: connect` |
+| bool | `true` or `false`, unquoted | `emit_interface: false` |
+| integer | an unquoted whole number | `workers: 4` |
+| list | a sequence of values of one type | `deps: [buf.build/grpc-ecosystem/grpc-gateway]` |
+| object | a mapping with the declared keys only; some are required | `openapi: {generator: none}` |
+| map | a mapping with any keys, values of one type | `renames: {url: URL}` |
+| one of | a value of one of several shapes, told apart by the shape | `go_type: int64` or `go_type: {type: int64, pointer: true}` |
+
+An option left out takes its default, which the schema shows. An empty value (`schema:` with nothing after it) is an error, not the default: delete the key instead. YAML anchors and aliases work; merge keys (`<<`) are not supported in module sections.
+
+Errors say where and what:
+
+```
+platformgo.yaml: line 10: module enums: option domain must be a string, got a list
+line 11: module enums: unknown option "domian", known options: domain
+line 8: module settings: option schema must be a string, got a number 1.5: quote it, "1.5"
+```
+
+Code that generates files reads the options of a module into a typed struct with `spec.File.DecodeOptions`, strictly: a struct that misses an option the registry declares fails in tests.
+
+## Schema version
+
+`schema: 1` is the format of the file. Adding an option, a type or a module does not change it: a file that was valid stays valid and means the same, and an older `platformgo` rejects the new key by name. The number goes up only when a key is renamed, moved, removed or changes meaning. Such a release ships a migration that `platformgo upgrade` applies to the file (see [upgrades.md](upgrades.md)), and `platformgo` refuses a file with a schema newer than it understands.
 
 ## Commands
 

@@ -51,13 +51,17 @@ func Parse(raw []byte) (*File, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("%s: parse: %w", FileName, err)
 	}
-	if err := f.validate(); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("%s: parse: %w", FileName, err)
+	}
+	if err := f.validate(moduleNodes(&doc)); err != nil {
 		return nil, err
 	}
 	return &f, nil
 }
 
-func (f *File) validate() error {
+func (f *File) validate(sections map[string]*yaml.Node) error {
 	var errs []error
 
 	switch {
@@ -81,45 +85,12 @@ func (f *File) validate() error {
 				errs = append(errs, fmt.Errorf("module %s requires module %s: add it to modules", name, dep))
 			}
 		}
-		errs = append(errs, checkOptions(m, f.Modules[name])...)
+		errs = append(errs, checkOptions(m, sections[name])...)
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%s: %w", FileName, errors.Join(errs...))
 	}
 	return nil
-}
-
-// checkOptions rejects an option the module does not have: a typo in platformgo.yaml
-// must fail rather than be ignored.
-func checkOptions(m registry.Module, options map[string]any) []error {
-	var errs []error
-	for _, key := range sortedKeys(options) {
-		if _, ok := m.Option(key); !ok {
-			known := "none"
-			if len(m.Options) > 0 {
-				names := make([]string, 0, len(m.Options))
-				for _, o := range m.Options {
-					names = append(names, o.Name)
-				}
-				known = strings.Join(names, ", ")
-			}
-			errs = append(errs, fmt.Errorf("module %s: unknown option %q, known options: %s", m.Name, key, known))
-			continue
-		}
-		if _, isString := options[key].(string); !isString {
-			errs = append(errs, fmt.Errorf("module %s: option %s must be a string", m.Name, key))
-		}
-	}
-	return errs
-}
-
-func sortedKeys(m map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
 }
 
 func (f *File) moduleNames() []string {

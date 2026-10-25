@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.2.0/schema/platformgo.schema.json
+schema: 1
+platform: v0.2.0
+
+project:
+  module: example.com/matrix
+  service: matrix
+  go: "1.26"
+
+modules:
+  {}

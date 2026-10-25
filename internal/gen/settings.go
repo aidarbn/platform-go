@@ -39,12 +39,7 @@ func SettingsEnabled(f *spec.File) bool {
 // SettingsSchemaPath is the schema file of the project: settings.yaml unless the
 // module section names another one.
 func SettingsSchemaPath(f *spec.File) string {
-	if cfg := f.Modules[SettingsModule]; cfg != nil {
-		if v, ok := cfg["schema"].(string); ok && v != "" {
-			return v
-		}
-	}
-	return settingsdef.FileName
+	return f.StringOption(SettingsModule, "schema", settingsdef.FileName)
 }
 
 var settingsTmpl = template.Must(template.New("settings").Parse(header + `
