@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -24,15 +23,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
-// Headers the HTTP side sets for the gRPC side. They are always overwritten, so a client
-// cannot supply them.
 const (
 	requestIDHeader = "X-Request-ID"
-	clientIPHeader  = "X-Client-IP"
 	maxBodyLogSize  = 4096
 )
 
@@ -58,27 +53,6 @@ func RequestID(ctx context.Context) string {
 	return ""
 }
 
-// ClientIP returns the address of the client. Behind a proxy it is the last address of
-// X-Forwarded-For — the one the proxy itself saw, which the client cannot forge — and
-// the connection address otherwise. The gateway passes it on to gRPC handlers.
-func ClientIP(ctx context.Context) string {
-	if ip, ok := ctx.Value(clientIPKey).(string); ok {
-		return ip
-	}
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if v := md.Get(strings.ToLower(clientIPHeader)); len(v) > 0 && v[0] != "" {
-			return v[0]
-		}
-	}
-	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-		if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
-			return host
-		}
-		return p.Addr.String()
-	}
-	return ""
-}
-
 // userAgent returns the user agent of a call; the gateway forwards the one of the HTTP
 // client under its own metadata key.
 func userAgent(ctx context.Context) string {
@@ -94,38 +68,6 @@ func userAgent(ctx context.Context) string {
 	return ""
 }
 
-// resolveClientIP returns the connection address, or the last address of X-Forwarded-For
-// when the connection comes from a trusted proxy.
-func resolveClientIP(r *http.Request, trusted []netip.Prefix) string {
-	remote := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
-	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" || !isTrusted(remote, trusted) {
-		return remote
-	}
-	parts := strings.Split(xff, ",")
-	if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-		return ip
-	}
-	return remote
-}
-
-func isTrusted(remote string, trusted []netip.Prefix) bool {
-	addr, err := netip.ParseAddr(remote)
-	if err != nil {
-		return false
-	}
-	addr = addr.Unmap()
-	for _, p := range trusted {
-		if p.Contains(addr) {
-			return true
-		}
-	}
-	return false
-}
-
 // newRequestID is a uuidv7: it sorts by time, which helps when logs are searched.
 func newRequestID() string {
 	id, err := uuid.NewV7()
@@ -138,7 +80,9 @@ func newRequestID() string {
 }
 
 // identify gives the request its id and client address, for the HTTP side through the
-// context and for the gRPC side through headers the gateway forwards.
+// context and for the gRPC side through the request id header and the client address
+// annotator of the gateway. The client address headers a client sent are removed, so
+// neither a plain route nor a gRPC handler can mistake them for the platform's.
 func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
@@ -148,7 +92,8 @@ func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 		ip := resolveClientIP(r, trusted)
 
 		r.Header.Set(requestIDHeader, id)
-		r.Header.Set(clientIPHeader, ip)
+		r.Header.Del(legacyClientIPHeader)
+		r.Header.Del(ClientIPMetadataKey)
 		w.Header().Set(requestIDHeader, id)
 
 		ctx := context.WithValue(r.Context(), requestIDKey, id)

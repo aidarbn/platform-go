@@ -12,7 +12,11 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/aidarbn/platform-go/kit/confx"
+	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/modules/api"
 	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -222,5 +226,113 @@ func TestTraceContinuesThroughGateway(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the handler was not called")
+	}
+}
+
+// A REST client cannot pick its own bucket with the client address headers: the gateway
+// drops them and names the client itself, once.
+func TestForgedAddressHeadersOverREST(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	extraWire = func(app *platform.App) {
+		api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+			md, _ := metadata.FromIncomingContext(ctx)
+			mu.Lock()
+			seen = append(seen, fmt.Sprintf("%v %v %s", md.Get(api.ClientIPMetadataKey), md.Get("x-client-ip"), api.ClientIP(ctx)))
+			mu.Unlock()
+			return h(ctx, req)
+		})
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{RateLimit: api.RateLimit{RPS: 0.001, Burst: 1}})
+
+	var codes []int
+	for _, forged := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
+		code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"x"}`, map[string]string{
+			"X-Client-IP": forged, "X-Platform-Client-IP": forged,
+		})
+		codes = append(codes, code)
+	}
+	if fmt.Sprint(codes) != "[200 429 429]" {
+		t.Errorf("forged headers gave new buckets: %v", codes)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 || seen[0] != "[127.0.0.1] [] 127.0.0.1" {
+		t.Errorf("the handler saw %v", seen)
+	}
+}
+
+// The gateway connects over loopback, so a gRPC client on the same host is trusted to
+// name the client, the way the gateway does.
+func TestLoopbackGRPCPeerNamesTheClient(t *testing.T) {
+	s := start(t, api.Config{})
+	conn, err := grpc.NewClient(s.module.GRPCAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx := metadata.AppendToOutgoingContext(context.Background(), api.ClientIPMetadataKey, "198.51.100.7")
+	resp, err := testv1.NewEchoServiceClient(conn).CreateThing(ctx, &testv1.CreateThingRequest{Name: "x"})
+	if err != nil || !strings.HasSuffix(resp.GetId(), "|198.51.100.7") {
+		t.Errorf("CreateThing = %v, %v", resp, err)
+	}
+}
+
+// Calls of one principal share a bucket wherever they come from; anonymous calls are
+// left to the limit by address.
+func TestRateLimitPerPrincipal(t *testing.T) {
+	extraWire = func(app *platform.App) {
+		api.RateLimitKey(app, func(ctx context.Context) string {
+			md, _ := metadata.FromIncomingContext(ctx)
+			return strings.Join(md.Get("x-user"), ",")
+		})
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{RateLimit: api.RateLimit{RPS: 1000, Burst: 1000, PrincipalRPS: 0.001, PrincipalBurst: 2}})
+
+	call := func(user, ip string) int {
+		h := map[string]string{"X-Forwarded-For": ip}
+		if user != "" {
+			h["X-User"] = user
+		}
+		code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"x"}`, h)
+		return code
+	}
+	got := []int{call("alice", "10.0.0.1"), call("alice", "10.0.0.2"), call("alice", "10.0.0.3"), call("bob", "10.0.0.3")}
+	for range 3 {
+		got = append(got, call("", "10.0.0.4"))
+	}
+	if fmt.Sprint(got) != "[200 200 429 200 200 200 200]" {
+		t.Errorf("codes = %v", got)
+	}
+	if !strings.Contains(scrape(t, s.ops), `api_principal_rate_limited_total{method="/platformtest.v1.EchoService/Echo"} 1`) {
+		t.Error("refused calls are not counted")
+	}
+}
+
+// Without RateLimitKey there is no limit per principal, whatever the settings say.
+func TestRateLimitPerPrincipalNeedsAKey(t *testing.T) {
+	s := start(t, api.Config{RateLimit: api.RateLimit{PrincipalRPS: 0.001, PrincipalBurst: 1}})
+	for i := range 3 {
+		if code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"x"}`, map[string]string{"X-User": "alice"}); code != http.StatusOK {
+			t.Errorf("call %d: %d", i, code)
+		}
+	}
+	if strings.Contains(scrape(t, s.ops), "api_principal_rate_limited_total") {
+		t.Error("the limit per principal is set up without a key")
+	}
+}
+
+func TestPrincipalRateLimitFromEnvironment(t *testing.T) {
+	cfg := api.Load(confx.New(""))
+	if cfg.RateLimit.PrincipalRPS != 50 || cfg.RateLimit.PrincipalBurst != 100 {
+		t.Errorf("defaults: %+v", cfg.RateLimit)
+	}
+	t.Setenv("API_PRINCIPAL_RATE_RPS", "5")
+	t.Setenv("API_PRINCIPAL_RATE_BURST", "7")
+	cfg = api.Load(confx.New(""))
+	if cfg.RateLimit.PrincipalRPS != 5 || cfg.RateLimit.PrincipalBurst != 7 {
+		t.Errorf("from the environment: %+v", cfg.RateLimit)
 	}
 }

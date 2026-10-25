@@ -364,3 +364,24 @@ func TestHTTPErrorHandler(t *testing.T) {
 		t.Errorf("middleware: %d, too large = %v", code, sawTooLarge.Load())
 	}
 }
+
+// A proxy that adds its own X-Forwarded-For line, as HAProxy does, names the client in
+// the last line; a line the client sent itself is not believed.
+func TestForwardedForOverSeveralLines(t *testing.T) {
+	s := start(t, api.Config{})
+	req, err := http.NewRequest("POST", "http://"+s.module.HTTPAddr()+"/v1/things", strings.NewReader(`{"name":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Add("X-Forwarded-For", "1.2.3.4")  // forged by the client
+	req.Header.Add("X-Forwarded-For", "10.0.0.9") // added by the proxy
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(thingID(t, string(raw)), "|10.0.0.9") {
+		t.Errorf("%d %s", resp.StatusCode, raw)
+	}
+}
