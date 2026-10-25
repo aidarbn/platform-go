@@ -222,6 +222,48 @@ func TestRateLimitIPv6Prefix(t *testing.T) {
 	}
 }
 
+// Handlers that read the address keys of the metadata themselves get the checked
+// address, on unary calls and streams alike.
+func TestInterceptorRewritesAddressMetadata(t *testing.T) {
+	c := &clientIPResolver{}
+	read := func(ctx context.Context) string {
+		md, _ := metadata.FromIncomingContext(ctx)
+		return fmt.Sprintf("%v %v %v %s", md.Get(ClientIPMetadataKey), md.Get(legacyClientIPKey), md.Get("x-other"), ClientIP(ctx))
+	}
+	cases := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"untrusted peer, forged keys", fromPeer("203.0.113.5:4000", "x-client-ip", "1.1.1.1", ClientIPMetadataKey, "2.2.2.2", "x-other", "o"), "[203.0.113.5] [203.0.113.5] [o] 203.0.113.5"},
+		{"loopback, old key", fromPeer("127.0.0.1:4000", "x-client-ip", "198.51.100.7"), "[198.51.100.7] [198.51.100.7] [] 198.51.100.7"},
+		{"no peer", metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-client-ip", "1.1.1.1")), "[] [] [] "},
+	}
+	for _, tc := range cases {
+		var got string
+		_, _ = c.unary(tc.ctx, nil, &grpc.UnaryServerInfo{}, func(ctx context.Context, _ any) (any, error) {
+			got = read(ctx)
+			return nil, nil
+		})
+		if got != tc.want {
+			t.Errorf("unary, %s: %s, want %s", tc.name, got, tc.want)
+		}
+		_ = c.stream(nil, &fakeStream{ctx: tc.ctx}, &grpc.StreamServerInfo{}, func(_ any, ss grpc.ServerStream) error {
+			got = read(ss.Context())
+			return nil
+		})
+		if got != tc.want {
+			t.Errorf("stream, %s: %s, want %s", tc.name, got, tc.want)
+		}
+	}
+	// The caller's metadata is not changed in place.
+	ctx := fromPeer("203.0.113.5:4000", "x-client-ip", "1.1.1.1")
+	_, _ = c.unary(ctx, nil, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) { return nil, nil })
+	if md, _ := metadata.FromIncomingContext(ctx); md.Get("x-client-ip")[0] != "1.1.1.1" {
+		t.Error("the incoming metadata was changed in place")
+	}
+}
+
 // The old key is read from a trusted peer, with one warning however many calls use it.
 func TestLegacyClientIPKeyWarnsOnce(t *testing.T) {
 	var buf bytes.Buffer
@@ -332,6 +374,13 @@ func TestForwardHeaderDropsClientAddress(t *testing.T) {
 	for _, h := range []string{"X-Platform-Client-IP", "x-platform-client-ip", "X-Client-IP", "X-Client-Ip"} {
 		if _, ok := forwardHeader(h); ok {
 			t.Errorf("%s is forwarded", h)
+		}
+	}
+	// The matcher replaces the one of grpc-gateway, which would strip Grpc-Metadata-: a
+	// prefixed header keeps its prefix and cannot become an address key.
+	for _, h := range []string{"Grpc-Metadata-X-Client-Ip", "Grpc-Metadata-X-Platform-Client-Ip"} {
+		if got, ok := forwardHeader(h); ok && (got == ClientIPMetadataKey || got == legacyClientIPKey) {
+			t.Errorf("%s is forwarded as %s", h, got)
 		}
 	}
 	if got, ok := forwardHeader("X-Request-ID"); !ok || got != "x-request-id" {

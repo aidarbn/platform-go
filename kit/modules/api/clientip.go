@@ -178,12 +178,28 @@ func (c *clientIPResolver) resolve(ctx context.Context) string {
 // unary puts the client address into the context first, so the rate limit, the log of
 // deprecated calls and the handlers all see the same, checked address through ClientIP.
 func (c *clientIPResolver) unary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	return handler(context.WithValue(ctx, clientIPKey, c.resolve(ctx)), req)
+	return handler(c.settle(ctx), req)
 }
 
 func (c *clientIPResolver) stream(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	ctx := context.WithValue(ss.Context(), clientIPKey, c.resolve(ss.Context()))
-	return handler(srv, &contextStream{ServerStream: ss, ctx: ctx})
+	return handler(srv, &contextStream{ServerStream: ss, ctx: c.settle(ss.Context())})
+}
+
+// settle puts the checked address into the context, and into both address keys of the
+// incoming metadata, so a handler that reads the metadata itself, as code for older
+// releases did, sees the checked address too and never one an untrusted peer sent.
+func (c *clientIPResolver) settle(ctx context.Context) context.Context {
+	ip := c.resolve(ctx)
+	md, _ := metadata.FromIncomingContext(ctx)
+	md = md.Copy()
+	if ip == "" {
+		md.Delete(ClientIPMetadataKey)
+		md.Delete(legacyClientIPKey)
+	} else {
+		md.Set(ClientIPMetadataKey, ip)
+		md.Set(legacyClientIPKey, ip)
+	}
+	return context.WithValue(metadata.NewIncomingContext(ctx, md), clientIPKey, ip)
 }
 
 // contextStream is a server stream with a replaced context.
