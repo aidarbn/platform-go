@@ -93,10 +93,11 @@ var _ = riverx.Insert
 	})
 	mods := []codemod.Codemod{codemod.RenameSymbol("v0.3.0", riverx, "Insert", "Enqueue")}
 
-	changes, err := codemod.Run(dir, mods)
+	res, err := codemod.Run(dir, mods, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	changes := res.Changes
 	if len(changes) != 1 || changes[0].Path != "internal/jobs/jobs.go" {
 		t.Fatalf("changes = %+v", changes)
 	}
@@ -112,7 +113,7 @@ var _ = riverx.Insert
 
 	// Idempotent: the rewritten project has nothing left.
 	os.WriteFile(filepath.Join(dir, changes[0].Path), changes[0].Content, 0o644)
-	if again, err := codemod.Run(dir, mods); err != nil || len(again) != 0 {
+	if again, err := codemod.Run(dir, mods, nil); err != nil || len(again.Changes) != 0 {
 		t.Errorf("second run: %+v, %v", again, err)
 	}
 }
@@ -125,7 +126,8 @@ func TestStepsChain(t *testing.T) {
 		codemod.RenameSymbol("v0.4.0", riverx, "Middle", "New"),
 		codemod.RenameSymbol("v0.3.0", riverx, "Old", "Middle"),
 	}, "v0.2.0")
-	changes, err := codemod.Run(dir, mods)
+	res, err := codemod.Run(dir, mods, nil)
+	changes := res.Changes
 	if err != nil || len(changes) != 1 {
 		t.Fatalf("%+v, %v", changes, err)
 	}
@@ -137,15 +139,15 @@ func TestStepsChain(t *testing.T) {
 func TestBrokenFilesAreLeftAlone(t *testing.T) {
 	dir := project(t, map[string]string{"a.go": "package a\n\nfunc {"})
 	mods := []codemod.Codemod{codemod.RenameSymbol("v0.3.0", riverx, "Old", "New")}
-	if changes, err := codemod.Run(dir, mods); err != nil || len(changes) != 0 {
-		t.Errorf("%+v, %v", changes, err)
+	if res, err := codemod.Run(dir, mods, mods); err != nil || len(res.Changes) != 0 {
+		t.Errorf("%+v, %v", res, err)
 	}
 }
 
 func TestAllAreOrderedAndNamed(t *testing.T) {
 	seen := map[string]bool{}
 	for _, m := range codemod.All() {
-		if m.Name == "" || m.Fix == nil || seen[m.Name] {
+		if m.Name == "" || (m.Fix == nil && m.Proto == nil) || len(m.Covers) == 0 || seen[m.Name] {
 			t.Errorf("codemod %+v is incomplete or repeated", m)
 		}
 		seen[m.Name] = true

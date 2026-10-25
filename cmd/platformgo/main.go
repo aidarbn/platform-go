@@ -217,6 +217,11 @@ func checkGenerated(ctx context.Context, dir string) error {
 	if !plan.UpToDate() {
 		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
 	}
+	if len(plan.Notes) > 0 {
+		var b strings.Builder
+		printNotes(&b, plan)
+		return fmt.Errorf("manual steps of a platform upgrade are open:\n%s", strings.TrimSuffix(b.String(), "\n"))
+	}
 	if slices.Contains(plan.Modules, "postgres") {
 		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
 			return err
@@ -359,6 +364,7 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 	}
 	if plan.UpToDate() {
 		fmt.Fprintln(out, "generation is up to date")
+		printNotes(out, plan)
 		return plan, nil
 	}
 	if err := plan.Execute(); err != nil {
@@ -464,6 +470,7 @@ func cmdPlan(args []string, out io.Writer) error {
 
 	if plan.UpToDate() && len(plan.Kept) == 0 {
 		fmt.Fprintln(out, "no changes")
+		printNotes(out, plan)
 		return nil
 	}
 	printChanges(out, plan, "+", "~", "-")
@@ -494,6 +501,14 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	}
 	if plan.LockStale {
 		fmt.Fprintln(out, write, lock.FileName)
+	}
+	printNotes(out, plan)
+}
+
+// printNotes lists what codemods left to a person.
+func printNotes(out io.Writer, plan *apply.Plan) {
+	for _, n := range plan.Notes {
+		fmt.Fprintln(out, "manual", n)
 	}
 }
 

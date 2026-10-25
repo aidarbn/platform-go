@@ -41,6 +41,7 @@ type Plan struct {
 	DropTools []string         // tools of removed modules still declared in go.mod
 	LockStale bool             // platformgo.lock does not match
 	Codemods  []codemod.Change // project files rewritten for changes of kit
+	Notes     []codemod.Note   // places a person has to change: what codemods could not rewrite
 
 	dir     string
 	creates map[string][]byte
@@ -92,10 +93,14 @@ func Build(dir string) (*Plan, error) {
 	}
 	slices.Sort(p.Modules)
 
-	// Codemods newer than the version that applied the project last.
-	if p.Codemods, err = codemod.Run(dir, codemod.Pending(codemods(), applied.Platform)); err != nil {
+	// Codemods newer than the version that applied the project last; the checks of all
+	// of them, so a manual step stays open until it is done.
+	all := codemods()
+	mods, err := codemod.Run(dir, codemod.Pending(all, applied.Platform), all)
+	if err != nil {
 		return nil, err
 	}
+	p.Codemods, p.Notes = mods.Changes, mods.Notes
 
 	p.wanted = lock.Lock{Platform: version.Platform(), Modules: p.Modules, Generated: slices.Sorted(maps.Keys(files))}
 	for _, t := range tools {
