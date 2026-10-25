@@ -43,6 +43,10 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race ./...
+      # kit statement coverage with the database and MinIO above: 90% overall, 85% per
+      # package, generated code left out.
+      - name: Coverage gate
+        run: scripts/cover.sh
 
   # The exported API of kit against the latest release; a release tag fails when it
   # ships an incompatible change its version does not allow.
