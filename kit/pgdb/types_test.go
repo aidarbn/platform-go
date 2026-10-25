@@ -86,13 +86,13 @@ func TestAfterConnectRunsOnEveryConnection(t *testing.T) {
 	pool, err := pgdb.Open(ctx, pgdb.Config{
 		URL:      testURL(t),
 		MaxConns: 4,
-		AfterConnect: func(_ context.Context, conn *pgx.Conn) error {
+		Hooks: &pgdb.Hooks{AfterConnect: func(_ context.Context, conn *pgx.Conn) error {
 			if _, ok := conn.TypeMap().TypeForValue(decimal.Decimal{}); !ok {
 				return errors.New("decimal is not registered before the project hook")
 			}
 			calls.Add(1)
 			return nil
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestAfterConnectRunsOnEveryConnection(t *testing.T) {
 }
 
 // ConfigurePool sees the applied sizes and may add its own AfterConnect: it runs after the
-// platform types and before Config.AfterConnect.
+// platform types and before Hooks.AfterConnect.
 func TestConfigurePool(t *testing.T) {
 	ctx := context.Background()
 	var (
@@ -137,14 +137,16 @@ func TestConfigurePool(t *testing.T) {
 	pool, err := pgdb.Open(ctx, pgdb.Config{
 		URL:      testURL(t),
 		MaxConns: 3,
-		ConfigurePool: func(c *pgxpool.Config) {
-			if c.MaxConns != 3 {
-				t.Errorf("ConfigurePool sees MaxConns = %d", c.MaxConns)
-			}
-			c.ConnConfig.RuntimeParams["application_name"] = "platformgo-pr3"
-			c.AfterConnect = func(context.Context, *pgx.Conn) error { record("pool"); return nil }
+		Hooks: &pgdb.Hooks{
+			ConfigurePool: func(c *pgxpool.Config) {
+				if c.MaxConns != 3 {
+					t.Errorf("ConfigurePool sees MaxConns = %d", c.MaxConns)
+				}
+				c.ConnConfig.RuntimeParams["application_name"] = "platformgo-pr3"
+				c.AfterConnect = func(context.Context, *pgx.Conn) error { record("pool"); return nil }
+			},
+			AfterConnect: func(context.Context, *pgx.Conn) error { record("config"); return nil },
 		},
-		AfterConnect: func(context.Context, *pgx.Conn) error { record("config"); return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,8 +174,8 @@ func TestConfigurePool(t *testing.T) {
 // A failing hook discards the connection, so Open reports the database as unusable.
 func TestAfterConnectErrorFailsOpen(t *testing.T) {
 	_, err := pgdb.Open(context.Background(), pgdb.Config{
-		URL:          testURL(t),
-		AfterConnect: func(context.Context, *pgx.Conn) error { return errors.New("no such type") },
+		URL:   testURL(t),
+		Hooks: &pgdb.Hooks{AfterConnect: func(context.Context, *pgx.Conn) error { return errors.New("no such type") }},
 	})
 	if err == nil || !strings.Contains(err.Error(), "no such type") {
 		t.Fatalf("err = %v", err)
@@ -196,5 +198,14 @@ func TestRegisterTypesOnPlainConnection(t *testing.T) {
 	}
 	if !d.Equal(decimal.RequireFromString("0.3")) {
 		t.Errorf("d = %s", d)
+	}
+}
+
+// Config stays comparable: code that compares two configs with == keeps compiling.
+func TestConfigComparable(t *testing.T) {
+	hooks := &pgdb.Hooks{}
+	a, b := pgdb.Config{URL: "x", Hooks: hooks}, pgdb.Config{URL: "x", Hooks: hooks}
+	if a != b || a == (pgdb.Config{URL: "x"}) {
+		t.Error("configs compare wrong")
 	}
 }

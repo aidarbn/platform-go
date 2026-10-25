@@ -208,7 +208,7 @@ if err := platform.Run(platform.Config{Service: serviceName}, modules, wireDomai
 - For each pool size the first of these wins: the `DATABASE_*` variable, if it is set (even to `0`), or a value the project put into `cfg.Postgres` after `LoadConfig`; the value of `WithDefaults`; the default of the platform. A zero field of `PoolSizes` keeps the platform default.
 - Hooks of `WithAfterConnect` and functions of `WithPoolConfig` run in the order they were added. A failing hook discards the connection; on start that fails the database check.
 - `Apply` fails when the modules have no `postgres` module, so hooks the project relies on are never dropped silently.
-- Without the module, `pgdb.Open` takes the same through `pgdb.Config`: the sizes, `AfterConnect` and `ConfigurePool`. `pgdb.RegisterTypes` registers the platform types on a connection opened by other means.
+- Without the module, `pgdb.Open` takes the same through `pgdb.Config`: the sizes, and `Hooks` with `AfterConnect` and `ConfigurePool`. `pgdb.RegisterTypes` registers the platform types on a connection opened by other means.
 
 Queries come in two kinds, as in taply:
 

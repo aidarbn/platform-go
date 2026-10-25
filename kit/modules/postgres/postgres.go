@@ -249,8 +249,11 @@ func (m *Module) poolConfig() pgdb.Config {
 		MaxConnIdleTime: resolve(c.MaxConnIdleTime, d.MaxConnIdleTime, explicit(fieldMaxConnIdleTime, c.MaxConnIdleTime == 0, c.MaxConnIdleTime != l.MaxConnIdleTime)),
 		ConnectTimeout:  resolve(c.ConnectTimeout, d.ConnectTimeout, explicit(fieldConnectTimeout, c.ConnectTimeout == 0, c.ConnectTimeout != l.ConnectTimeout)),
 	}
+	if len(hooks) > 0 || len(configure) > 0 {
+		cfg.Hooks = &pgdb.Hooks{}
+	}
 	if len(hooks) > 0 {
-		cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		cfg.Hooks.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 			for _, hook := range hooks {
 				if err := hook(ctx, conn); err != nil {
 					return err
@@ -260,7 +263,7 @@ func (m *Module) poolConfig() pgdb.Config {
 		}
 	}
 	if len(configure) > 0 {
-		cfg.ConfigurePool = func(pc *pgxpool.Config) {
+		cfg.Hooks.ConfigurePool = func(pc *pgxpool.Config) {
 			for _, fn := range configure {
 				fn(pc)
 			}

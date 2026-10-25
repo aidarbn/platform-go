@@ -37,7 +37,7 @@ func TestWithoutDefaultsKeepsPlatformValues(t *testing.T) {
 		got.MaxConnIdleTime != 30*time.Minute || got.ConnectTimeout != 5*time.Second {
 		t.Errorf("pool = %+v", got)
 	}
-	if got.AfterConnect != nil || got.ConfigurePool != nil {
+	if got.Hooks != nil {
 		t.Error("no hooks were given, none must be passed on")
 	}
 }
@@ -96,7 +96,7 @@ func TestChangeAfterLoadBeatsDefaults(t *testing.T) {
 
 func TestNilOptionsAreIgnored(t *testing.T) {
 	got := postgres.New(load(t), postgres.WithAfterConnect(nil), postgres.WithPoolConfig(nil)).PoolConfig()
-	if got.AfterConnect != nil || got.ConfigurePool != nil {
+	if got.Hooks != nil {
 		t.Error("nil hooks must not be passed on")
 	}
 }
@@ -140,10 +140,10 @@ func TestHooksChainInOrder(t *testing.T) {
 		postgres.WithPoolConfig(func(c *pgxpool.Config) { order = append(order, "pool-b") }),
 	).PoolConfig()
 
-	if err := cfg.AfterConnect(context.Background(), nil); err != context.Canceled {
+	if err := cfg.Hooks.AfterConnect(context.Background(), nil); err != context.Canceled {
 		t.Errorf("err = %v: the error of a hook must stop the chain and come back", err)
 	}
-	cfg.ConfigurePool(&pgxpool.Config{})
+	cfg.Hooks.ConfigurePool(&pgxpool.Config{})
 	if strings.Join(order, ",") != "first,second,pool-a,pool-b" {
 		t.Errorf("order = %v", order)
 	}
@@ -227,7 +227,7 @@ func TestOptionsWithRealDatabase(t *testing.T) {
 // A Module declared without New takes options and opens with the platform values.
 func TestZeroModuleTakesOptions(t *testing.T) {
 	m := &postgres.Module{}
-	if got := m.PoolConfig(); got.MaxConns != 0 || got.AfterConnect != nil {
+	if got := m.PoolConfig(); got.MaxConns != 0 || got.Hooks != nil {
 		t.Errorf("pool = %+v", got)
 	}
 	if err := postgres.Apply([]platform.Module{m}, postgres.WithDefaults(taply)); err != nil {
