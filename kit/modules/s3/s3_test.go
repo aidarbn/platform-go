@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
+
 	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/modules/s3"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -36,11 +38,7 @@ func TestInitWithoutEndpoint(t *testing.T) {
 // storage connects to the MinIO of S3_TEST_ENDPOINT, as taply's docker-compose runs it.
 func storage(t *testing.T) (*s3.Storage, s3.Config) {
 	t.Helper()
-	endpoint := os.Getenv("S3_TEST_ENDPOINT")
-	if endpoint == "" {
-		t.Skip("S3_TEST_ENDPOINT is not set")
-	}
-	cfg := s3.Config{Endpoint: endpoint, AccessKey: "minioadmin", SecretKey: "minioadmin"}
+	cfg := testConfig(t)
 	app := platform.NewApp(nil)
 	m := s3.New(cfg)
 	if err := m.Init(context.Background(), app); err != nil {
@@ -52,7 +50,38 @@ func storage(t *testing.T) (*s3.Storage, s3.Config) {
 	return s3.From(app), cfg
 }
 
-func bucketName(prefix string) string { return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()) }
+// testConfig reads S3_TEST_ENDPOINT, as host:port or as a URL with the scheme.
+func testConfig(t *testing.T) s3.Config {
+	t.Helper()
+	endpoint := os.Getenv("S3_TEST_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("S3_TEST_ENDPOINT is not set")
+	}
+	cfg := s3.Config{AccessKey: "minioadmin", SecretKey: "minioadmin"}
+	if rest, ok := strings.CutPrefix(endpoint, "https://"); ok {
+		endpoint, cfg.UseSSL = rest, true
+	}
+	cfg.Endpoint = strings.TrimSuffix(strings.TrimPrefix(endpoint, "http://"), "/")
+	return cfg
+}
+
+// bucketName returns a fresh bucket name; the bucket and what is left in it are removed
+// when the test ends.
+func bucketName(t *testing.T, st *s3.Storage, prefix string) string {
+	t.Helper()
+	name := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	t.Cleanup(func() {
+		ctx := context.Background()
+		cli := st.Client()
+		for obj := range cli.ListObjects(ctx, name, minio.ListObjectsOptions{Recursive: true}) {
+			if obj.Err == nil {
+				_ = cli.RemoveObject(ctx, name, obj.Key, minio.RemoveObjectOptions{})
+			}
+		}
+		_ = cli.RemoveBucket(ctx, name)
+	})
+	return name
+}
 
 func httpGet(t *testing.T, url string) (int, string) {
 	t.Helper()
@@ -69,7 +98,7 @@ func httpGet(t *testing.T, url string) (int, string) {
 func TestPublicBucket(t *testing.T) {
 	st, _ := storage(t)
 	ctx := context.Background()
-	bucket := bucketName("images")
+	bucket := bucketName(t, st, "images")
 
 	path, err := st.Put(ctx, bucket, true, "restaurants/1/images/logo.png", "image/png", []byte("png bytes"))
 	if err != nil || path != "restaurants/1/images/logo.png" {
@@ -95,7 +124,7 @@ func TestPublicBucket(t *testing.T) {
 func TestPrivateBucket(t *testing.T) {
 	st, _ := storage(t)
 	ctx := context.Background()
-	bucket := bucketName("receipts")
+	bucket := bucketName(t, st, "receipts")
 
 	if _, err := st.Put(ctx, bucket, false, "2026/09/receipt.pdf", "application/pdf", []byte("pdf bytes")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -132,7 +161,7 @@ func TestPrivateBucket(t *testing.T) {
 func TestExistingBucketPolicyIsKept(t *testing.T) {
 	st, _ := storage(t)
 	ctx := context.Background()
-	bucket := bucketName("tightened")
+	bucket := bucketName(t, st, "tightened")
 
 	if _, err := st.Put(ctx, bucket, false, "a.txt", "text/plain", []byte("a")); err != nil {
 		t.Fatal(err)
@@ -150,7 +179,7 @@ func TestExistingBucketPolicyIsKept(t *testing.T) {
 func TestPutStreamOfUnknownSize(t *testing.T) {
 	st, _ := storage(t)
 	ctx := context.Background()
-	bucket := bucketName("videos")
+	bucket := bucketName(t, st, "videos")
 
 	payload := strings.Repeat("frame", 200_000) // a megabyte, streamed without a length
 	if _, err := st.PutStream(ctx, bucket, false, "screensaver.mp4", "video/mp4", strings.NewReader(payload), -1); err != nil {
@@ -169,11 +198,9 @@ func TestPutStreamOfUnknownSize(t *testing.T) {
 
 // Wrong keys stop the start instead of the first upload.
 func TestInitRejectsWrongKeys(t *testing.T) {
-	endpoint := os.Getenv("S3_TEST_ENDPOINT")
-	if endpoint == "" {
-		t.Skip("S3_TEST_ENDPOINT is not set")
-	}
-	err := s3.New(s3.Config{Endpoint: endpoint, AccessKey: "minioadmin", SecretKey: "wrong"}).Init(context.Background(), platform.NewApp(nil))
+	cfg := testConfig(t)
+	cfg.SecretKey = "wrong"
+	err := s3.New(cfg).Init(context.Background(), platform.NewApp(nil))
 	if err == nil || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("err = %v", err)
 	}
