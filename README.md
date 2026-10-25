@@ -30,7 +30,7 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 
 | Module | State |
 |---|---|
-| `postgres` — pool, health, metrics, transactions, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
+| `postgres` — pool, health, metrics, transactions, `numeric` as decimal, connection hooks, application pool defaults, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
 | `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
 | `admin` — admin panel: sign in with a password, roles, accounts, audit log, settings pages, project pages | ready |
 | `api` — gRPC and REST gateway from proto files, OpenAPI 3.1 with validation rules, interceptors, health, CORS, docs | ready |
