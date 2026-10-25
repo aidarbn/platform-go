@@ -2,6 +2,7 @@ package webx_test
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -128,8 +129,15 @@ func TestCookies(t *testing.T) {
 	if c.Get(renamed, "admin", &got) {
 		t.Error("a cookie moved to another name opens")
 	}
+	// Flip a bit of the sealed bytes: replacing trailing base64 characters can decode
+	// to the same bytes and leave the cookie intact.
+	raw, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 1
 	tampered := httptest.NewRequest("GET", "/", nil)
-	tampered.AddCookie(&http.Cookie{Name: "step", Value: cookie.Value[:len(cookie.Value)-2] + "AA"})
+	tampered.AddCookie(&http.Cookie{Name: "step", Value: base64.RawURLEncoding.EncodeToString(raw)})
 	if c.Get(tampered, "step", &got) {
 		t.Error("a tampered cookie opens")
 	}
