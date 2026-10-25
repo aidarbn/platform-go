@@ -78,7 +78,12 @@ jobs:
         id: upgrade
         run: |
           from=$(go list -m -f '{{.Version}}' "$MODULE")
-          go tool platformgo upgrade "${{ inputs.version }}"
+          # The checks below need no database; versions that check after the upgrade
+          # themselves are told not to, older ones do not know the flag.
+          check=
+          help=$(go tool platformgo upgrade -h 2>&1 || true) # -h exits 1, and pipefail is on
+          case "$help" in *-no-check*) check=--no-check ;; esac
+          go tool platformgo upgrade $check "${{ inputs.version }}"
           to=$(go list -m -f '{{.Version}}' "$MODULE")
           echo "from=$from" >> "$GITHUB_OUTPUT"
           echo "to=$to" >> "$GITHUB_OUTPUT"

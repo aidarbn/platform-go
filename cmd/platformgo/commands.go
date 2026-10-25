@@ -46,7 +46,11 @@ func commands() []setup.Command {
 		{Name: "db", Summary: "generate the jet query builder", Sub: []string{"generate"}, Flags: []setup.Flag{
 			dir, {Name: "dsn", Summary: "database address"},
 		}},
-		{Name: "upgrade", Summary: "move the project to a platform version", Flags: []setup.Flag{dir}},
+		{Name: "upgrade", Summary: "move the project to a platform version", Flags: []setup.Flag{
+			dir,
+			{Name: "dry-run", Summary: "upgrade a copy and print the plan", Bool: true},
+			{Name: "no-check", Summary: "skip the checks after the upgrade", Bool: true},
+		}},
 		{Name: "doctor", Summary: "check the environment and the project", Flags: []setup.Flag{
 			dir, {Name: "fix", Summary: "fix what can be fixed", Bool: true},
 		}},

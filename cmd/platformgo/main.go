@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aidarbn/platform-go/internal/apply"
@@ -100,7 +102,9 @@ func usage(out io.Writer) {
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo migrate lint         lint the migrations the branch adds (--against <branch>)
   platformgo db generate          migrate the database and generate the jet query builder
-  platformgo upgrade [version]    move the project to a platform version, latest by default
+  platformgo upgrade [version]    move the project to a platform version, latest by default, and
+                                  check it: go build, verify, go test (--no-check skips them);
+                                  --dry-run does it in a copy and prints the plan
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor [--fix]       check the development environment and the project
   platformgo setup [--alias]      shell completion and the short pgo alias
@@ -377,27 +381,40 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 func cmdUpgrade(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
+	dryRun := fs.Bool("dry-run", false, "upgrade a copy of the project and print the plan; the project stays as it is")
+	noCheck := fs.Bool("no-check", false, "skip go build, platformgo verify and go test after the upgrade: for CI with its own checks")
 	version, err := parsePositional(fs, args)
 	if err != nil {
 		return err
 	}
 
-	run := func(ctx context.Context, dir string, out io.Writer, args ...string) error {
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = dir
-		cmd.Stdout, cmd.Stderr = out, os.Stderr
-		return cmd.Run()
-	}
-	res, err := upgrade.Run(context.Background(), *dir, version, run, out)
+	// Ctrl-C stops go and still removes the copy of a dry run.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := upgrade.Options{Version: version, DryRun: *dryRun, NoCheck: *noCheck}
+	res, err := upgrade.Run(ctx, *dir, opts, upgradeRunner, out)
 	if err != nil {
 		return err
 	}
-	if res.From == res.To {
+	switch {
+	case *dryRun:
+	case res.From == res.To:
 		fmt.Fprintf(out, "already on %s\n", res.To)
-		return nil
+	default:
+		fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	}
-	fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	return nil
+}
+
+// upgradeRunner runs the go command for upgrade; tests replace it.
+var upgradeRunner upgrade.Runner = goRunner
+
+// goRunner runs the go command for upgrade, its output and errors into out.
+func goRunner(ctx context.Context, dir string, out io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = out, out
+	return cmd.Run()
 }
 
 func cmdMigrate(args []string, out io.Writer) error {

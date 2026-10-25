@@ -22,7 +22,24 @@ type File struct {
 	Go       string            // the go directive
 	Requires map[string]string // module path to version
 	Replaced []string          // module paths with a replace directive
+	Local    []LocalReplace    // replace directives that point at a folder
 	Tools    []string          // packages declared with tool
+}
+
+// LocalReplace is a replace directive with a folder on the right: Path[@Version] => Dir.
+type LocalReplace struct {
+	Path, Version string
+	Dir           string // as written: relative to the project or absolute
+}
+
+// SetLocalReplace points a replace directive at another folder.
+func SetLocalReplace(dir string, r LocalReplace) error {
+	old := r.Path
+	if r.Version != "" {
+		old += "@" + r.Version
+	}
+	_, err := run(dir, "mod", "edit", "-replace", old+"="+r.Dir)
+	return err
 }
 
 // Exists reports whether the project has a go.mod.
@@ -42,8 +59,10 @@ func Read(dir string) (File, error) {
 		Module  struct{ Path string }
 		Go      string
 		Require []struct{ Path, Version string }
-		Replace []struct{ Old struct{ Path string } }
-		Tool    []struct{ Path string }
+		Replace []struct {
+			Old, New struct{ Path, Version string }
+		}
+		Tool []struct{ Path string }
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return File{}, fmt.Errorf("go.mod: %w", err)
@@ -52,6 +71,9 @@ func Read(dir string) (File, error) {
 	f := File{Module: raw.Module.Path, Go: raw.Go, Requires: make(map[string]string, len(raw.Require))}
 	for _, r := range raw.Replace {
 		f.Replaced = append(f.Replaced, r.Old.Path)
+		if r.New.Version == "" {
+			f.Local = append(f.Local, LocalReplace{Path: r.Old.Path, Version: r.Old.Version, Dir: r.New.Path})
+		}
 	}
 	for _, r := range raw.Require {
 		f.Requires[r.Path] = r.Version
