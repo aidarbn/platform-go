@@ -62,10 +62,18 @@ func (r ImportReport) String() string {
 // therefore leaves only its real overrides behind.
 //
 // Import never overwrites a stored override: a value an administrator set after the
-// first import wins, and the key is reported as kept. That, and skipping equal values,
-// make Import safe to repeat, so a project can call it on every start until the source
-// is gone. Values are stored one by one; after a failure the keys already stored are
-// in the report, and a repeated call carries on from there.
+// first import wins, and the key is reported as kept. A repository that can insert a
+// value only when the key is absent (the one of the settings module, MemoryRepo) makes
+// that check atomic, so a concurrent Set or a second instance importing at the same time
+// is not overwritten either. Values are stored one by one; after a failure the keys
+// already stored are in the report, and a repeated call carries on from there.
+//
+// Import is meant to run once. Repeating it stores nothing twice and keeps every value
+// set since, but a setting an administrator reset to its default has no override any
+// more and would be imported again.
+//
+// A rejected value is logged as a warning: the source may have used it, while the
+// store keeps the default, so the effective value changes until someone sets it.
 //
 // The actor is recorded as the author of every stored value, as with Set.
 func (s *Store) Import(ctx context.Context, values map[string]string, actor string) (ImportReport, error) {
@@ -90,6 +98,7 @@ func (s *Store) Import(ctx context.Context, values map[string]string, actor stri
 			continue
 		}
 		if err := validateValue(def, raw); err != nil {
+			s.log.Warn("settings import: value rejected, the default applies", "key", key, "value", raw, "error", err)
 			report.Rejected = append(report.Rejected, ImportRejection{Key: key, Value: raw, Err: err})
 			continue
 		}
@@ -106,11 +115,43 @@ func (s *Store) Import(ctx context.Context, values map[string]string, actor stri
 		case Equal(def, def.Default, raw):
 			report.Defaults = append(report.Defaults, key)
 		default:
-			if err := s.Set(ctx, key, raw, actor); err != nil {
-				return report, err
+			stored, err := s.saveIfAbsent(ctx, key, raw, actor)
+			if err != nil {
+				return report, fmt.Errorf("settings import %s: %w", key, err)
 			}
-			report.Imported = append(report.Imported, key)
+			if stored {
+				report.Imported = append(report.Imported, key)
+			} else {
+				report.Kept = append(report.Kept, key)
+			}
 		}
 	}
 	return report, nil
+}
+
+// absentSaver is a repository that stores a value only when the key has none, in one
+// step. It is optional: Repo stays as it is for the repositories projects wrote.
+type absentSaver interface {
+	SaveIfAbsent(ctx context.Context, key, value, actor string) (bool, error)
+}
+
+// saveIfAbsent stores a validated value unless the key has an override already, and
+// reports whether it did.
+func (s *Store) saveIfAbsent(ctx context.Context, key, raw, actor string) (bool, error) {
+	if repo, ok := s.repo.(absentSaver); ok {
+		stored, err := repo.SaveIfAbsent(ctx, key, raw, actor)
+		if err != nil || !stored {
+			return false, err
+		}
+	} else if err := s.repo.Save(ctx, key, raw, actor); err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	s.overrides[key] = raw
+	s.mu.Unlock()
+
+	s.log.Info("settings: value imported", "key", key, "value", raw, "actor", actor)
+	s.notify([]string{key})
+	return true, nil
 }

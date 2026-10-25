@@ -1,8 +1,10 @@
 package settingsx_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -19,7 +21,8 @@ type recordingRepo struct {
 	mu       sync.Mutex
 	actors   map[string]string
 	saves    int
-	failSave string // key whose Save fails
+	failSave string            // key whose Save fails
+	sneak    map[string]string // keys another writer stores right before an insert
 }
 
 func newRecordingRepo(values map[string]string) *recordingRepo {
@@ -36,6 +39,27 @@ func (r *recordingRepo) Save(ctx context.Context, key, value, actor string) erro
 	r.actors[key] = actor
 	return r.MemoryRepo.Save(ctx, key, value, actor)
 }
+
+func (r *recordingRepo) SaveIfAbsent(ctx context.Context, key, value, actor string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if key == r.failSave {
+		return false, errors.New("disk full")
+	}
+	if v, ok := r.sneak[key]; ok {
+		// Another writer stores the key between the store's reload and this insert.
+		_ = r.MemoryRepo.Save(ctx, key, v, "admin")
+	}
+	stored, err := r.MemoryRepo.SaveIfAbsent(ctx, key, value, actor)
+	if stored {
+		r.saves++
+		r.actors[key] = actor
+	}
+	return stored, err
+}
+
+// plainRepo hides SaveIfAbsent: a repository a project wrote against Repo alone.
+type plainRepo struct{ settingsx.Repo }
 
 // A source that writes a row for every key, defaults included, in its own spelling:
 // only the real overrides are stored.
@@ -137,10 +161,67 @@ func TestImportReloadsBeforeComparing(t *testing.T) {
 	assertReport(t, report, settingsx.ImportReport{Kept: []string{"orders.create.max_attempts"}})
 }
 
+// A value stored by someone else after the reload and before the insert is not
+// overwritten: the check and the write are one step.
+func TestImportDoesNotOverwriteAConcurrentWrite(t *testing.T) {
+	ctx := context.Background()
+	repo := newRecordingRepo(nil)
+	repo.sneak = map[string]string{"orders.create.mode": "fast"}
+	s := settingsx.NewStore(testSchema(t), repo, nil)
+
+	report, err := s.Import(ctx, map[string]string{"orders.create.mode": "slow", "orders.create.timeout": "1m"}, "import")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	assertReport(t, report, settingsx.ImportReport{
+		Imported: []string{"orders.create.timeout"},
+		Kept:     []string{"orders.create.mode"},
+	})
+	if stored, _ := repo.Load(ctx); stored["orders.create.mode"] != "fast" {
+		t.Errorf("stored = %v", stored)
+	}
+}
+
+// A repository without SaveIfAbsent still works, through Save.
+func TestImportWithAPlainRepository(t *testing.T) {
+	ctx := context.Background()
+	mem := settingsx.NewMemoryRepo(nil)
+	s := settingsx.NewStore(testSchema(t), plainRepo{mem}, nil)
+	changed := make(chan []string, 1)
+	s.Watch(func(keys []string) { changed <- keys })
+
+	report, err := s.Import(ctx, map[string]string{"orders.create.mode": "slow"}, "import")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	assertReport(t, report, settingsx.ImportReport{Imported: []string{"orders.create.mode"}})
+	if stored, _ := mem.Load(ctx); stored["orders.create.mode"] != "slow" {
+		t.Errorf("stored = %v", stored)
+	}
+	if keys := <-changed; !slices.Equal(keys, []string{"orders.create.mode"}) {
+		t.Errorf("watchers got %v", keys)
+	}
+}
+
+func TestMemoryRepoSaveIfAbsent(t *testing.T) {
+	ctx := context.Background()
+	var repo settingsx.MemoryRepo // the zero value works, as with Save
+	if ok, err := repo.SaveIfAbsent(ctx, "a.b", "1", ""); !ok || err != nil {
+		t.Fatalf("first = %v, %v", ok, err)
+	}
+	if ok, err := repo.SaveIfAbsent(ctx, "a.b", "2", ""); ok || err != nil {
+		t.Fatalf("second = %v, %v", ok, err)
+	}
+	if v, _ := repo.Load(ctx); v["a.b"] != "1" {
+		t.Errorf("values = %v", v)
+	}
+}
+
 func TestImportRejectsInvalidValues(t *testing.T) {
 	ctx := context.Background()
 	repo := newRecordingRepo(nil)
-	s := settingsx.NewStore(testSchema(t), repo, nil)
+	var logs bytes.Buffer
+	s := settingsx.NewStore(testSchema(t), repo, slog.New(slog.NewTextHandler(&logs, nil)))
 
 	report, err := s.Import(ctx, map[string]string{
 		"orders.create.max_attempts": "50",     // above max 20
@@ -171,6 +252,10 @@ func TestImportRejectsInvalidValues(t *testing.T) {
 	if stored, _ := repo.Load(ctx); len(stored) != 0 {
 		t.Errorf("stored = %v", stored)
 	}
+	// The source may have used these values, so the change must be visible in the log.
+	if n := strings.Count(logs.String(), "value rejected, the default applies"); n != 4 {
+		t.Errorf("%d warnings in\n%s", n, logs.String())
+	}
 }
 
 func TestImportReportsRepositoryErrors(t *testing.T) {
@@ -189,7 +274,7 @@ func TestImportReportsRepositoryErrors(t *testing.T) {
 	source := map[string]string{"orders.create.mode": "slow", "orders.create.timeout": "1m"}
 
 	report, err := s.Import(ctx, source, "import")
-	if err == nil || !strings.Contains(err.Error(), "disk full") {
+	if err == nil || !strings.Contains(err.Error(), "settings import orders.create.timeout: disk full") {
 		t.Fatalf("err = %v", err)
 	}
 	assertReport(t, report, settingsx.ImportReport{Imported: []string{"orders.create.mode"}})

@@ -32,8 +32,9 @@ type Querier interface {
 //
 //	SELECT key, value FROM app_configs
 //
-// A NULL value means "use the default", the way taply's app_configs stores it, so such
-// a key is reported among the defaults (or the unknown keys) and nothing is stored.
+// A NULL value means "use the default", the way taply's app_configs stores it, so it is
+// imported as the default of the schema: nothing is stored, and the key is reported
+// among the defaults, the kept or the unknown keys.
 func ImportQuery(ctx context.Context, app *platform.App, db Querier, query, by string) (Report, error) {
 	values, nulls, err := readValues(ctx, db, query)
 	if err != nil {
@@ -41,20 +42,21 @@ func ImportQuery(ctx context.Context, app *platform.App, db Querier, query, by s
 	}
 
 	store := Store(app)
+	schema := store.Schema()
+	var unknown []string
+	for _, key := range nulls {
+		if def, ok := schema.Definition(key); ok {
+			values[key] = def.Default
+		} else {
+			unknown = append(unknown, key)
+		}
+	}
+
 	report, err := store.Import(ctx, values, by)
 	if err != nil {
 		return report, err
 	}
-
-	schema := store.Schema()
-	for _, key := range nulls {
-		if _, ok := schema.Definition(key); ok {
-			report.Defaults = append(report.Defaults, key)
-		} else {
-			report.Unknown = append(report.Unknown, key)
-		}
-	}
-	slices.Sort(report.Defaults)
+	report.Unknown = append(report.Unknown, unknown...)
 	slices.Sort(report.Unknown)
 	return report, nil
 }

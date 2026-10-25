@@ -2,9 +2,11 @@ package settings_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,7 +58,7 @@ func importApp(t *testing.T) (*platform.App, *pgxpool.Pool, *pgxpool.Pool) {
 		t.Skip("DATABASE_TEST_URL is not set")
 	}
 	ctx := context.Background()
-	const table = "platform_settings_import_test"
+	const table = importTable
 
 	own, err := pgdb.Open(ctx, pgdb.Config{URL: url})
 	if err != nil {
@@ -85,12 +87,20 @@ func importApp(t *testing.T) (*platform.App, *pgxpool.Pool, *pgxpool.Pool) {
 	}
 	t.Cleanup(pool.Close)
 
+	return settingsApp(t, pool), pool, own
+}
+
+const importTable = "platform_settings_import_test"
+
+// settingsApp is one more instance of the application on the same settings table.
+func settingsApp(t *testing.T, pool *pgxpool.Pool) *platform.App {
+	t.Helper()
 	app := platform.NewApp(nil)
 	platform.Provide(app, pool)
-	if err := settings.New(settings.Config{Table: table}, importSchema(t)).Init(ctx, app); err != nil {
+	if err := settings.New(settings.Config{Table: importTable}, importSchema(t)).Init(context.Background(), app); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	return app, pool, own
+	return app
 }
 
 // The migration taply needs: app_configs holds a row for every key, mostly defaults
@@ -156,9 +166,13 @@ func TestImportQueryFromTaplyAppConfigs(t *testing.T) {
 		t.Error("the store does not read the imported values")
 	}
 
-	// A repeated run — taply calls it on every start until app_configs is dropped — stores
+	// A repeated run — several instances starting with the import in one release — stores
 	// nothing new, and a value changed in the admin panel since then wins.
 	if err := store.Set(ctx, "sync.enabled", "true", "admin"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// NULL means the default, and the default does not replace a stored override.
+	if err := store.Set(ctx, "payments.kaspi.mode", "live", "admin"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	report, err = settings.ImportQuery(ctx, app, src, query, "import:app_configs")
@@ -167,7 +181,11 @@ func TestImportQueryFromTaplyAppConfigs(t *testing.T) {
 	}
 	check("imported again", report.Imported, nil)
 	check("unchanged", report.Unchanged, []string{"jobs.cleanup.schedule", "payments.kaspi.fee_percent"})
-	check("kept", report.Kept, []string{"sync.enabled"})
+	check("kept", report.Kept, []string{"payments.kaspi.mode", "sync.enabled"})
+	check("defaults again", report.Defaults, []string{"sync.interval", "sync.queue_workers"})
+	if store.String("payments.kaspi.mode") != "live" {
+		t.Error("a NULL in the source reset the administrator's value")
+	}
 	if !store.Bool("sync.enabled") {
 		t.Error("the import overwrote the administrator's value")
 	}
@@ -219,6 +237,71 @@ func TestImportQueryReportsStoreErrors(t *testing.T) {
 
 	report, err := settings.ImportQuery(ctx, app, src, "SELECT 'sync.enabled', 'false'", "import")
 	if err == nil || !strings.Contains(err.Error(), "settings: load") {
+		t.Fatalf("err = %v", err)
+	}
+	if report.Total() != 0 {
+		t.Errorf("report = %+v", report)
+	}
+}
+
+// Several instances start at once and each runs the import: every value is stored once,
+// and only one of them reports it as imported.
+func TestImportQueryConcurrentInstances(t *testing.T) {
+	_, pool, src := importApp(t)
+	ctx := context.Background()
+	if _, err := src.Exec(ctx, `INSERT INTO app_configs_pr16 (key, value) VALUES
+		('sync.enabled', 'false'), ('sync.queue_workers', '7'), ('sync.interval', '1m')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	const instances = 8
+	apps := make([]*platform.App, instances)
+	for i := range apps {
+		apps[i] = settingsApp(t, pool)
+	}
+	reports := make([]settings.Report, instances)
+	errs := make([]error, instances)
+	var wg sync.WaitGroup
+	for i := range apps {
+		wg.Go(func() {
+			reports[i], errs[i] = settings.ImportQuery(ctx, apps[i], src, "SELECT key, value FROM app_configs_pr16", fmt.Sprintf("instance %d", i))
+		})
+	}
+	wg.Wait()
+
+	imported := map[string]int{}
+	for i, r := range reports {
+		if errs[i] != nil {
+			t.Fatalf("instance %d: %v", i, errs[i])
+		}
+		for _, key := range r.Imported {
+			imported[key]++
+		}
+		if len(r.Imported)+len(r.Unchanged)+len(r.Kept) != 2 || !slices.Equal(r.Defaults, []string{"sync.interval"}) {
+			t.Errorf("instance %d: %+v", i, r)
+		}
+	}
+	if imported["sync.enabled"] != 1 || imported["sync.queue_workers"] != 1 || len(imported) != 2 {
+		t.Errorf("imported = %v, every key must be imported exactly once", imported)
+	}
+}
+
+// The database refuses the insert: the error names the key and the import stops.
+func TestImportReportsInsertErrors(t *testing.T) {
+	app, pool, _ := importApp(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`CREATE OR REPLACE FUNCTION pr16_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'read only'; END $$`,
+		`CREATE TRIGGER pr16_refuse BEFORE INSERT ON ` + importTable + ` FOR EACH ROW EXECUTE FUNCTION pr16_refuse()`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DROP FUNCTION IF EXISTS pr16_refuse() CASCADE") })
+
+	report, err := settings.Import(ctx, app, map[string]string{"sync.enabled": "false"}, "import")
+	if err == nil || !strings.Contains(err.Error(), "settings import sync.enabled") || !strings.Contains(err.Error(), "read only") {
 		t.Fatalf("err = %v", err)
 	}
 	if report.Total() != 0 {
