@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -13,38 +14,80 @@ import (
 )
 
 // RateLimit is a token bucket per client address, with separate limits for public
-// methods, as in taply.
+// methods, as in taply, and a second bucket per principal for authenticated calls.
 type RateLimit struct {
 	RPS, PublicRPS     float64
 	Burst, PublicBurst int
+
+	// PrincipalRPS and PrincipalBurst limit each principal the project names with
+	// RateLimitKey, whatever address the calls come from. Zero turns it off.
+	PrincipalRPS   float64
+	PrincipalBurst int
+
+	// IPv6Prefix is how many leading bits of an IPv6 address make one client: 64 by
+	// default, the block one subscriber normally gets, so a client cannot take a new
+	// bucket with every address of its block. 128 limits every address on its own.
+	IPv6Prefix int
 }
+
+const defaultIPv6Prefix = 64
 
 type limiterEntry struct {
 	limiter  *rate.Limiter
-	lastSeen time.Time
+	lastSeen time.Time // guarded by rateLimiter.mu
+}
+
+// tier is one bucket per key with its own rate.
+type tier struct {
+	rps     rate.Limit
+	burst   int
+	entries map[string]*limiterEntry
 }
 
 type rateLimiter struct {
-	cfg      RateLimit
-	public   func(method string) bool
+	key      func(ctx context.Context) string // an empty key is not limited
+	public   func(method string) bool         // methods of the public tier, when set
 	mu       sync.Mutex
-	clients  map[string]*limiterEntry
-	public_  map[string]*limiterEntry
+	normal   tier
+	public_  tier
 	limited  *prometheus.CounterVec
 	stopOnce sync.Once
 	done     chan struct{}
 }
 
+// newRateLimiter limits by client address: ClientIP, with an IPv6 address taken as its
+// network of IPv6Prefix bits, by default the /64 a single client normally owns.
 func newRateLimiter(cfg RateLimit, public func(string) bool, reg *prometheus.Registry) (*rateLimiter, error) {
+	bits := cfg.IPv6Prefix
+	if bits <= 0 || bits > 128 {
+		bits = defaultIPv6Prefix
+	}
+	return newLimiter(func(ctx context.Context) string { return addressKey(ClientIP(ctx), bits) },
+		tier{rps: rate.Limit(cfg.RPS), burst: cfg.Burst},
+		public, tier{rps: rate.Limit(cfg.PublicRPS), burst: cfg.PublicBurst},
+		prometheus.CounterOpts{Namespace: "api", Name: "rate_limited_total", Help: "calls refused by the rate limit"},
+		reg)
+}
+
+// newPrincipalLimiter limits by the principal the project names; calls without one are
+// left to the limit by address.
+func newPrincipalLimiter(cfg RateLimit, key func(context.Context) string, reg *prometheus.Registry) (*rateLimiter, error) {
+	return newLimiter(key, tier{rps: rate.Limit(cfg.PrincipalRPS), burst: cfg.PrincipalBurst}, nil, tier{},
+		prometheus.CounterOpts{Namespace: "api", Name: "principal_rate_limited_total", Help: "calls refused by the rate limit per principal"},
+		reg)
+}
+
+func newLimiter(key func(context.Context) string, normal tier, public func(string) bool, publicTier tier, opts prometheus.CounterOpts, reg *prometheus.Registry) (*rateLimiter, error) {
+	normal.entries, publicTier.entries = map[string]*limiterEntry{}, map[string]*limiterEntry{}
+	// A bucket that holds no token refuses every call: a burst under one is a mistake.
+	normal.burst, publicTier.burst = max(normal.burst, 1), max(publicTier.burst, 1)
 	l := &rateLimiter{
-		cfg:     cfg,
+		key:     key,
 		public:  public,
-		clients: map[string]*limiterEntry{},
-		public_: map[string]*limiterEntry{},
+		normal:  normal,
+		public_: publicTier,
 		done:    make(chan struct{}),
-		limited: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "api", Name: "rate_limited_total", Help: "calls refused by the rate limit",
-		}, []string{"method"}),
+		limited: prometheus.NewCounterVec(opts, []string{"method"}),
 	}
 	if err := reg.Register(l.limited); err != nil {
 		return nil, err
@@ -53,7 +96,21 @@ func newRateLimiter(cfg RateLimit, public func(string) bool, reg *prometheus.Reg
 	return l, nil
 }
 
-// cleanup forgets clients not seen for ten minutes, so the map does not grow with every
+// addressKey is the bucket of an address: IPv6 by its network of bits, by default the
+// /64, since one subscriber gets a whole block and could otherwise take a new bucket
+// with every address in it.
+func addressKey(ip string, bits int) string {
+	if ip == "" {
+		return "unknown" // calls without a peer share one bucket, they are not let through
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.Is6() || bits >= 128 {
+		return ip
+	}
+	return netip.PrefixFrom(addr, bits).Masked().String()
+}
+
+// cleanup forgets keys not seen for ten minutes, so the map does not grow with every
 // address that ever called.
 func (l *rateLimiter) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -71,10 +128,10 @@ func (l *rateLimiter) cleanup() {
 func (l *rateLimiter) forget(before time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, m := range []map[string]*limiterEntry{l.clients, l.public_} {
-		for ip, e := range m {
+	for _, m := range []map[string]*limiterEntry{l.normal.entries, l.public_.entries} {
+		for key, e := range m {
 			if e.lastSeen.Before(before) {
-				delete(m, ip)
+				delete(m, key)
 			}
 		}
 	}
@@ -82,17 +139,17 @@ func (l *rateLimiter) forget(before time.Time) {
 
 func (l *rateLimiter) stop() { l.stopOnce.Do(func() { close(l.done) }) }
 
-func (l *rateLimiter) allow(ip, method string) bool {
-	entries, rps, burst := l.clients, l.cfg.RPS, l.cfg.Burst
+func (l *rateLimiter) allow(key, method string) bool {
+	t := &l.normal
 	if l.public != nil && l.public(method) {
-		entries, rps, burst = l.public_, l.cfg.PublicRPS, l.cfg.PublicBurst
+		t = &l.public_
 	}
 
 	l.mu.Lock()
-	e, ok := entries[ip]
+	e, ok := t.entries[key]
 	if !ok {
-		e = &limiterEntry{limiter: rate.NewLimiter(rate.Limit(rps), burst)}
-		entries[ip] = e
+		e = &limiterEntry{limiter: rate.NewLimiter(t.rps, t.burst)}
+		t.entries[key] = e
 	}
 	e.lastSeen = time.Now()
 	l.mu.Unlock()
@@ -100,7 +157,7 @@ func (l *rateLimiter) allow(ip, method string) bool {
 }
 
 func (l *rateLimiter) unary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	if !l.allow(ClientIP(ctx), info.FullMethod) {
+	if key := l.key(ctx); key != "" && !l.allow(key, info.FullMethod) {
 		l.limited.WithLabelValues(info.FullMethod).Inc()
 		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}

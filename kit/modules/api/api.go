@@ -59,7 +59,7 @@ type Config struct {
 	CORSNoCredentials bool
 	CORSMaxAge        int
 
-	// RateLimit per client address; zero rates turn it off.
+	// RateLimit per client address, and per principal; zero rates turn it off.
 	RateLimit RateLimit
 
 	// Idempotency: how long a finished call is remembered, and how long a running one
@@ -74,7 +74,10 @@ type Config struct {
 	// TrustedProxies are the networks whose X-Forwarded-For is believed. A request from
 	// anywhere else is identified by its connection address, so a client reaching the
 	// service directly cannot pose as another address. Empty means the private networks
-	// and loopback, where a reverse proxy normally runs.
+	// and loopback, where a reverse proxy normally runs. On the gRPC side the networks
+	// set here, never the default, may name the client with ClientIPMetadataKey;
+	// loopback and the server's own address always may, since the gateway of this
+	// process connects from them.
 	TrustedProxies []netip.Prefix
 }
 
@@ -104,6 +107,11 @@ func Load(l *confx.Loader) Config {
 			Burst:       l.Int("API_RATE_BURST", 100),
 			PublicRPS:   float64(l.Int("API_PUBLIC_RATE_RPS", 30)),
 			PublicBurst: l.Int("API_PUBLIC_RATE_BURST", 60),
+
+			PrincipalRPS:   float64(l.Int("API_PRINCIPAL_RATE_RPS", 50)),
+			PrincipalBurst: l.Int("API_PRINCIPAL_RATE_BURST", 100),
+
+			IPv6Prefix: ipv6Prefix(l),
 		},
 		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
 		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
@@ -118,6 +126,16 @@ func Load(l *confx.Loader) Config {
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
 		TrustedProxies:  trustedProxies(l),
 	}
+}
+
+// ipv6Prefix reads API_RATE_IPV6_PREFIX: how many leading bits of an IPv6 address make
+// one client of the rate limit.
+func ipv6Prefix(l *confx.Loader) int {
+	bits := l.Int("API_RATE_IPV6_PREFIX", defaultIPv6Prefix)
+	if bits < 1 || bits > 128 {
+		l.Fail(fmt.Errorf("%s: %d is not a prefix length from 1 to 128", l.Key("API_RATE_IPV6_PREFIX"), bits))
+	}
+	return bits
 }
 
 // trustedProxies reads API_TRUSTED_PROXIES: comma separated networks or addresses, or
@@ -188,6 +206,9 @@ func (c *Config) setDefaults() {
 	if c.IdempotencyLock <= 0 {
 		c.IdempotencyLock = time.Minute
 	}
+	if c.RateLimit.IPv6Prefix <= 0 || c.RateLimit.IPv6Prefix > 128 {
+		c.RateLimit.IPv6Prefix = defaultIPv6Prefix
+	}
 }
 
 // Service is a gRPC service of the project and, optionally, its REST gateway. Both
@@ -219,6 +240,7 @@ type Registry struct {
 	idemRequired []string
 	idemUser     func(context.Context) string
 	corsHeaders  []string
+	rateKey      func(context.Context) string
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
 	errorHandler runtime.ErrorHandlerFunc
@@ -297,6 +319,16 @@ func RequireIdempotency(app *platform.App, methods ...string) {
 	r.add(func() { r.idemRequired = append(r.idemRequired, methods...) })
 }
 
+// RateLimitKey names the principal of a call — a user, an API client, a device — for the
+// second rate limit, API_PRINCIPAL_RATE_RPS per principal. It runs after the project's
+// interceptors, so the authentication has put the principal into the context; an empty
+// key, an anonymous call, is left to the limit by address. The limit by address still
+// applies to every call.
+func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
+	r := registry(app)
+	r.add(func() { r.rateKey = key })
+}
+
 // IdempotencyUser scopes idempotency keys to the caller: two users may use the same key.
 // The project's authentication supplies the user.
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
@@ -367,13 +399,17 @@ func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys 
 
 // Module implements platform.Module.
 type Module struct {
-	cfg     Config
-	skipped bool
-	http    *httpMetrics
-	app     *platform.App
+	cfg Config
+	// grpcTrusted are the networks given in TrustedProxies, without the default.
+	grpcTrusted []netip.Prefix
+	skipped     bool
+	http        *httpMetrics
+	app         *platform.App
 
 	idemStore  IdempotencyStore
 	limiter    *rateLimiter
+	principals *rateLimiter
+	clientIP   *clientIPResolver
 	deprecated *prometheus.CounterVec
 	cleanup    chan struct{}
 	openapi    fs.FS
@@ -392,8 +428,12 @@ type Module struct {
 
 // New creates the module from ready settings.
 func New(cfg Config, opts ...Option) *Module {
+	// The default trusted proxies, every private network, are not trusted to name the
+	// client over gRPC: a gRPC port open to the private network would let any host
+	// there pick its own bucket. Only networks the operator listed are.
+	grpcTrusted := cfg.TrustedProxies
 	cfg.setDefaults()
-	m := &Module{cfg: cfg, registry: &Registry{}}
+	m := &Module{cfg: cfg, registry: &Registry{}, grpcTrusted: grpcTrusted}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -455,11 +495,14 @@ func (m *Module) Start(ctx context.Context) error {
 	// services, and the chain below refers to them.
 	deprecated := map[string]bool{}
 
-	// Metrics and logging are outermost, so they see a recovered panic and a hidden
-	// internal error as the Internal status the client gets. The rate limit comes before
-	// project interceptors, so a flood never reaches token validation; idempotency comes
-	// last, so a rejected call is not remembered.
-	platformUnary := []grpc.UnaryServerInterceptor{m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
+	// The client address is settled first, so everything after it sees the checked one.
+	// Metrics and logging are outermost after it, so they see a recovered panic and a
+	// hidden internal error as the Internal status the client gets. The rate limit by
+	// address comes before project interceptors, so a flood never reaches token
+	// validation; the one by principal comes after them, once the principal is known;
+	// idempotency comes last, so a rejected call is not remembered.
+	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted, log: m.log}
+	platformUnary := []grpc.UnaryServerInterceptor{m.clientIP.unary, m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
 	if m.cfg.RateLimit.RPS > 0 {
 		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {
 			return fmt.Errorf("api: rate limit: %w", err)
@@ -467,13 +510,20 @@ func (m *Module) Start(ctx context.Context) error {
 		platformUnary = append(platformUnary, m.limiter.unary)
 	}
 	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.log, m.deprecated))
-	tail := []grpc.UnaryServerInterceptor{validateUnary(validator)}
+	var tail []grpc.UnaryServerInterceptor
+	if m.cfg.RateLimit.PrincipalRPS > 0 && m.registry.rateKey != nil {
+		if m.principals, err = newPrincipalLimiter(m.cfg.RateLimit, m.registry.rateKey, m.app.Metrics()); err != nil {
+			return fmt.Errorf("api: rate limit per principal: %w", err)
+		}
+		tail = append(tail, m.principals.unary)
+	}
+	tail = append(tail, validateUnary(validator))
 	if idem != nil {
 		tail = append(tail, idem.unary)
 	}
 	unary := slices.Concat(platformUnary, m.registry.unary, m.registry.authUnary, tail)
 	stream := slices.Concat(
-		[]grpc.StreamServerInterceptor{m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
+		[]grpc.StreamServerInterceptor{m.clientIP.stream, m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
 		m.registry.stream,
 		m.registry.authStream,
 	)
@@ -503,6 +553,11 @@ func (m *Module) Start(ctx context.Context) error {
 
 	if m.grpcLn, err = net.Listen("tcp", m.cfg.GRPCAddr); err != nil {
 		return fmt.Errorf("api: gRPC on %s: %w", m.cfg.GRPCAddr, err)
+	}
+	if tcp, ok := m.grpcLn.Addr().(*net.TCPAddr); ok && !tcp.IP.IsUnspecified() {
+		if self, ok := netip.AddrFromSlice(tcp.IP); ok {
+			m.clientIP.self = self.Unmap()
+		}
 	}
 	go func() {
 		if err := m.grpcSrv.Serve(m.grpcLn); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
@@ -654,7 +709,8 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 
 // newGateway configures the REST side: snake_case JSON as in the proto files, every
 // field present in responses, unknown request fields ignored so old clients keep
-// working, and request headers forwarded to the gRPC handlers as metadata.
+// working, and request headers forwarded to the gRPC handlers as metadata — except the
+// client address, which the gateway passes on itself.
 func newGateway(errors runtime.ErrorHandlerFunc) *runtime.ServeMux {
 	json := &runtime.JSONPb{
 		MarshalOptions:   protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true},
@@ -667,6 +723,7 @@ func newGateway(errors runtime.ErrorHandlerFunc) *runtime.ServeMux {
 		runtime.WithErrorHandler(errors),
 		runtime.WithRoutingErrorHandler(routingError),
 		runtime.WithMetadata(annotateRoute),
+		runtime.WithMetadata(annotateClientIP),
 	)
 }
 
@@ -680,6 +737,9 @@ func forwardHeader(key string) (string, bool) {
 	lower := strings.ToLower(key)
 	switch {
 	case slices.Contains(hopByHop, lower):
+		return "", false
+	case lower == ClientIPMetadataKey || lower == strings.ToLower(legacyClientIPHeader):
+		// Only the gateway names the client: see ClientIPMetadataKey.
 		return "", false
 	case lower == "user-agent":
 		// gRPC sets its own user-agent on the gateway's connection; the client's travels
@@ -740,6 +800,9 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 	if m.limiter != nil {
 		m.limiter.stop()
+	}
+	if m.principals != nil {
+		m.principals.stop()
 	}
 	if m.cleanup != nil {
 		close(m.cleanup)
