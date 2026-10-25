@@ -1,6 +1,6 @@
 # Upgradability
 
-> **State:** in place — module code in `kit`, generated files rebuilt by `apply`, the lock that cleans up after removed modules and records the version that applied the project, codemods run by `apply` for every version newer than that, the API compatibility check of `kit` (`scripts/apicheck.sh`, CI job `api`) and the upgrade matrix over the last three releases (`scripts/upgrade-matrix.sh`, CI job `upgrade-matrix`). Config schema migrations are not needed yet: the schema is still 1.
+> **State:** in place — module code in `kit`, generated files rebuilt by `apply`, the lock that cleans up after removed modules and records the version that applied the project, codemods for Go and `.proto` files run by `apply` for every version newer than that, manual steps that `verify` keeps open until they are done, `upgrade --dry-run` and the checks after an upgrade, the API compatibility check of `kit` with the rule that every incompatible change has a codemod or a manual step (`scripts/apicheck.sh`, CI job `api`) and the upgrade matrix over the last three releases (`scripts/upgrade-matrix.sh`, CI job `upgrade-matrix`). Config schema migrations are not needed yet: the schema is still 1.
 
 The guarantee rests on three layers: an architecture that leaves almost nothing to upgrade, mechanisms that upgrade the rest, and platform tests that prove an upgrade works before it is released.
 
@@ -17,22 +17,40 @@ The guarantee rests on three layers: an architecture that leaves almost nothing 
 
 ## 2. What `platformgo upgrade` does
 
+1. warns when `go.mod` is not tidy before the upgrade: `apply` runs `go mod tidy`, and somebody else's leftovers would land in the upgrade commit, so they go into a commit of their own first;
+2. `go get` of the new version, the version recorded in `platformgo.yaml`;
+3. `go tool platformgo apply` by the new version: generated files, pinned tools, codemods, the lock;
+4. checks: `go build ./...`, `platformgo verify`, `go test ./...`. A failed check leaves the upgrade in place and fails the command, so it gets fixed or reverted. `--no-check` skips them, for CI that runs its own.
+
+`--dry-run` does all of it in a temporary copy of the project — `.git` and `node_modules` left out, relative replace directives to folders outside the project made absolute — and prints what would happen, `platformgo plan` of the new version included; the project itself stays as it is. On a project with code on the `kit/adminx` API of v0.5:
+
 ```
-$ platformgo upgrade --dry-run
-platform    v0.4.2 → v0.6.0 (steps: v0.5.0, v0.6.0)
-config      platformgo.yaml: schema 2 → 3
-libraries   platform-go/kit v0.4.2 → v0.6.0
-managed     rewrite: platform.mk, ci.yml, buf.gen.yaml, .golangci.yml
-codemods    river.NewInserter → river.Inserter: 3 places
-generate    modules.gen.go, config.gen.go, OpenAPI
-checks      go build, go test, platformgo verify
+$ platformgo upgrade --dry-run v0.8.0
+platform    v0.5.11 → v0.8.0
+config      platformgo.yaml: platform v0.8.0
+plan of v0.8.0:
+    service  sendkz
+    modules  admin, api, postgres, river, settings, web
+    ~ internal/adminseed/seed.go: codemod adminx.no-totp
+    ~ platformgo.lock
+    manual internal/adminseed/seed.go:13: CreateUser returns no secret since v0.6.0: secret is gone, remove its uses (adminx.no-totp)
+    manual internal/adminseed/seed.go:20: one time codes are gone in v0.6.0: drop the handling of adminx.ErrCodeRequired (adminx.no-totp)
+checks:
+  fail  go build: exit status 1
+        internal/adminseed/seed.go:18:6: undefined: secret
+  fail  platformgo verify: exit status 1
+        error: manual steps of a platform upgrade are open: …
+  fail  go test: exit status 1
 ```
+
+`upgrade` runs from the binary at hand when it is at least as new as the version the project pins: the steps of the project are done by the new version anyway, and an older project would not know `--dry-run`.
 
 | Mechanism | What it is |
 |---|---|
-| Step by step migrations | every platform version ships a manifest of steps; skipping versions replays them in order |
+| Step by step codemods | every platform version registers its codemods; skipping versions replays them in order |
 | Config migrations | `platformgo.yaml` carries a schema number; renames and moves are done by code |
-| Codemods | changes to the `kit` API come with rewrites of project code through the Go syntax tree (`golang.org/x/tools/go/analysis` with suggested fixes); simple renames use `//go:fix inline` |
+| Codemods | changes to the `kit` API come with rewrites of project code: Go through the syntax tree (`go/ast`), `.proto` through a scanner of imports and options. What cannot be rewritten becomes a manual step with a file and a line |
+| Manual steps | printed by `plan` and `apply`; the ones that leave code which cannot compile, such as a reference to a removed name, keep `platformgo verify` failing until they are done |
 | Pinned tool versions | a platform version pins buf, templ and the other generators, so generated code is identical everywhere |
 | One upgrade, one commit | upgrade runs on a branch and lands as a single commit; rollback is `git revert` |
 
@@ -40,7 +58,7 @@ checks      go build, go test, platformgo verify
 
 A project created by the platform has `.github/workflows/platform-upgrade.yml`. Every Monday, and by hand from the Actions tab, it calls the upgrade workflow of the platform (`.github/workflows/upgrade.yml`):
 
-1. `platformgo upgrade latest`; a project already on the latest release ends here;
+1. `platformgo upgrade latest`, with `--no-check` when the version of the project knows it; a project already on the latest release ends here;
 2. build, vet and `platformgo verify` — the checks that need no database;
 3. the result goes to a branch and a pull request against the base branch, a draft when the checks failed; a later release replaces the branch;
 4. the CI run of the pull request waits for approval, because the pull request was opened with the workflow token; the workflow approves it, and the checks show up on the pull request. When approval is not allowed, it starts the project CI on the branch through `workflow_dispatch` instead, and the checks land on the commit. With a `token` secret that may start workflows the pull request starts CI by itself.
@@ -69,7 +87,8 @@ A project created before this workflow adds the file by hand, together with `wor
 | Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout: `apply` by the new version, `verify`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
 | `kit` API compatibility | `apidiff` against the previous tag. Every run reports the changes; a release tag fails when an incompatible change ships without a new minor version (before v1) or major version (after v1) |
 | Reference projects | demo services in the repository, one per typical module set, always on the latest version |
-| Codemods | before and after tests: the result matches, keeps comments and a second run changes nothing |
+| Codemods | before and after tests: the result matches, keeps comments, compiles with the new `kit` and a second run changes nothing |
+| Every incompatible change is answered | `scripts/apicheck.sh` lists the incompatible changes that have neither a codemod covering them nor a manual step below; a release before v1 with such a change fails |
 
 ### Writing a codemod
 
@@ -79,16 +98,25 @@ An incompatible change of `kit` that project code can follow mechanically ships 
 codemod.RenameSymbol("v0.3.0", "github.com/aidarbn/platform-go/kit/modules/riverx", "NewQueue", "Queue"),
 ```
 
-`apply` runs every codemod newer than the `platform` recorded in `platformgo.lock` and records its own version afterwards, so skipping releases replays the steps in order; `plan` lists the files a codemod would rewrite. Generated files, `vendor` and `testdata` are left alone. Anything beyond a rename is a `Codemod` with its own `Fix`, which edits source ranges through `File.Replace` so comments and layout stay as they were.
+`apply` runs every codemod newer than the `platform` recorded in `platformgo.lock` and records its own version afterwards, so skipping releases replays the steps in order; `plan` lists the files a codemod would rewrite. Generated files, `vendor`, `testdata` and `node_modules` are left alone. Anything beyond a rename is a `Codemod` of its own (`AdminxNoTOTP` in `internal/codemod/adminx.go` is the example):
+
+- `Covers` — the incompatible changes it answers for, named as apidiff names them relative to the module: `kit/adminx.(*Auth).Login`;
+- `Fix` — rewrites a Go file through `File.Replace` and `File.ReplaceRange`, so comments and layout stay as they were, and leaves `File.Report` notes for what it cannot rewrite. `File.PackageImports` tells whether the package uses a `kit` package even when the file does not import it — a method call on a field of a `kit` type;
+- `Check` — reports only, and runs on every `plan` and `verify`, not just while the codemod is pending. It must match only code that cannot compile with the new version, such as a reference to a removed name through the package, because a match keeps `verify` failing;
+- `Proto` — rewrites a `.proto` file: `ProtoFile.Imports` and `ProtoFile.Options` find import statements and custom options, statement and field ones, skipping comments and strings; `Replace` edits byte ranges and `Report` leaves notes.
 
 ## Version policy
 
+Before v1 the platform is still finding its shape, so the policy is what it can keep. v0.6.0 removed one time codes from `kit/adminx` without a deprecation and without a codemod; a codemod for it came later and catches projects up from v0.5 on any upgrade.
+
 | Rule | What it means |
 |---|---|
-| SemVer | a minor version never breaks projects: changes are covered by migrations and codemods; a major version comes with an upgrade guide |
-| Deprecation before removal | a `kit` API is first marked `// Deprecated:` and lives for at least one minor version |
-| Support window | upgrades are guaranteed from the last N minor versions; older ones go step by step |
-| Release notes | a human `CHANGELOG` and the machine readable manifest of steps are built from one source |
+| Patch | never breaks |
+| Minor before v1 | may break `kit`, but every incompatible change has a codemod that covers it or a manual step under its version below; `scripts/apicheck.sh` fails the release otherwise |
+| Major after v1 | the only version that breaks; it comes with an upgrade guide |
+| Deprecation before removal | where it costs little, a `kit` API is first marked `// Deprecated:` and lives for at least one minor version |
+| Behaviour changes | changes that keep the API but change behaviour are listed below with a checklist |
+| Support window | upgrades are guaranteed from the last three minor versions (the upgrade matrix); older ones go step by step |
 
 ## Behaviour changes
 
@@ -107,3 +135,17 @@ Changes that keep the API but change what a project or its clients see, by the v
 - **Shutdown phases, budgets and River settings, opt-in.** `SHUTDOWN_PHASES`, `API_HTTP_STOP_TIMEOUT`, `API_GRPC_STOP_TIMEOUT`, `RIVER_STOP_TIMEOUT`, `RIVER_CANCEL_TIMEOUT`, `riverx.QueuesFrom` and `riverx.MaxAttemptsFrom` change nothing until a project sets or calls them: the modules stop in reverse order within `SHUTDOWN_TIMEOUT` and the queues come from `RIVER_QUEUES` or `default=10`, as before. `platformgo apply` adds the new variables to `.env.example`: `SHUTDOWN_PHASES=false` and the budgets with empty values, which mean unset. Two small differences without them: when running jobs do not finish within the shutdown timeout, River logs the warning `river jobs did not finish in time, cancelling them` before it cancels them, as it did silently before; and the `api` module stops its rate limiters and the idempotency cleanup after the running gRPC calls finish rather than before, so those calls are still limited and recorded. Nothing to do in a project.
 - **Tracing: `OTEL_SERVICE_NAME` is honoured.** Before, the spans always carried `project.service` as `service.name`, whatever `OTEL_SERVICE_NAME` said; now the variable wins when set. Affects only a stand that already sets `OTEL_SERVICE_NAME`, whose traces move to that name; remove the variable to keep the old one.
 - **Observability for services moving to the platform, opt-in.** `app.AliasMetric`, `METRICS_OPENMETRICS` with trace exemplars, `API_METRICS_TENANT_HEADER`, `api.DeprecatedReplacements`, `API_LOG_BODIES_MASK_PATHS` with `api.MaskLogBodies` and `PYROSCOPE_ADDR`. Without them `/metrics` serves the same metrics with the same labels in the same format, and nothing is profiled. `api_deprecated_calls_total` is now registered when the API starts rather than when the module initialises; a worker process, which serves no API, never had a series of it.
+
+## Manual steps
+
+What a codemod cannot do, by the version that brings it. Names in backticks are the ones `scripts/apicheck.sh` matches with incompatible changes.
+
+### v0.6.0
+
+The admin panel signs in with a password only; the codemod `adminx.no-totp` rewrites the calls and reports the rest.
+
+- `kit/adminx.(*Auth).CreateUser` loses the `twoFactor` argument and the secret result; the codemod rewrites calls and assignments, uses of the secret are removed by hand.
+- `kit/adminx.(*Auth).Login` loses the `code` argument; the codemod drops it, the code field of a sign in form is removed by hand.
+- `kit/adminx.ErrCodeRequired`, `kit/adminx.ErrCodeReused`, `kit/adminx.ErrInvalidCode` — their handling is removed.
+- `kit/adminx.NewTOTPSecret`, `kit/adminx.TOTPCode`, `kit/adminx.TOTPURI`, `kit/adminx.VerifyTOTP` — calls are removed.
+- `kit/adminx.User.TOTPSecret`, `kit/adminx.User.TOTPCounter`, `kit/adminx.User.TwoFactor` — uses are removed. The columns stay in old databases and are no longer read.
