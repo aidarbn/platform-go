@@ -18,24 +18,21 @@ func SchemaURL(version string) string {
 func JSONSchema() ([]byte, error) {
 	modules := map[string]any{}
 	for _, m := range registry.All() {
-		options := map[string]any{}
-		for _, o := range m.Options {
-			prop := map[string]any{"type": "string", "description": o.Description}
-			if o.Default != "" {
-				prop["default"] = o.Default
-			}
-			options[o.Name] = prop
-		}
+		options := propertiesSchema(m.Options)
 		description := "platform module " + m.Name
 		if len(m.Requires) > 0 {
 			description += "; requires " + joinNames(m.Requires)
 		}
-		modules[m.Name] = map[string]any{
-			"type":                 "object",
+		section := map[string]any{
+			"type":                 []string{"object", "null"}, // "monitoring:" with nothing after it enables the module
 			"description":          description,
 			"properties":           options,
 			"additionalProperties": false,
 		}
+		if req := required(m.Options); len(req) > 0 {
+			section["required"] = req
+		}
+		modules[m.Name] = section
 	}
 
 	schema := map[string]any{

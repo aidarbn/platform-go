@@ -1,0 +1,15 @@
+# Anchors, aliases and merge keys were read by the decoder before options had types.
+schema: 1
+platform: v0.8.0
+
+project:
+  module: github.com/aidarbn/anchors
+  go: "1.27"
+
+modules:
+  postgres: &none {}
+  api: *none
+  enums: &paths
+    domain: internal/core
+  settings:
+    <<: {schema: config/settings.yaml}
