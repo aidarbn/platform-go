@@ -98,7 +98,7 @@ modules:
 var (
 	upgradeCalls = []string{
 		"mod tidy -diff",
-		"get github.com/aidarbn/platform-go@v0.2.5",
+		"get github.com/aidarbn/platform-go/cmd/platformgo@v0.2.5",
 		"tool platformgo apply",
 	}
 	checkCalls = []string{"build ./...", "tool platformgo verify", "test ./..."}
@@ -242,7 +242,7 @@ func TestUpgradeToLatestAddsMissingPlatformLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.To != "v0.3.0" || g.calls[1][1] != "github.com/aidarbn/platform-go@latest" {
+	if res.To != "v0.3.0" || g.calls[1][1] != "github.com/aidarbn/platform-go/cmd/platformgo@latest" {
 		t.Errorf("res = %+v, calls = %v", res, g.calls)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "platformgo.yaml"))
@@ -256,7 +256,7 @@ func TestUpgradeFailures(t *testing.T) {
 		fail map[string]error
 		want string
 	}{
-		"get":   {map[string]error{"get github.com/aidarbn/platform-go@v0.2.5": errors.New("no such version")}, "upgrade: no such version"},
+		"get":   {map[string]error{"get github.com/aidarbn/platform-go/cmd/platformgo@v0.2.5": errors.New("no such version")}, "upgrade: no such version"},
 		"apply": {map[string]error{"tool platformgo apply": errors.New("exit status 1")}, "upgrade: apply of v0.2.5: exit status 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -430,7 +430,7 @@ func TestDryRunFailures(t *testing.T) {
 	for name, tc := range map[string]struct {
 		key, want string
 	}{
-		"get":   {"get github.com/aidarbn/platform-go@v0.2.5", "upgrade: boom\n    go says why\n"},
+		"get":   {"get github.com/aidarbn/platform-go/cmd/platformgo@v0.2.5", "upgrade: boom\n    go says why\n"},
 		"plan":  {"tool platformgo plan", "upgrade: plan of v0.2.5: boom\n    go says why\n"},
 		"apply": {"tool platformgo apply", "upgrade: apply of v0.2.5: boom\n    go says why\n"},
 	} {
