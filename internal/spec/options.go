@@ -217,7 +217,7 @@ func (c *checker) value(at *yaml.Node, path string, o registry.Option) {
 func shapeFits(k registry.Kind, n *yaml.Node) bool {
 	switch k {
 	case registry.KindString:
-		return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!str"
+		return n.Kind == yaml.ScalarNode && (n.ShortTag() == "!!str" || decodesToString(n))
 	case registry.KindBool:
 		return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!bool"
 	case registry.KindInt:
@@ -228,6 +228,17 @@ func shapeFits(k registry.Kind, n *yaml.Node) bool {
 		return n.Kind == yaml.MappingNode
 	}
 	return false
+}
+
+// decodesToString accepts what v0.8.0 accepted as a string option: a scalar with a tag
+// of its own, such as !custom x or !!binary aGk=, that YAML still reads as text.
+func decodesToString(n *yaml.Node) bool {
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return false
+	}
+	_, ok := v.(string)
+	return ok
 }
 
 func article(k registry.Kind) string {

@@ -52,6 +52,28 @@ func TestStringOption(t *testing.T) {
 	}
 }
 
+// A string option with a tag of its own was a string to v0.8.0, which checked the
+// decoded value; it still is.
+func TestTaggedStringsStillParse(t *testing.T) {
+	for value, want := range map[string]string{
+		"!custom config/s.yaml": "config/s.yaml",
+		"!!binary aGk=":         "hi",
+		"!!str 5":               "5",
+	} {
+		f, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  settings:\n    schema: " + value + "\n"))
+		if err != nil {
+			t.Errorf("%s: %v", value, err)
+			continue
+		}
+		if got := f.StringOption("settings", "schema", "settings.yaml"); got != want {
+			t.Errorf("%s: schema = %q, want %q", value, got, want)
+		}
+	}
+	if _, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  settings:\n    schema: 5\n")); err == nil {
+		t.Error("a number passed as a string option")
+	}
+}
+
 func TestDecodeOptions(t *testing.T) {
 	f, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  settings:\n    schema: s.yaml\n  enums:\n    domain: internal/d\n  api: {}\n"))
 	if err != nil {
