@@ -306,6 +306,7 @@ func TestBufSplitOpenAPI(t *testing.T) {
 				write(t, base, "api/openapi/openapi.yaml", mark+"openapi: 3.1.0\n")
 				write(t, base, "api/openapi/openapi.bundle.yaml", mark+"openapi: 3.1.0\n")
 				write(t, base, "api/openapi/orders/v1/orders.yaml", mark+"paths: {}\n")
+				write(t, base, "api/openapi/openapi.tablet.bundle.yaml", mark+"openapi: 3.1.0\n")
 			}
 			return nil
 		}
@@ -317,6 +318,7 @@ func TestBufSplitOpenAPI(t *testing.T) {
 		write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
 		write(t, dir, "buf.lock", "version: v2\n")
 		write(t, dir, "api/openapi/gone/v1/gone.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/openapi.admin.bundle.yaml", mark+"openapi: 3.1.0\n") // a removed document
 		write(t, dir, "api/openapi/base.yaml", "openapi: 3.1.0\n")
 		write(t, dir, "api/openapi/notes.yaml", "# the project's own\n")
 		if err := codegen.Buf(ctx, dir, l, io.Discard); err != nil {
@@ -325,7 +327,10 @@ func TestBufSplitOpenAPI(t *testing.T) {
 		if exists(dir, "api/openapi/gone/v1/gone.yaml") || exists(dir, "api/openapi/gone") {
 			t.Error("the yaml of a removed proto file stayed")
 		}
-		for _, f := range []string{"api/openapi/base.yaml", "api/openapi/notes.yaml", "api/openapi/orders/v1/orders.yaml", "api/openapi/openapi.bundle.yaml"} {
+		if exists(dir, "api/openapi/openapi.admin.bundle.yaml") {
+			t.Error("the bundle of a removed document stayed")
+		}
+		for _, f := range []string{"api/openapi/base.yaml", "api/openapi/notes.yaml", "api/openapi/orders/v1/orders.yaml", "api/openapi/openapi.bundle.yaml", "api/openapi/openapi.tablet.bundle.yaml"} {
 			if !exists(dir, f) {
 				t.Errorf("%s is missing", f)
 			}
@@ -341,15 +346,20 @@ func TestBufSplitOpenAPI(t *testing.T) {
 		write(t, dir, "api/openapi/openapi.yaml", mark+"openapi: 3.1.0\n")
 		write(t, dir, "api/openapi/openapi.bundle.yaml", mark+"openapi: 3.1.0\n")
 		write(t, dir, "api/openapi/orders/v1/orders.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/openapi.tablet.bundle.yaml", mark+"openapi: 3.1.0\n")
 		write(t, dir, "api/openapi/base.yaml", "openapi: 3.1.0\n")
 		if err := codegen.BufCheck(ctx, dir, l); err != nil {
 			t.Fatalf("BufCheck: %v", err)
 		}
 		write(t, dir, "api/openapi/orders/v1/orders.yaml", mark+"paths: {/old: {}}\n")
 		write(t, dir, "api/openapi/gone/v1/gone.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/openapi.tablet.bundle.yaml", mark+"openapi: 3.1.0\npaths: {/old: {}}\n")
+		write(t, dir, "api/openapi/openapi.admin.bundle.yaml", mark+"openapi: 3.1.0\n")
 		err := codegen.BufCheck(ctx, dir, l)
-		if err == nil || !strings.Contains(err.Error(), "api/openapi/orders/v1/orders.yaml") || !strings.Contains(err.Error(), "api/openapi/gone/v1/gone.yaml") {
-			t.Fatalf("err = %v", err)
+		for _, f := range []string{"api/openapi/orders/v1/orders.yaml", "api/openapi/gone/v1/gone.yaml", "api/openapi/openapi.tablet.bundle.yaml", "api/openapi/openapi.admin.bundle.yaml"} {
+			if err == nil || !strings.Contains(err.Error(), f) {
+				t.Errorf("err = %v, want %s named", err, f)
+			}
 		}
 	})
 

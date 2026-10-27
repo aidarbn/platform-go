@@ -610,22 +610,3 @@ func routingError(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.
 	}
 	runtime.HTTPError(ctx, mux, marshaler, w, r, err)
 }
-
-// docsPage renders the OpenAPI description with Scalar. The page loads the renderer
-// from a CDN; the description itself is served by the service at /openapi.yaml.
-func docsPage(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>API</title>
-</head>
-<body>
-<script id="api-reference" data-url="/openapi.yaml"></script>
-<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-</body>
-</html>
-`))
-}

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+// The API of the superadmin.
+package aud.admin.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "platform/openapi/v1/options.proto";
+
+// What only the superadmin may do.
+service AdminService {
+  option (platform.openapi.v1.service) = {
+    tag: "Superadmin"
+    tag_group: "Superadmin API"
+  };
+
+  // Every restaurant.
+  rpc ListRestaurants(ListRestaurantsRequest) returns (ListRestaurantsResponse) {
+    option (google.api.http) = {get: "/v1/admin/restaurants"};
+  }
+
+  // Rebuild the recommendations: a section of its own, in no group of the base.
+  rpc RebuildRecommendations(RebuildRecommendationsRequest) returns (RebuildRecommendationsResponse) {
+    option (platform.openapi.v1.method) = {tag: "Superadmin recommendations"};
+    option (google.api.http) = {
+      post: "/v1/admin/restaurants/{restaurant_id}/recommendations:rebuild"
+      body: "*"
+    };
+  }
+}
+
+message ListRestaurantsRequest {}
+
+message ListRestaurantsResponse {
+  repeated Restaurant restaurants = 1;
+}
+
+message Restaurant {
+  string id = 1;
+  string name = 2;
+  AuditRecord created = 3;
+}
+
+message AuditRecord {
+  string by = 1;
+  google.protobuf.Timestamp at = 2;
+}
+
+message RebuildRecommendationsRequest {
+  string restaurant_id = 1;
+}
+
+message RebuildRecommendationsResponse {
+  int32 rebuilt = 1;
+}

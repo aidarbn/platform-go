@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aidarbn/platform-go/internal/lock"
+	"github.com/aidarbn/platform-go/internal/openapi"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
 	"github.com/aidarbn/platform-go/kit/openapipb"
@@ -131,6 +132,13 @@ const platformOpenAPIPlugin = `  - local: [go, tool, protoc-gen-platform-openapi
       - base=api/openapi/base.yaml
 `
 
+// platformOpenAPIDocuments points the plugin at the documents of api.openapi.documents:
+// it reads them from platformgo.yaml itself, so a changed document needs generate only.
+const platformOpenAPIDocuments = `      # The documents for one audience each, api.openapi.documents: a bundle each,
+      # openapi.<name>.bundle.yaml, served at /openapi/<name>.yaml.
+      - documents=` + spec.FileName + `
+`
+
 // OpenAPIBaseExample is the starting point of the description: the generator never
 // touches it again, so the project can say what its API is for.
 const OpenAPIBaseExample = `# The human part of the API description: the generator fills paths and schemas from the
@@ -240,6 +248,9 @@ func bufGenConfig(f *spec.File, s APISettings) []byte {
 		bufGen += connectOpenAPIPlugin
 	case OpenAPIPlatform:
 		bufGen += platformOpenAPIPlugin
+		if len(s.OpenAPI.Documents) > 0 {
+			bufGen += platformOpenAPIDocuments
+		}
 	}
 	// The proto files of the platform — the i18n option, the OpenAPI options — are
 	// imported, not generated: their Go code is the platform's.
@@ -267,7 +278,8 @@ type APISettings struct {
 		BreakingExcept []string `yaml:"breaking_except"`
 	} `yaml:"buf"`
 	OpenAPI struct {
-		Generator string `yaml:"generator"`
+		Generator string                 `yaml:"generator"`
+		Documents []openapi.DocumentSpec `yaml:"documents"`
 	} `yaml:"openapi"`
 }
 
@@ -326,6 +338,12 @@ func API(f *spec.File) (APISettings, error) {
 		if !breakingID.MatchString(rule) {
 			errs = append(errs, fmt.Errorf("buf.breaking_except: %q is not a buf rule or category such as FIELD_NO_DELETE", rule))
 		}
+	}
+	if len(s.OpenAPI.Documents) > 0 && s.OpenAPI.Generator != OpenAPIPlatform {
+		errs = append(errs, fmt.Errorf("openapi.documents: only the generator platform writes documents, not %s", s.OpenAPI.Generator))
+	}
+	if err := openapi.CheckDocuments(s.OpenAPI.Documents); err != nil {
+		errs = append(errs, fmt.Errorf("openapi: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return APISettings{}, fmt.Errorf("module api: %w", err)

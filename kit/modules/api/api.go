@@ -47,7 +47,11 @@ type Config struct {
 	MaxSendSize int      // largest response message, bytes
 	CORSOrigins []string // origins allowed to call the REST API from a browser; "*" allows any
 	Docs        bool     // serve /openapi.yaml and the /docs page
-	Reflection  bool     // gRPC server reflection, for grpcurl and similar tools
+	// DocsDocuments are the descriptions served when Docs is on: the documents of
+	// api.openapi.documents by name, and AllDocuments for the whole one. Empty serves
+	// all of them.
+	DocsDocuments []string
+	Reflection    bool // gRPC server reflection, for grpcurl and similar tools
 
 	// CORS beyond the allowed origins. CORSHeaders are request headers a browser may
 	// send on top of the platform's and those of api.CORSHeaders; CORSExpose are
@@ -121,13 +125,14 @@ func Load(l *confx.Loader) Config {
 		IdempotencyLease: lease,
 		IdempotencyLock:  lock,
 
-		GRPCAddr:    l.String("API_GRPC_ADDR", "127.0.0.1:9091"),
-		HTTPAddr:    l.String("API_HTTP_ADDR", ":8080"),
-		MaxRecvSize: l.Int("API_MAX_RECV_MB", 16) << 20,
-		MaxSendSize: l.Int("API_MAX_SEND_MB", 32) << 20,
-		CORSOrigins: l.Strings("API_CORS_ORIGINS", nil),
-		Docs:        l.Bool("API_DOCS", true),
-		Reflection:  l.Bool("API_REFLECTION", false),
+		GRPCAddr:      l.String("API_GRPC_ADDR", "127.0.0.1:9091"),
+		HTTPAddr:      l.String("API_HTTP_ADDR", ":8080"),
+		MaxRecvSize:   l.Int("API_MAX_RECV_MB", 16) << 20,
+		MaxSendSize:   l.Int("API_MAX_SEND_MB", 32) << 20,
+		CORSOrigins:   l.Strings("API_CORS_ORIGINS", nil),
+		Docs:          l.Bool("API_DOCS", true),
+		DocsDocuments: l.Strings("API_DOCS_DOCUMENTS", nil),
+		Reflection:    l.Bool("API_REFLECTION", false),
 
 		RateLimit: RateLimit{
 			RPS:         float64(l.Int("API_RATE_RPS", 50)),
@@ -314,6 +319,7 @@ type Registry struct {
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
 	errorHandler runtime.ErrorHandlerFunc
+	docsAccess   func(document string, next http.Handler) http.Handler
 }
 
 type route struct {
@@ -527,8 +533,9 @@ func WithIdempotencyStore(store IdempotencyStore) Option {
 }
 
 // WithOpenAPI gives the module the generated OpenAPI description: a directory holding
-// openapi.bundle.yaml, the description in one file, or openapi.yaml. The generated
-// wiring passes the embedded api/openapi directory.
+// openapi.bundle.yaml, the description in one file, or openapi.yaml, and the documents
+// for one audience each, openapi.<name>.bundle.yaml. The generated wiring passes the
+// embedded api/openapi directory.
 func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys } }
 
 // Module implements platform.Module.
@@ -884,19 +891,7 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 		mux.Handle(r.pattern, withRoute(r.pattern, refuseTooLarge(r.handler)))
 	}
 	if m.cfg.Docs && m.openapi != nil {
-		// The platform's generator writes the description in parts and in one file,
-		// the bundle; other generators write openapi.yaml alone.
-		spec, err := fs.ReadFile(m.openapi, "openapi.bundle.yaml")
-		if err != nil {
-			spec, err = fs.ReadFile(m.openapi, "openapi.yaml")
-		}
-		if err == nil {
-			mux.Handle("GET /openapi.yaml", withRoute("/openapi.yaml", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/yaml")
-				_, _ = w.Write(spec)
-			})))
-			mux.Handle("GET /docs", withRoute("/docs", http.HandlerFunc(docsPage)))
-		}
+		m.serveDocs(mux)
 	}
 	mux.Handle("/", m.gatewayTooLarge(gateway))
 

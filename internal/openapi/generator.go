@@ -39,6 +39,10 @@ type Options struct {
 	Base   string // base=api/openapi/base.yaml: the human part, merged into the output
 	Layout string // layout=split (default): a file per proto file, the root and the bundle; single: one file
 	Path   string // path=openapi.yaml: the file of the single layout, relative to out
+
+	// Documents is documents=platformgo.yaml: the file whose api.openapi.documents
+	// describe the documents for one audience each, openapi.<name>.bundle.yaml.
+	Documents string
 }
 
 // The layouts of the output.
@@ -63,8 +67,10 @@ func ParseOptions(param string) (Options, error) {
 			o.Path = v
 		case "layout":
 			o.Layout = v
+		case "documents":
+			o.Documents = v
 		default:
-			return Options{}, fmt.Errorf("unknown option %q; known: base, layout, path", k)
+			return Options{}, fmt.Errorf("unknown option %q; known: base, documents, layout, path", k)
 		}
 	}
 	if o.Layout != LayoutSplit && o.Layout != LayoutSingle {
@@ -113,6 +119,12 @@ func Generate(req *pluginpb.CodeGeneratorRequest) (map[string][]byte, error) {
 			return nil, fmt.Errorf("base: %w", err)
 		}
 	}
+	var docs []DocumentSpec
+	if opts.Documents != "" {
+		if docs, err = ReadDocuments(opts.Documents); err != nil {
+			return nil, err
+		}
+	}
 	var targets []protoreflect.FileDescriptor
 	for _, name := range req.GetFileToGenerate() {
 		fd, err := files.FindFileByPath(name)
@@ -129,14 +141,32 @@ func Generate(req *pluginpb.CodeGeneratorRequest) (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", opts.Base, err)
 	}
-	if opts.Layout == LayoutSingle {
-		return map[string][]byte{opts.Path: bundle}, nil
+	out := map[string][]byte{opts.Path: bundle}
+	if opts.Layout == LayoutSplit {
+		if out, err = g.split(base, path.Base(opts.Base), doc, docs); err != nil {
+			return nil, err
+		}
+		out[BundleFile] = bundle
 	}
-	out, err := g.split(base, path.Base(opts.Base), doc)
-	if err != nil {
-		return nil, err
+	for _, d := range docs {
+		// Each document starts from a merge of its own: cutting changes the nodes.
+		root, err := mergeNode(base, doc)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", opts.Base, err)
+		}
+		if err := document(root, d, g.services); err != nil {
+			return nil, err
+		}
+		b, err := encode(root)
+		if err != nil {
+			return nil, err
+		}
+		file := DocumentFile(d.Name)
+		if _, taken := out[file]; taken {
+			return nil, fmt.Errorf("document %s would be written to %s, a file of the description itself", d.Name, file)
+		}
+		out[file] = b
 	}
-	out[BundleFile] = bundle
 	return out, nil
 }
 
@@ -151,6 +181,7 @@ type generator struct {
 	responses map[string]*Response
 	homes     map[string]string     // schema name to the proto file it belongs to, "" for common.yaml
 	opHomes   map[*Operation]string // operation to the proto file of its method
+	services  map[string]string     // operation id to the full name of the service of its method
 	targets   map[string]bool       // the proto files to describe
 	outputs   map[protoreflect.FullName]bool
 	queued    map[string]bool
@@ -169,6 +200,7 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 		responses: map[string]*Response{},
 		homes:     map[string]string{},
 		opHomes:   map[*Operation]string{},
+		services:  map[string]string{},
 		targets:   map[string]bool{},
 		outputs:   map[protoreflect.FullName]bool{},
 		queued:    map[string]bool{},
@@ -258,6 +290,7 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 				case *slot == nil:
 					*slot = op
 					g.opHomes[op] = m.ParentFile().Path()
+					g.services[op.OperationID] = string(sd.FullName())
 				case ids[verb+" "+path] == string(m.FullName()):
 					// Bindings of one method that differ only in the segments a
 					// variable matches, {name=shops/*} and {name=orgs/*}: one operation.

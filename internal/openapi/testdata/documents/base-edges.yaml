@@ -1,0 +1,56 @@
+# A base with what a document must keep that the generator never writes: anchors and
+# aliases, a path item without operations, a discriminator by bare name, an extension
+# among the components.
+openapi: 3.1.0
+info:
+  title: Edges
+  version: "1"
+x-tagGroups:
+  - name: Tablet API
+    tags: [Tablet, Tablet orders, Pets]
+paths:
+  /v1/legacy:
+    summary: A path of the base without operations.
+  /v1/pets:
+    get:
+      tags: [Pets]
+      operationId: base_pets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /v1/admin-pets:
+    get:
+      tags: [Superadmin]
+      operationId: base_admin_pets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dropped'
+components:
+  x-codegen:
+    package: pets
+  schemas:
+    Pet:
+      oneOf:
+        - $ref: '#/components/schemas/Dog'
+      discriminator:
+        propertyName: kind
+        mapping:
+          dog: Dog
+          cat: Cat
+    Dog: &animal
+      type: object
+      properties:
+        owner:
+          $ref: '#/components/schemas/Owner'
+    Cat: *animal
+    Owner:
+      type: string
+    Dropped: *animal

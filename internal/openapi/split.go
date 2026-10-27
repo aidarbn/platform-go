@@ -34,7 +34,7 @@ type fragment struct {
 
 // split lays the description out by proto file: a change to a proto file changes its
 // own yaml, and the root only when a path comes or goes.
-func (g *generator) split(base []byte, baseName string, doc *Document) (map[string][]byte, error) {
+func (g *generator) split(base []byte, baseName string, doc *Document, docs []DocumentSpec) (map[string][]byte, error) {
 	schemaFile := map[string]string{}
 	for name, home := range g.homes {
 		schemaFile[name] = CommonFile
@@ -51,9 +51,13 @@ func (g *generator) split(base []byte, baseName string, doc *Document) (map[stri
 	for name := range g.responses {
 		responseFile[name] = CommonFile
 	}
+	own := []string{RootFile, BundleFile, CommonFile, baseName}
+	for _, d := range docs {
+		own = append(own, DocumentFile(d.Name))
+	}
 	for proto := range g.targets {
 		f := fileOf(proto)
-		for _, own := range []string{RootFile, BundleFile, CommonFile, baseName} {
+		for _, own := range own {
 			// Case does not count: macOS and Windows would write both into one file.
 			if strings.EqualFold(f, own) {
 				return nil, fmt.Errorf("%s would be written to %s, a file of the description itself; move the proto file into a package folder", proto, own)
