@@ -387,3 +387,28 @@ func TestManualStepsAreNotes(t *testing.T) {
 		t.Errorf("up to date = %v, notes = %+v", plan.UpToDate(), plan.Notes)
 	}
 }
+
+// Moving the sqlc configuration writes it in the new place and removes the old file,
+// which the lock records as generated.
+func TestMovingSqlcConfig(t *testing.T) {
+	dir := project(t, withoutSettings)
+	execute(t, dir)
+	if !exists(dir, gen.SqlcPath) {
+		t.Fatalf("%s was not generated", gen.SqlcPath)
+	}
+
+	writeFile(t, dir, spec.FileName, strings.Replace(withoutSettings, "postgres: {}", "postgres:\n    sqlc: {dir: db/sqlc, out: internal/store}", 1))
+	p := execute(t, dir)
+	if !slices.Contains(p.Delete, gen.SqlcPath) || !slices.Contains(p.Write, "db/sqlc/sqlc.yaml") {
+		t.Errorf("delete = %v, write = %v", p.Delete, p.Write)
+	}
+	if exists(dir, gen.SqlcPath) || !exists(dir, "db/sqlc/sqlc.yaml") {
+		t.Error("the configuration did not move")
+	}
+	if p.Sqlc.QueriesDir() != "db/sqlc/queries" || p.Sqlc.Out != "internal/store" {
+		t.Errorf("plan sqlc = %+v", p.Sqlc)
+	}
+	if !build(t, dir).UpToDate() {
+		t.Error("not up to date after apply")
+	}
+}

@@ -178,8 +178,12 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 		ComposePath: compose(f, all),
 	}
 	if _, ok := f.Modules["postgres"]; ok {
+		sqlc, err := Sqlc(f)
+		if err != nil {
+			return nil, err
+		}
 		files[MigrationsPath] = []byte(migrationsGo)
-		files[SqlcPath] = []byte(sqlcYAML)
+		files[sqlc.ConfigPath()] = sqlcConfig(sqlc)
 	}
 	if _, ok := f.Modules["rbac"]; ok {
 		files[PolicyGoPath] = []byte(policyGo)

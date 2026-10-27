@@ -69,12 +69,12 @@ func TestSchemaDescribesModulesAndOptions(t *testing.T) {
 }
 
 func TestUnknownModuleOption(t *testing.T) {
-	_, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres:\n    migrations: db\n  settings:\n    shema: s.yaml\n"))
+	_, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  s3:\n    migrations: db\n  settings:\n    shema: s.yaml\n"))
 	if err == nil {
 		t.Fatal("unknown options were accepted")
 	}
 	for _, want := range []string{
-		`module postgres: unknown option "migrations", known options: none`,
+		`module s3: unknown option "migrations", known options: none`,
 		`module settings: unknown option "shema", known options: schema`,
 	} {
 		if !strings.Contains(err.Error(), want) {

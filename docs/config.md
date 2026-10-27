@@ -50,13 +50,14 @@ Modules document their variables in the generated `.env.example`. Variables of t
 
 | Module | Options |
 |---|---|
-| `postgres`, `admin`, `api`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
+| `admin`, `api`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
+| `postgres` | `sqlc` — where `sqlc.yaml`, the queries and the generated code live and Go types on top of the platform's; the defaults are `db/sqlc.yaml`, `db/queries`, `internal/db/sqlcgen`, see [modules.md](modules.md#the-postgres-module) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 | `enums` | `domain` — the Go package scanned for go-enum markers, `internal/domain` by default |
 
 ## Module options
 
-Every option of a module has a type, declared once in the module registry. Today `settings` and `enums` have one string option each (the table above); the other types are there for the options that follow, and the examples below show their shape. The same declaration checks `platformgo.yaml` and builds the JSON schema, so the editor and `plan` never disagree.
+Every option of a module has a type, declared once in the module registry. `settings` and `enums` have one string option each, `postgres.sqlc` is an object with a list of overrides and a map of renames (the table above). The same declaration checks `platformgo.yaml` and builds the JSON schema, so the editor and `plan` never disagree.
 
 | Type | In YAML | Example |
 |---|---|---|

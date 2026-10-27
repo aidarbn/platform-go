@@ -62,7 +62,114 @@
         "postgres": {
           "additionalProperties": false,
           "description": "platform module postgres",
-          "properties": {},
+          "properties": {
+            "sqlc": {
+              "additionalProperties": false,
+              "description": "static queries: where sqlc.yaml, the queries and the generated code live, and Go types on top of the platform's",
+              "properties": {
+                "dir": {
+                  "default": "db",
+                  "description": "folder of the generated sqlc.yaml, relative to the project root",
+                  "type": "string"
+                },
+                "emit_interface": {
+                  "default": true,
+                  "description": "generate the Querier interface",
+                  "type": "boolean"
+                },
+                "out": {
+                  "default": "internal/db/sqlcgen",
+                  "description": "folder of the generated Go code, relative to the project root",
+                  "type": "string"
+                },
+                "overrides": {
+                  "default": [],
+                  "description": "Go types of database types or columns; they come before the platform's, and sqlc takes the first match",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "column": {
+                        "description": "column, table.column or schema.table.column; or set db_type",
+                        "type": "string"
+                      },
+                      "db_type": {
+                        "description": "database type, as sqlc names it: int4, pg_catalog.numeric; or set column",
+                        "type": "string"
+                      },
+                      "go_type": {
+                        "description": "Go type: a name such as int64, or an object",
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "import": {
+                                "description": "import path of the type",
+                                "type": "string"
+                              },
+                              "package": {
+                                "description": "package name when it differs from the last element of import",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "default": false,
+                                "description": "a pointer to the type",
+                                "type": "boolean"
+                              },
+                              "slice": {
+                                "default": false,
+                                "description": "a slice of the type",
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "description": "type name",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "nullable": {
+                        "default": false,
+                        "description": "the override is for nullable columns",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "go_type"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "package": {
+                  "default": "sqlcgen",
+                  "description": "Go package name of the generated code",
+                  "type": "string"
+                },
+                "queries": {
+                  "default": "queries",
+                  "description": "folder of the *.sql queries, relative to dir",
+                  "type": "string"
+                },
+                "renames": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "default": {},
+                  "description": "Go names of columns and tables, sqlc rename: {url: URL}",
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            }
+          },
           "type": [
             "object",
             "null"

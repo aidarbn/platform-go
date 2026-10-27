@@ -84,6 +84,7 @@ var all = []Module{
 		ProjectPkg:   "db/migrations",
 		ProjectAlias: "migrations",
 		ExtraArgs:    []string{"postgres.WithMigrations(migrations.FS)"},
+		Options:      []Option{sqlcOption},
 		Compose: `  postgres:
     image: postgres:18-alpine
     environment:
@@ -321,4 +322,52 @@ func Names() []string {
 		out = append(out, m.Name)
 	}
 	return out
+}
+
+// sqlcOption is the sqlc configuration of the postgres module. The defaults are the
+// layout every project had before the option existed.
+var sqlcOption = Option{
+	Name:        "sqlc",
+	Description: "static queries: where sqlc.yaml, the queries and the generated code live, and Go types on top of the platform's",
+	Kind:        KindObject,
+	Fields: []Option{
+		{Name: "dir", Description: "folder of the generated sqlc.yaml, relative to the project root", Default: "db"},
+		{Name: "queries", Description: "folder of the *.sql queries, relative to dir", Default: "queries"},
+		{Name: "out", Description: "folder of the generated Go code, relative to the project root", Default: "internal/db/sqlcgen"},
+		{Name: "package", Description: "Go package name of the generated code", Default: "sqlcgen"},
+		{Name: "emit_interface", Description: "generate the Querier interface", Kind: KindBool, Default: true},
+		{
+			Name:        "overrides",
+			Description: "Go types of database types or columns; they come before the platform's, and sqlc takes the first match",
+			Kind:        KindList,
+			Default:     []any{},
+			Items: &Option{Kind: KindObject, Fields: []Option{
+				{Name: "db_type", Description: "database type, as sqlc names it: int4, pg_catalog.numeric; or set column"},
+				{Name: "column", Description: "column, table.column or schema.table.column; or set db_type"},
+				{Name: "nullable", Description: "the override is for nullable columns", Kind: KindBool, Default: false},
+				{
+					Name:        "go_type",
+					Description: "Go type: a name such as int64, or an object",
+					Required:    true,
+					OneOf: []Option{
+						{Kind: KindString},
+						{Kind: KindObject, Fields: []Option{
+							{Name: "import", Description: "import path of the type"},
+							{Name: "package", Description: "package name when it differs from the last element of import"},
+							{Name: "type", Description: "type name", Required: true},
+							{Name: "pointer", Description: "a pointer to the type", Kind: KindBool, Default: false},
+							{Name: "slice", Description: "a slice of the type", Kind: KindBool, Default: false},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			Name:        "renames",
+			Description: "Go names of columns and tables, sqlc rename: {url: URL}",
+			Kind:        KindMap,
+			Default:     map[string]any{},
+			Values:      &Option{},
+		},
+	},
 }

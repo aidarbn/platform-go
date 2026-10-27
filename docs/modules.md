@@ -219,6 +219,29 @@ Queries come in two kinds, as in taply:
 
 Both generators are pinned as `tool` in `go.mod` by `platformgo apply` (sqlc v1.31.1, jet v2.16.0) and removed with the module. `db/sqlc.yaml` is generated: schema from the migrations, `pgx/v5`, `numeric` as `decimal.Decimal`, `uuid` as `uuid.UUID`, `jsonb` as `json.RawMessage`, `timestamptz` and `date` as `time.Time`, nullable columns as pointers. `verify` fails when the sqlc output is stale or left from a removed query file.
 
+The layout and the type mapping are options of the module in `platformgo.yaml`; every key is optional and the defaults are the layout above:
+
+```yaml
+modules:
+  postgres:
+    sqlc:
+      dir: db/sqlc                   # where sqlc.yaml is generated; default db
+      queries: queries               # relative to dir; default queries
+      out: internal/adapters/out/db/sqlcgen   # default internal/db/sqlcgen
+      package: sqlcgen
+      emit_interface: false          # default true
+      overrides:                     # before the platform's; sqlc takes the first match
+        - {db_type: int4, go_type: int64}
+        - {db_type: int4, nullable: true, go_type: {type: int64, pointer: true}}
+        - {column: orders.meta, go_type: {import: example.com/shop/internal/domain, type: Meta}}
+      renames: {url: URL}
+```
+
+- The schema is always `db/migrations`: `migrations.gen.go` embeds it, so the generated `sqlc.yaml` points there from wherever `dir` is.
+- An override takes `db_type` or `column`, `nullable`, and `go_type` as a name (`int64`) or an object (`import`, `package`, `type`, `pointer`, `slice`), as in sqlc. Overrides of the project come first, so one for `uuid` or `pg_catalog.numeric` replaces the platform's.
+- Moving `dir` moves the generated file: `apply` writes the new one and deletes the old. `queries` is relative to `dir`, so move the query files along; until then `generate` finds no queries and removes the code generated from them. Moving `out` does not move code already generated: delete the old folder after `make generate`.
+- `out` must not hold or sit in the queries, the migrations or `internal/db/jetgen`, nor hold `dir`: sqlc output is cleaned before every run.
+
 ```go
 // static: sqlc on the pool
 q := sqlcgen.New(postgres.Pool(app))

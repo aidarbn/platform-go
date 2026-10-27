@@ -75,7 +75,7 @@ func TestTaggedStringsStillParse(t *testing.T) {
 }
 
 func TestDecodeOptions(t *testing.T) {
-	f, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  settings:\n    schema: s.yaml\n  enums:\n    domain: internal/d\n  api: {}\n"))
+	f, err := spec.Parse([]byte("schema: 1\nproject:\n  module: x.com/a\nmodules:\n  postgres: {}\n  s3: {}\n  settings:\n    schema: s.yaml\n  enums:\n    domain: internal/d\n  api: {}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestDecodeOptions(t *testing.T) {
 
 	// No section, or an empty one, leaves the defaults the caller filled in.
 	s.Schema = "default.yaml"
-	if err := f.DecodeOptions("postgres", &s); err != nil || s.Schema != "default.yaml" {
+	if err := f.DecodeOptions("s3", &s); err != nil || s.Schema != "default.yaml" {
 		t.Errorf("an empty section = %+v, %v", s, err)
 	}
 	if err := f.DecodeOptions("river", &s); err != nil || s.Schema != "default.yaml" {

@@ -177,7 +177,7 @@ func cmdGenerate(args []string, out io.Writer) error {
 func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 	ctx := context.Background()
 	if slices.Contains(plan.Modules, "postgres") {
-		if err := codegen.Sqlc(ctx, dir, out); err != nil {
+		if err := codegen.Sqlc(ctx, dir, sqlcLayout(plan), out); err != nil {
 			return err
 		}
 	}
@@ -192,6 +192,11 @@ func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// sqlcLayout is where sqlc works in the project, from the sqlc option of postgres.
+func sqlcLayout(plan *apply.Plan) codegen.SqlcLayout {
+	return codegen.SqlcLayout{Config: plan.Sqlc.ConfigPath(), Queries: plan.Sqlc.QueriesDir(), Out: plan.Sqlc.Out}
 }
 
 func cmdVerify(args []string, out io.Writer) error {
@@ -227,7 +232,7 @@ func checkGenerated(ctx context.Context, dir string) error {
 		return fmt.Errorf("manual steps of a platform upgrade are open:\n%s", strings.TrimSuffix(b.String(), "\n"))
 	}
 	if slices.Contains(plan.Modules, "postgres") {
-		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
+		if err := codegen.SqlcCheck(ctx, dir, sqlcLayout(plan)); err != nil {
 			return err
 		}
 	}
