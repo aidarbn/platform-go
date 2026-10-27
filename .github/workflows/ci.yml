@@ -69,8 +69,8 @@ jobs:
       - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: scripts/apicheck.sh
 
-  # Projects created by the last releases move to this checkout and must still apply,
-  # verify, build and pass their tests.
+  # Projects created by the last releases are moved to this checkout by its platformgo
+  # upgrade, go.sum as they left it, and must still apply, verify, build and pass their tests.
   upgrade-matrix:
     runs-on: ubuntu-latest
     steps:
