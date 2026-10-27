@@ -43,6 +43,11 @@ type Plan struct {
 	Codemods  []codemod.Change // project files rewritten for changes of kit
 	Notes     []codemod.Note   // places a person has to change: what codemods could not rewrite
 
+	// Conflicts are generated files the project already has in a version of its own:
+	// on disk without the platformgo mark and not recorded in platformgo.lock. apply
+	// never overwrites them; Force takes the generated version of one.
+	Conflicts []Conflict
+
 	Sqlc gen.SqlcSettings // where sqlc reads and writes, when postgres is enabled
 	API  gen.APISettings  // where the proto files are and who writes OpenAPI, when api is enabled
 
@@ -50,6 +55,15 @@ type Plan struct {
 	creates map[string][]byte
 	files   map[string][]byte
 	wanted  lock.Lock
+	applied lock.Lock
+	forced  []string // conflicts the person chose to overwrite
+}
+
+// Conflict is a file platformgo generates that the project has written itself.
+type Conflict struct {
+	Path      string
+	Disk      []byte // what the project has
+	Generated []byte // what platformgo would write
 }
 
 // codemods are the rewrites of the platform; tests replace them.
@@ -84,6 +98,7 @@ func Build(dir string) (*Plan, error) {
 	p := &Plan{
 		Service: f.Service(),
 		Write:   write,
+		applied: applied,
 		dir:     dir,
 		creates: creates,
 		files:   files,
@@ -122,6 +137,9 @@ func Build(dir string) (*Plan, error) {
 	p.Diff = lock.Compare(applied, p.wanted)
 
 	if err := p.classifyStale(); err != nil {
+		return nil, err
+	}
+	if err := p.findConflicts(); err != nil {
 		return nil, err
 	}
 	if err := p.planTools(tools); err != nil {
@@ -220,6 +238,57 @@ func (p *Plan) classifyStale() error {
 	return nil
 }
 
+// findConflicts takes out of Write the generated files the project has in a version of
+// its own. A file platformgo wrote before carries its mark or is in the lock; one with
+// neither is the project's — a service adopting the platform has its own
+// docker-compose.yml or buf.yaml — and overwriting it would lose work silently.
+func (p *Plan) findConflicts() error {
+	write := p.Write[:0]
+	for _, path := range p.Write {
+		content, err := os.ReadFile(filepath.Join(p.dir, path))
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			write = append(write, path)
+			continue
+		case err != nil:
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if gen.IsGenerated(content) || slices.Contains(p.applied.Generated, path) {
+			write = append(write, path)
+			continue
+		}
+		p.Conflicts = append(p.Conflicts, Conflict{Path: path, Disk: content, Generated: p.files[path]})
+	}
+	p.Write = write
+	return nil
+}
+
+// ConflictPaths lists the paths of the conflicts.
+func (p *Plan) ConflictPaths() []string {
+	out := make([]string, 0, len(p.Conflicts))
+	for _, c := range p.Conflicts {
+		out = append(out, c.Path)
+	}
+	return out
+}
+
+// Force takes the generated version of conflicting files: apply overwrites them. A path
+// that is not a conflict is an error, so a typo does not pass silently.
+func (p *Plan) Force(paths ...string) error {
+	for _, path := range paths {
+		path = filepath.ToSlash(filepath.Clean(path))
+		i := slices.IndexFunc(p.Conflicts, func(c Conflict) bool { return c.Path == path })
+		if i < 0 {
+			return fmt.Errorf("--force %s: not a conflict; conflicts: %s", path, strings.Join(p.ConflictPaths(), ", "))
+		}
+		p.Conflicts = slices.Delete(p.Conflicts, i, i+1)
+		p.Write = append(p.Write, path)
+		p.forced = append(p.forced, path)
+	}
+	slices.Sort(p.Write)
+	return nil
+}
+
 // planTools compares the tools of the enabled modules with go.mod. Only tools platformgo
 // added itself, according to the lock, are ever removed.
 func (p *Plan) planTools(tools []registry.Tool) error {
@@ -260,7 +329,7 @@ func lockStale(dir string, wanted lock.Lock) (bool, error) {
 
 // UpToDate reports whether the project already matches its description.
 func (p *Plan) UpToDate() bool {
-	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 && len(p.Codemods) == 0 &&
+	return len(p.Create) == 0 && len(p.Write) == 0 && len(p.Delete) == 0 && len(p.Codemods) == 0 && len(p.Conflicts) == 0 &&
 		len(p.AddTools) == 0 && len(p.DropTools) == 0 && !p.LockStale
 }
 
@@ -280,8 +349,12 @@ func (p *Plan) Pending() []string {
 	return slices.Compact(out)
 }
 
-// Execute carries out the plan: creates, writes, deletes and records the lock.
+// Execute carries out the plan: creates, writes, deletes and records the lock. It
+// refuses a plan with conflicts: Force them, or adopt the project with Adopt.
 func (p *Plan) Execute() error {
+	if len(p.Conflicts) > 0 {
+		return fmt.Errorf("%s: written by the project, not by platformgo; apply --adopt keeps them and writes a report, --force <path> takes the generated version", strings.Join(p.ConflictPaths(), ", "))
+	}
 	for _, c := range p.Codemods {
 		if err := os.WriteFile(filepath.Join(p.dir, c.Path), c.Content, 0o644); err != nil {
 			return fmt.Errorf("codemod: %w", err)
@@ -290,7 +363,7 @@ func (p *Plan) Execute() error {
 	if _, err := gen.Apply(p.dir, p.creates); err != nil {
 		return err
 	}
-	if _, err := gen.Apply(p.dir, p.files); err != nil {
+	if _, err := gen.Apply(p.dir, p.writes()); err != nil {
 		return err
 	}
 	for _, path := range p.Delete {
@@ -316,6 +389,15 @@ func (p *Plan) Execute() error {
 		}
 	}
 	return nil
+}
+
+// writes are the generated files apply may write: everything but the conflicts.
+func (p *Plan) writes() map[string][]byte {
+	out := maps.Clone(p.files)
+	for _, c := range p.Conflicts {
+		delete(out, c.Path)
+	}
+	return out
 }
 
 // removeEmptyParents removes directories left empty by a deletion, up to the project

@@ -93,8 +93,9 @@ func usage(out io.Writer) {
 	fmt.Fprint(out, `platformgo — a platform for Go projects
 
   platformgo new <module-path>    create a project
-  platformgo plan                 show what apply would change
-  platformgo apply [--no-tidy]    bring the project in line with platformgo.yaml
+  platformgo plan [--diff]        show what apply would change
+  platformgo apply [--no-tidy] [--adopt] [--force path]
+                                  bring the project in line with platformgo.yaml
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
   platformgo lint                 every check of the project: format, tidy, build, generation,
@@ -165,7 +166,7 @@ func cmdGenerate(args []string, out io.Writer) error {
 	if *check {
 		return verify(*dir, out)
 	}
-	plan, err := runApply(*dir, out)
+	plan, err := runApply(*dir, nil, out)
 	if err != nil {
 		return err
 	}
@@ -227,6 +228,9 @@ func checkGenerated(ctx context.Context, dir string) error {
 	plan, err := apply.Build(dir)
 	if err != nil {
 		return err
+	}
+	if len(plan.Conflicts) > 0 {
+		return fmt.Errorf("files platformgo generates are the project's own: %s; resolve them, see platformgo plan --diff and platformgo apply --adopt", strings.Join(plan.ConflictPaths(), ", "))
 	}
 	if !plan.UpToDate() {
 		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
@@ -299,11 +303,17 @@ func cmdApply(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
 	noTidy := fs.Bool("no-tidy", false, "skip go mod tidy")
+	adopt := fs.Bool("adopt", false, "for a project with files of its own: create only what does not exist, report the conflicts in "+apply.AdoptReport)
+	var force stringList
+	fs.Func("force", "take the generated version of a conflicting file; repeat or separate with commas", force.Set)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	plan, err := runApply(*dir, out)
+	if *adopt {
+		return runAdopt(*dir, force, out)
+	}
+	plan, err := runApply(*dir, force, out)
 	if err != nil {
 		return err
 	}
@@ -323,6 +333,46 @@ func cmdApply(args []string, out io.Writer) error {
 	}
 	// The generators are in go.sum now, so the queries can be generated.
 	return runSqlc(plan, *dir, out)
+}
+
+// stringList is a flag that may repeat and holds comma separated values.
+type stringList []string
+
+// Set adds the values of one occurrence of the flag.
+func (l *stringList) Set(v string) error {
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			*l = append(*l, item)
+		}
+	}
+	return nil
+}
+
+// runAdopt applies to a project that has files of its own: only what does not exist is
+// created, and the conflicts go into a report instead of failing.
+func runAdopt(dir string, force []string, out io.Writer) error {
+	plan, err := apply.Build(dir)
+	if err != nil {
+		return err
+	}
+	if err := plan.Force(force...); err != nil {
+		return err
+	}
+	created, report, err := plan.Adopt()
+	if err != nil {
+		return err
+	}
+	for _, path := range created {
+		fmt.Fprintln(out, "created", path)
+	}
+	fmt.Fprintln(out, "wrote", lock.FileName)
+	for _, c := range plan.Conflicts {
+		fmt.Fprintln(out, "!", c.Path+": the project's own, kept")
+	}
+	if report {
+		fmt.Fprintf(out, "report %s: the conflicts and what apply left; run platformgo apply once they are resolved\n", apply.AdoptReport)
+	}
+	return nil
 }
 
 func cmdDB(args []string, out io.Writer) error {
@@ -371,15 +421,22 @@ func cmdDB(args []string, out io.Writer) error {
 	return nil
 }
 
-func runApply(dir string, out io.Writer) (*apply.Plan, error) {
+func runApply(dir string, force []string, out io.Writer) (*apply.Plan, error) {
 	plan, err := apply.Build(dir)
 	if err != nil {
+		return nil, err
+	}
+	if err := plan.Force(force...); err != nil {
 		return nil, err
 	}
 	if plan.UpToDate() {
 		fmt.Fprintln(out, "generation is up to date")
 		printNotes(out, plan)
 		return plan, nil
+	}
+	if len(plan.Conflicts) > 0 {
+		printConflicts(out, plan)
+		return nil, fmt.Errorf("%d generated files are the project's own; nothing was changed: apply --adopt to create the rest and get a report, apply --force <path> to take the generated version", len(plan.Conflicts))
 	}
 	if err := plan.Execute(); err != nil {
 		return nil, err
@@ -479,6 +536,7 @@ func cmdMigrateLint(args []string, out io.Writer) error {
 func cmdPlan(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
+	showDiff := fs.Bool("diff", false, "show each conflict as a diff from the project's file to the generated one")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -507,7 +565,20 @@ func cmdPlan(args []string, out io.Writer) error {
 		return nil
 	}
 	printChanges(out, plan, "+", "~", "-")
+	printConflicts(out, plan)
+	if *showDiff {
+		for _, c := range plan.Conflicts {
+			fmt.Fprint(out, "\n"+apply.UnifiedDiff(c.Path+" (project)", c.Path+" (platformgo)", c.Disk, c.Generated))
+		}
+	}
 	return nil
+}
+
+// printConflicts lists the generated files the project has in a version of its own.
+func printConflicts(out io.Writer, plan *apply.Plan) {
+	for _, c := range plan.Conflicts {
+		fmt.Fprintf(out, "! %s: the project's own, not generated by platformgo; apply keeps it\n", c.Path)
+	}
 }
 
 func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {

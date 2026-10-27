@@ -151,6 +151,12 @@ func projectChecks(dir string, out io.Writer) []check {
 		checks = append(checks, check{name: "generation", status: "fail", detail: err.Error()})
 	case plan.UpToDate():
 		checks = append(checks, check{name: "generation", status: "ok", detail: "up to date"})
+	case len(plan.Conflicts) > 0:
+		// Not fixable here: the files are the project's, a person decides what to keep.
+		checks = append(checks, check{
+			name: "generation", status: "fail",
+			detail: "the project's own versions of generated files: " + strings.Join(plan.ConflictPaths(), ", ") + "; see platformgo plan --diff and platformgo apply --adopt",
+		})
 	default:
 		checks = append(checks, check{
 			name: "generation", status: "fail",
