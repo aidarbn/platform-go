@@ -281,7 +281,8 @@ func copyProject(src, dst string) error {
 		return err
 	}
 	for _, r := range mod.Local {
-		if filepath.IsAbs(r.Dir) || !strings.HasPrefix(filepath.ToSlash(filepath.Clean(r.Dir)), "../") {
+		dir := filepath.ToSlash(filepath.Clean(r.Dir))
+		if filepath.IsAbs(r.Dir) || (dir != ".." && !strings.HasPrefix(dir, "../")) {
 			continue // a folder inside the project is copied with it
 		}
 		r.Dir = filepath.Join(src, r.Dir)

@@ -30,7 +30,7 @@ git -C "$root" worktree add --quiet --detach "$work/base" "$base"
 (cd "$work/base" && go run "$apidiff" -m -w "$work/base.api" "$module" 2>/dev/null)
 (cd "$root" && go run "$apidiff" -m "$work/base.api" "$module" 2>/dev/null) | sed "s#\./#$module/#" > "$work/report"
 incompatible="$(awk '/^Incompatible changes:/ { on = 1; next } !/^- / { on = 0 } on' "$work/report" | wc -l | tr -d ' ')"
-(cd "$root" && go run ./internal/apicover/cmd/apicover -base "$base" -release "$release" -docs docs/upgrades.md) < "$work/report" > "$work/uncovered"
+(cd "$root" && go run ./internal/apicover/cmd/apicover -base "$base" -release "$release" -docs docs/upgrades.md) < "$work/report" > "$work/uncovered" || apicover_failed=1
 
 summary() {
   echo "### API of $module against $base"
@@ -51,6 +51,10 @@ summary
 IFS=. read -r bmaj bmin _ <<< "${base#v}"
 IFS=. read -r rmaj rmin _ <<< "${release#v}"
 if [ "$rmaj" -gt "$bmaj" ] || { [ "$bmaj" -eq 0 ] && [ "$rmin" -gt "$bmin" ]; }; then
+  if [ "$rmaj" -eq 0 ] && [ -n "${apicover_failed:-}" ]; then
+    echo "$release: could not match the incompatible changes with codemods and manual steps" >&2
+    exit 1
+  fi
   if [ "$rmaj" -eq 0 ] && [ -s "$work/uncovered" ]; then
     echo "$release: $(wc -l < "$work/uncovered" | tr -d ' ') incompatible changes since $base have neither a codemod nor a manual step in docs/upgrades.md" >&2
     exit 1

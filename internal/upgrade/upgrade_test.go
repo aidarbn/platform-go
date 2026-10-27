@@ -290,7 +290,7 @@ func TestUpgradeOutsideProject(t *testing.T) {
 
 func TestDryRunLeavesTheProjectAlone(t *testing.T) {
 	dir := project(t, description,
-		"go.mod", goMod+"\nreplace example.com/lib => ../lib\n\nreplace example.com/vendored => ./third_party/vendored\n",
+		"go.mod", goMod+"\nreplace example.com/lib => ../lib\n\nreplace example.com/parent => ..\n\nreplace example.com/vendored => ./third_party/vendored\n",
 		".git/HEAD", "ref: refs/heads/main\n",
 		"sub/.git", "gitdir: /somewhere/.git/worktrees/sub\n",
 		"node_modules/x/index.js", "x\n",
@@ -335,6 +335,9 @@ func TestDryRunLeavesTheProjectAlone(t *testing.T) {
 	}
 	if want := "=> " + filepath.Join(dir, "..", "lib"); !strings.Contains(copyMod, want) {
 		t.Errorf("the relative replace was not made absolute, want %q:\n%s", want, copyMod)
+	}
+	if want := "example.com/parent => " + filepath.Dir(dir) + "\n"; !strings.Contains(copyMod, want) {
+		t.Errorf("the replace of the parent folder was not made absolute, want %q:\n%s", want, copyMod)
 	}
 	if !strings.Contains(copyMod, "example.com/vendored => ./third_party/vendored") {
 		t.Errorf("a replace inside the project was pointed at the original:\n%s", copyMod)
