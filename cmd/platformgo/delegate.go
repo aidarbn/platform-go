@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/aidarbn/platform-go/internal/gomod"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -27,7 +28,7 @@ func delegate(args []string) (int, bool) {
 		return 0, false
 	}
 	pinned, ok := projectPlatform(".")
-	if !ok || pinned == version() {
+	if !ok || pinned == version() || !delegateUpgrade(args[0], pinned, version()) {
 		return 0, false
 	}
 	cmd := exec.Command("go", append([]string{"tool", "platformgo"}, args...)...)
@@ -42,6 +43,17 @@ func delegate(args []string) (int, bool) {
 		return 0, false
 	}
 	return 0, true
+}
+
+// delegateUpgrade decides for upgrade, which only drives the go command: the new
+// version applies the project itself. An older project would lose the flags this
+// binary knows, such as --dry-run, so upgrade goes to the project only when the project
+// pins a newer release than this binary.
+func delegateUpgrade(command, pinned, self string) bool {
+	if command != "upgrade" {
+		return true
+	}
+	return semver.IsValid(pinned) && semver.IsValid(self) && semver.Compare(pinned, self) > 0
 }
 
 // projectPlatform returns the platform version a project pins, "local" when it points

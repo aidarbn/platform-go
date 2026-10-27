@@ -373,3 +373,17 @@ func TestProjectWithoutPlatformInLock(t *testing.T) {
 		t.Errorf("codemods = %+v, lock stale = %v", plan.Codemods, plan.LockStale)
 	}
 }
+
+func TestManualStepsAreNotes(t *testing.T) {
+	dir := project(t, withSettings)
+	execute(t, dir)
+	writeFile(t, dir, "internal/users/totp.go", "package users\n\nimport \"github.com/aidarbn/platform-go/kit/adminx\"\n\nvar _ = adminx.VerifyTOTP\n")
+
+	// The check of an applied codemod still sees what is left to do by hand; it is not
+	// generation, so the plan stays up to date.
+	apply.SetCodemods(t, codemod.AdminxNoTOTP())
+	plan := build(t, dir)
+	if !plan.UpToDate() || len(plan.Notes) != 1 || plan.Notes[0].Path != "internal/users/totp.go" || plan.Notes[0].Line != 5 {
+		t.Errorf("up to date = %v, notes = %+v", plan.UpToDate(), plan.Notes)
+	}
+}

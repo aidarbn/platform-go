@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aidarbn/platform-go/internal/apply"
@@ -100,7 +102,9 @@ func usage(out io.Writer) {
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo migrate lint         lint the migrations the branch adds (--against <branch>)
   platformgo db generate          migrate the database and generate the jet query builder
-  platformgo upgrade [version]    move the project to a platform version, latest by default
+  platformgo upgrade [version]    move the project to a platform version, latest by default, and
+                                  check it: go build, verify, go test (--no-check skips them,
+                                  --strict fails on them); --dry-run does it in a copy
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor [--fix]       check the development environment and the project
   platformgo setup [--alias]      shell completion and the short pgo alias
@@ -216,6 +220,11 @@ func checkGenerated(ctx context.Context, dir string) error {
 	}
 	if !plan.UpToDate() {
 		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
+	}
+	if len(plan.Notes) > 0 {
+		var b strings.Builder
+		printNotes(&b, plan)
+		return fmt.Errorf("manual steps of a platform upgrade are open:\n%s", strings.TrimSuffix(b.String(), "\n"))
 	}
 	if slices.Contains(plan.Modules, "postgres") {
 		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
@@ -359,6 +368,7 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 	}
 	if plan.UpToDate() {
 		fmt.Fprintln(out, "generation is up to date")
+		printNotes(out, plan)
 		return plan, nil
 	}
 	if err := plan.Execute(); err != nil {
@@ -371,27 +381,46 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 func cmdUpgrade(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
+	dryRun := fs.Bool("dry-run", false, "upgrade a copy of the project and print the plan; the project stays as it is")
+	noCheck := fs.Bool("no-check", false, "skip go build, platformgo verify and go test after the upgrade: for CI with its own checks")
+	strict := fs.Bool("strict", false, "fail when a check after the upgrade fails; without it a failed check is a warning")
 	version, err := parsePositional(fs, args)
 	if err != nil {
 		return err
 	}
 
-	run := func(ctx context.Context, dir string, out io.Writer, args ...string) error {
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = dir
-		cmd.Stdout, cmd.Stderr = out, os.Stderr
-		return cmd.Run()
-	}
-	res, err := upgrade.Run(context.Background(), *dir, version, run, out)
+	// Ctrl-C stops go and still removes the copy of a dry run.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := upgrade.Options{Version: version, DryRun: *dryRun, NoCheck: *noCheck, Strict: *strict}
+	res, err := upgrade.Run(ctx, *dir, opts, upgradeRunner, out)
 	if err != nil {
 		return err
 	}
-	if res.From == res.To {
+	switch {
+	case *dryRun:
+	case res.From == res.To:
 		fmt.Fprintf(out, "already on %s\n", res.To)
-		return nil
+	default:
+		fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	}
-	fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	return nil
+}
+
+// upgradeRunner runs the go command for upgrade; tests replace it.
+var upgradeRunner upgrade.Runner = goRunner
+
+// goRunner runs the go command for upgrade. Its output goes to out; its errors go to
+// stderr when out is the terminal output, as they always did, and into out when the
+// output is captured, for a dry run or the go.mod check.
+func goRunner(ctx context.Context, dir string, out io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = out, out
+	if out == io.Writer(os.Stdout) {
+		cmd.Stderr = os.Stderr
+	}
+	return cmd.Run()
 }
 
 func cmdMigrate(args []string, out io.Writer) error {
@@ -464,6 +493,7 @@ func cmdPlan(args []string, out io.Writer) error {
 
 	if plan.UpToDate() && len(plan.Kept) == 0 {
 		fmt.Fprintln(out, "no changes")
+		printNotes(out, plan)
 		return nil
 	}
 	printChanges(out, plan, "+", "~", "-")
@@ -494,6 +524,14 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	}
 	if plan.LockStale {
 		fmt.Fprintln(out, write, lock.FileName)
+	}
+	printNotes(out, plan)
+}
+
+// printNotes lists what codemods left to a person.
+func printNotes(out io.Writer, plan *apply.Plan) {
+	for _, n := range plan.Notes {
+		fmt.Fprintln(out, "manual", n)
 	}
 }
 
