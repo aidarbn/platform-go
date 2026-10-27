@@ -50,7 +50,7 @@ on:
         type: string
         default: "chore: platform-go {from} → {to}"
       setup-go:
-        description: install Go with actions/setup-go; false uses the Go of the runner (GOTOOLCHAIN=auto), whose module cache outlives the run on a self-hosted runner
+        description: install Go with actions/setup-go; false uses the Go of the runner (GOTOOLCHAIN=auto), whose module cache outlives the run on a self-hosted runner. The upgrade builds the latest platformgo, which may need a newer Go than the project; GOTOOLCHAIN=local on the runner then fails it
         type: boolean
         default: true
       ci-workflow:
