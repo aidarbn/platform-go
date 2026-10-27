@@ -44,7 +44,7 @@ func TestBufGenerates(t *testing.T) {
 	write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
 	write(t, dir, "internal/api/gen/removed/v1/removed.pb.go", pbFile)
 
-	if err := codegen.Buf(context.Background(), dir, io.Discard); err != nil {
+	if err := codegen.Buf(context.Background(), dir, codegen.DefaultAPI, io.Discard); err != nil {
 		t.Fatalf("Buf: %v", err)
 	}
 	// The dependencies are resolved once, then the code is generated.
@@ -60,7 +60,7 @@ func TestBufGenerates(t *testing.T) {
 
 	// buf.lock exists now: no second dep update.
 	*calls = nil
-	if err := codegen.Buf(context.Background(), dir, io.Discard); err != nil {
+	if err := codegen.Buf(context.Background(), dir, codegen.DefaultAPI, io.Discard); err != nil {
 		t.Fatalf("Buf: %v", err)
 	}
 	if len(*calls) != 1 {
@@ -74,7 +74,7 @@ func TestBufWithoutProtosCleansUp(t *testing.T) {
 	write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
 	write(t, dir, "api/openapi/openapi.yaml", "openapi: 3.1.0\n")
 
-	if err := codegen.Buf(context.Background(), dir, io.Discard); err != nil {
+	if err := codegen.Buf(context.Background(), dir, codegen.DefaultAPI, io.Discard); err != nil {
 		t.Fatalf("Buf: %v", err)
 	}
 	if len(*calls) != 0 || exists(dir, "internal/api/gen") || exists(dir, "api/openapi/openapi.yaml") {
@@ -93,7 +93,7 @@ func TestBufCheck(t *testing.T) {
 		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
 		write(t, dir, "api/openapi/openapi.yaml", "openapi: 3.1.0\n")
 
-		if err := codegen.BufCheck(ctx, dir); err != nil {
+		if err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI); err != nil {
 			t.Fatalf("BufCheck: %v", err)
 		}
 		// The check generates elsewhere and never touches the project.
@@ -110,7 +110,7 @@ func TestBufCheck(t *testing.T) {
 		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile+"// old\n")
 		write(t, dir, "internal/api/gen/gone/v1/gone.pb.go", pbFile)
 
-		err := codegen.BufCheck(ctx, dir)
+		err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI)
 		if err == nil {
 			t.Fatal("stale code passed the check")
 		}
@@ -129,7 +129,7 @@ func TestBufCheck(t *testing.T) {
 		dir := t.TempDir()
 		fakeBuf(t, pbFile)
 		write(t, dir, "proto/orders/v1/orders.proto", "")
-		if err := codegen.BufCheck(ctx, dir); err == nil || !strings.Contains(err.Error(), "buf.lock") {
+		if err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI); err == nil || !strings.Contains(err.Error(), "buf.lock") {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -138,7 +138,7 @@ func TestBufCheck(t *testing.T) {
 		dir := t.TempDir()
 		fakeBuf(t, pbFile)
 		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
-		if err := codegen.BufCheck(ctx, dir); err == nil {
+		if err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI); err == nil {
 			t.Fatal("code of removed protos passed the check")
 		}
 	})
@@ -150,14 +150,14 @@ func TestProtos(t *testing.T) {
 	write(t, dir, "proto/a/v1/a.proto", "")
 	write(t, dir, "proto/README.md", "")
 
-	got, err := codegen.Protos(dir)
+	got, err := codegen.Protos(dir, codegen.DefaultAPI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(got, []string{"proto/a/v1/a.proto", "proto/b/v1/b.proto"}) {
 		t.Errorf("protos = %v", got)
 	}
-	if none, err := codegen.Protos(t.TempDir()); err != nil || len(none) != 0 {
+	if none, err := codegen.Protos(t.TempDir(), codegen.DefaultAPI); err != nil || len(none) != 0 {
 		t.Errorf("no proto dir: %v, %v", none, err)
 	}
 }
@@ -171,12 +171,12 @@ func readFile(dir, path string) (string, error) {
 func TestProtosSkipPlatformFiles(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "proto/platform/i18n/v1/i18n.proto", "")
-	got, err := codegen.Protos(dir)
+	got, err := codegen.Protos(dir, codegen.DefaultAPI)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("protos = %v, %v", got, err)
 	}
 	write(t, dir, "proto/shop/v1/orders.proto", "")
-	if got, _ := codegen.Protos(dir); len(got) != 1 || got[0] != "proto/shop/v1/orders.proto" {
+	if got, _ := codegen.Protos(dir, codegen.DefaultAPI); len(got) != 1 || got[0] != "proto/shop/v1/orders.proto" {
 		t.Errorf("protos = %v", got)
 	}
 }
@@ -211,7 +211,7 @@ func TestBufLockFollowsDependencies(t *testing.T) {
 				write(t, dir, "buf.lock", tc.lock)
 			}
 			calls := fakeBuf(t, pbFile)
-			if err := codegen.Buf(context.Background(), dir, io.Discard); err != nil {
+			if err := codegen.Buf(context.Background(), dir, codegen.DefaultAPI, io.Discard); err != nil {
 				t.Fatalf("Buf: %v", err)
 			}
 			updated := slices.ContainsFunc(*calls, func(args []string) bool { return slices.Contains(args, "update") })
@@ -220,4 +220,67 @@ func TestBufLockFollowsDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A label in buf.yaml (buf.build/x/y:v1) is not a different dependency: buf.lock names
+// the module without it.
+func TestBufLockIgnoresLabels(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+	write(t, dir, "buf.yaml", "version: v2\ndeps:\n  - buf.build/grpc-ecosystem/grpc-gateway:v2.27.0\n")
+	write(t, dir, "buf.lock", "version: v2\ndeps:\n  - name: buf.build/grpc-ecosystem/grpc-gateway\n    commit: 0123\n")
+	calls := fakeBuf(t, pbFile)
+	if err := codegen.Buf(context.Background(), dir, codegen.DefaultAPI, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(*calls, func(args []string) bool { return slices.Contains(args, "update") }) {
+		t.Errorf("a labelled dependency resolved buf.lock again: %v", *calls)
+	}
+}
+
+// proto_dir moves the proto files; the platform's own files under it are still skipped.
+func TestProtosInOtherFolder(t *testing.T) {
+	dir := t.TempDir()
+	l := codegen.APILayout{ProtoDir: "api", OpenAPI: true}
+	write(t, dir, "api/proto/shop/v1/orders.proto", `syntax = "proto3";`)
+	write(t, dir, "api/platform/i18n/v1/i18n.proto", `syntax = "proto3";`)
+	write(t, dir, "proto/ignored/v1/x.proto", `syntax = "proto3";`)
+	got, err := codegen.Protos(dir, l)
+	if err != nil || !slices.Equal(got, []string{"api/proto/shop/v1/orders.proto"}) {
+		t.Errorf("protos = %v, %v", got, err)
+	}
+}
+
+// generator: none — the OpenAPI description belongs to the project: generation never
+// removes it and verify does not compare it.
+func TestBufWithoutOpenAPI(t *testing.T) {
+	ctx := context.Background()
+	l := codegen.APILayout{ProtoDir: "proto", OpenAPI: false}
+
+	t.Run("no protos keep the description", func(t *testing.T) {
+		dir := t.TempDir()
+		fakeBuf(t, pbFile)
+		write(t, dir, "api/openapi/openapi.yaml", "openapi: 3.0.0\n")
+		if err := codegen.Buf(ctx, dir, l, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir, "api/openapi/openapi.yaml") {
+			t.Error("the project's description was removed")
+		}
+	})
+
+	t.Run("check ignores the description", func(t *testing.T) {
+		dir := t.TempDir()
+		fakeBuf(t, pbFile)
+		write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+		write(t, dir, "buf.lock", "version: v2\n")
+		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
+		write(t, dir, "api/openapi/openapi.yaml", "openapi: 3.0.0\n# written by the project\n")
+		if err := codegen.BufCheck(ctx, dir, l); err != nil {
+			t.Fatalf("BufCheck: %v", err)
+		}
+		if err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI); err == nil {
+			t.Fatal("with the connect generator a different description must be stale")
+		}
+	})
 }

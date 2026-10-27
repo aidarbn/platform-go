@@ -44,6 +44,7 @@ type Plan struct {
 	Notes     []codemod.Note   // places a person has to change: what codemods could not rewrite
 
 	Sqlc gen.SqlcSettings // where sqlc reads and writes, when postgres is enabled
+	API  gen.APISettings  // where the proto files are and who writes OpenAPI, when api is enabled
 
 	dir     string
 	creates map[string][]byte
@@ -90,6 +91,11 @@ func Build(dir string) (*Plan, error) {
 	}
 	if _, ok := f.Modules["postgres"]; ok {
 		if p.Sqlc, err = gen.Sqlc(f); err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := f.Modules["api"]; ok {
+		if p.API, err = gen.API(f); err != nil {
 			return nil, err
 		}
 	}

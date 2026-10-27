@@ -32,11 +32,12 @@ const DefaultMaxLines = 1000
 
 // Options select what runs.
 type Options struct {
-	Skip     []string // names of checks to skip
-	MaxLines int      // file length limit; DefaultMaxLines when zero
-	Against  string   // base branch: proto breaking changes are checked against it and migrations it lacks are linted
-	Modules  []string // enabled modules
-	Exec     Exec     // runs git and squawk for the migrations check
+	Skip     []string          // names of checks to skip
+	MaxLines int               // file length limit; DefaultMaxLines when zero
+	Against  string            // base branch: proto breaking changes are checked against it and migrations it lacks are linted
+	Modules  []string          // enabled modules
+	API      codegen.APILayout // where the proto files are; zero means the defaults
+	Exec     Exec              // runs git and squawk for the migrations check
 }
 
 // Check is one named check.
@@ -74,7 +75,7 @@ func Checks(opts Options, run Runner, verify func(ctx context.Context, dir strin
 		checks = append(checks, Check{"proto", func(ctx context.Context, dir string) error {
 			// A project that enabled the api module before writing its first proto file
 			// has nothing to check, and buf refuses an empty module.
-			protos, err := codegen.Protos(dir)
+			protos, err := codegen.Protos(dir, opts.API)
 			if err != nil || len(protos) == 0 {
 				return err
 			}

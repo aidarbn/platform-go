@@ -412,3 +412,27 @@ func TestMovingSqlcConfig(t *testing.T) {
 		t.Error("not up to date after apply")
 	}
 }
+
+// Moving proto_dir moves the i18n option of the platform. The old copy has no mark of
+// its own (it is the very file kit/i18nx is generated from), so it is kept and reported.
+func TestMovingProtoDir(t *testing.T) {
+	const base = "schema: 1\nproject:\n  module: example.com/shop-api\nmodules:\n  postgres: {}\n  i18n: {}\n"
+	dir := project(t, base+"  api: {}\n")
+	execute(t, dir)
+	if !exists(dir, gen.I18nProtoPath) {
+		t.Fatalf("%s was not generated", gen.I18nProtoPath)
+	}
+
+	writeFile(t, dir, spec.FileName, base+"  api:\n    proto_dir: api\n")
+	p := execute(t, dir)
+	if !exists(dir, "api/platform/i18n/v1/i18n.proto") || !slices.Contains(p.Kept, gen.I18nProtoPath) {
+		t.Errorf("write = %v, kept = %v", p.Write, p.Kept)
+	}
+	buf, _ := os.ReadFile(filepath.Join(dir, gen.BufPath))
+	if !strings.Contains(string(buf), "  - path: api\n") {
+		t.Errorf("buf.yaml:\n%s", buf)
+	}
+	if p.API.ProtoDir != "api" {
+		t.Errorf("plan api = %+v", p.API)
+	}
+}

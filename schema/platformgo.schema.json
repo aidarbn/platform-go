@@ -20,7 +20,53 @@
         "api": {
           "additionalProperties": false,
           "description": "platform module api",
-          "properties": {},
+          "properties": {
+            "buf": {
+              "additionalProperties": false,
+              "description": "buf.yaml on top of the platform's",
+              "properties": {
+                "breaking_except": {
+                  "default": [],
+                  "description": "breaking rules left out of FILE: FILE_NO_DELETE, RPC_NO_DELETE, MESSAGE_NO_DELETE, FIELD_NO_DELETE",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "deps": {
+                  "default": [],
+                  "description": "buf modules the proto files import, added to the platform's: buf.build/grpc-ecosystem/grpc-gateway",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "openapi": {
+              "additionalProperties": false,
+              "description": "the OpenAPI description of the API",
+              "properties": {
+                "generator": {
+                  "default": "connect",
+                  "description": "connect: protoc-gen-connect-openapi writes api/openapi/openapi.yaml; none: the project keeps that file itself; platform: the platform's own generator, not available yet",
+                  "enum": [
+                    "connect",
+                    "platform",
+                    "none"
+                  ],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "proto_dir": {
+              "default": "proto",
+              "description": "folder of the proto files, the buf module, relative to the project root",
+              "type": "string"
+            }
+          },
           "type": [
             "object",
             "null"
