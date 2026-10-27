@@ -182,7 +182,7 @@ func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 		}
 	}
 	if slices.Contains(plan.Modules, "api") {
-		if err := codegen.Buf(ctx, dir, out); err != nil {
+		if err := codegen.Buf(ctx, dir, apiLayout(plan), out); err != nil {
 			return err
 		}
 	}
@@ -197,6 +197,11 @@ func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 // sqlcLayout is where sqlc works in the project, from the sqlc option of postgres.
 func sqlcLayout(plan *apply.Plan) codegen.SqlcLayout {
 	return codegen.SqlcLayout{Config: plan.Sqlc.ConfigPath(), Queries: plan.Sqlc.QueriesDir(), Out: plan.Sqlc.Out}
+}
+
+// apiLayout is where buf works in the project, from the options of api.
+func apiLayout(plan *apply.Plan) codegen.APILayout {
+	return codegen.APILayout{ProtoDir: plan.API.ProtoDir, OpenAPI: plan.API.GeneratesOpenAPI()}
 }
 
 func cmdVerify(args []string, out io.Writer) error {
@@ -237,7 +242,7 @@ func checkGenerated(ctx context.Context, dir string) error {
 		}
 	}
 	if slices.Contains(plan.Modules, "api") {
-		if err := codegen.BufCheck(ctx, dir); err != nil {
+		if err := codegen.BufCheck(ctx, dir, apiLayout(plan)); err != nil {
 			return err
 		}
 	}
@@ -269,7 +274,7 @@ func cmdLint(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	opts := lint.Options{MaxLines: *maxLines, Against: *against, Modules: plan.Modules, Exec: lint.ExecCommand}
+	opts := lint.Options{MaxLines: *maxLines, Against: *against, Modules: plan.Modules, API: apiLayout(plan), Exec: lint.ExecCommand}
 	if *skip != "" {
 		for _, name := range strings.Split(*skip, ",") {
 			opts.Skip = append(opts.Skip, strings.TrimSpace(name))

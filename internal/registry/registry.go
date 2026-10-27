@@ -114,6 +114,7 @@ var all = []Module{
 		ProjectPkg:   "api/openapi",
 		ProjectAlias: "openapi",
 		ExtraArgs:    []string{"api.WithOpenAPI(openapi.FS)"},
+		Options:      apiOptions,
 		Env: []EnvVar{
 			{Key: "API_HTTP_ADDR", Example: ":8080", Comment: "REST gateway address"},
 			{Key: "API_GRPC_ADDR", Example: "127.0.0.1:9091", Comment: "gRPC address"},
@@ -368,6 +369,47 @@ var sqlcOption = Option{
 			Kind:        KindMap,
 			Default:     map[string]any{},
 			Values:      &Option{},
+		},
+	},
+}
+
+// apiOptions are where the proto files of the api module live, buf settings on top of the
+// platform's and the generator of the OpenAPI description. The defaults are what every
+// project had before the options existed.
+var apiOptions = []Option{
+	{Name: "proto_dir", Description: "folder of the proto files, the buf module, relative to the project root", Default: "proto"},
+	{
+		Name:        "buf",
+		Description: "buf.yaml on top of the platform's",
+		Kind:        KindObject,
+		Fields: []Option{
+			{
+				Name:        "deps",
+				Description: "buf modules the proto files import, added to the platform's: buf.build/grpc-ecosystem/grpc-gateway",
+				Kind:        KindList,
+				Default:     []any{},
+				Items:       &Option{},
+			},
+			{
+				Name:        "breaking_except",
+				Description: "breaking rules left out of FILE: FILE_NO_DELETE, RPC_NO_DELETE, MESSAGE_NO_DELETE, FIELD_NO_DELETE",
+				Kind:        KindList,
+				Default:     []any{},
+				Items:       &Option{},
+			},
+		},
+	},
+	{
+		Name:        "openapi",
+		Description: "the OpenAPI description of the API",
+		Kind:        KindObject,
+		Fields: []Option{
+			{
+				Name:        "generator",
+				Description: "connect: protoc-gen-connect-openapi writes api/openapi/openapi.yaml; none: the project keeps that file itself; platform: the platform's own generator, not available yet",
+				Enum:        []string{"connect", "platform", "none"},
+				Default:     "connect",
+			},
 		},
 	},
 }
