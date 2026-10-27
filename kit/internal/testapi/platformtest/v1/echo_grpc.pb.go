@@ -26,6 +26,7 @@ const (
 	EchoService_Fail_FullMethodName        = "/platformtest.v1.EchoService/Fail"
 	EchoService_Upload_FullMethodName      = "/platformtest.v1.EchoService/Upload"
 	EchoService_OldEcho_FullMethodName     = "/platformtest.v1.EchoService/OldEcho"
+	EchoService_Kinds_FullMethodName       = "/platformtest.v1.EchoService/Kinds"
 	EchoService_CreateThing_FullMethodName = "/platformtest.v1.EchoService/CreateThing"
 )
 
@@ -40,6 +41,9 @@ type EchoServiceClient interface {
 	// Deprecated: Do not use.
 	// A method kept for old clients.
 	OldEcho(ctx context.Context, in *EchoRequest, opts ...grpc.CallOption) (*EchoResponse, error)
+	// Every form of JSON the gateway writes, for the test of the OpenAPI description:
+	// full=true sets every field, without it every field keeps its zero value.
+	Kinds(ctx context.Context, in *KindsRequest, opts ...grpc.CallOption) (*KindsResponse, error)
 	// A method that creates something, for idempotency.
 	CreateThing(ctx context.Context, in *CreateThingRequest, opts ...grpc.CallOption) (*CreateThingResponse, error)
 }
@@ -93,6 +97,16 @@ func (c *echoServiceClient) OldEcho(ctx context.Context, in *EchoRequest, opts .
 	return out, nil
 }
 
+func (c *echoServiceClient) Kinds(ctx context.Context, in *KindsRequest, opts ...grpc.CallOption) (*KindsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KindsResponse)
+	err := c.cc.Invoke(ctx, EchoService_Kinds_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *echoServiceClient) CreateThing(ctx context.Context, in *CreateThingRequest, opts ...grpc.CallOption) (*CreateThingResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateThingResponse)
@@ -114,6 +128,9 @@ type EchoServiceServer interface {
 	// Deprecated: Do not use.
 	// A method kept for old clients.
 	OldEcho(context.Context, *EchoRequest) (*EchoResponse, error)
+	// Every form of JSON the gateway writes, for the test of the OpenAPI description:
+	// full=true sets every field, without it every field keeps its zero value.
+	Kinds(context.Context, *KindsRequest) (*KindsResponse, error)
 	// A method that creates something, for idempotency.
 	CreateThing(context.Context, *CreateThingRequest) (*CreateThingResponse, error)
 	mustEmbedUnimplementedEchoServiceServer()
@@ -137,6 +154,9 @@ func (UnimplementedEchoServiceServer) Upload(context.Context, *UploadRequest) (*
 }
 func (UnimplementedEchoServiceServer) OldEcho(context.Context, *EchoRequest) (*EchoResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OldEcho not implemented")
+}
+func (UnimplementedEchoServiceServer) Kinds(context.Context, *KindsRequest) (*KindsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Kinds not implemented")
 }
 func (UnimplementedEchoServiceServer) CreateThing(context.Context, *CreateThingRequest) (*CreateThingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateThing not implemented")
@@ -234,6 +254,24 @@ func _EchoService_OldEcho_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EchoService_Kinds_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KindsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EchoServiceServer).Kinds(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EchoService_Kinds_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EchoServiceServer).Kinds(ctx, req.(*KindsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EchoService_CreateThing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateThingRequest)
 	if err := dec(in); err != nil {
@@ -274,6 +312,10 @@ var EchoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "OldEcho",
 			Handler:    _EchoService_OldEcho_Handler,
+		},
+		{
+			MethodName: "Kinds",
+			Handler:    _EchoService_Kinds_Handler,
 		},
 		{
 			MethodName: "CreateThing",

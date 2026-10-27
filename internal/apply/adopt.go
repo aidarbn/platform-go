@@ -106,7 +106,7 @@ var conflictHints = map[string]string{
 	gen.ComposePath: "Services the platform does not run go into `docker-compose.override.yml`, which docker compose merges automatically.",
 	gen.EnvPath:     "Variables of the project's own code go into `.env.project.example`; apply appends it to `.env.example`.",
 	gen.BufPath:     "The proto folder, extra dependencies and breaking exceptions are options of the api module: `proto_dir`, `buf.deps`, `buf.breaking_except`.",
-	gen.BufGenPath:  "Plugins and outputs are the platform's; the OpenAPI generator is the api option `openapi.generator` (`connect` or `none`).",
+	gen.BufGenPath:  "Plugins and outputs are the platform's; the OpenAPI generator is the api option `openapi.generator` (`connect`, `platform` or `none`).",
 }
 
 func conflictHint(p string) string {

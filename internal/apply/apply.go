@@ -119,6 +119,9 @@ func Build(dir string) (*Plan, error) {
 		p.Modules = append(p.Modules, m.Name)
 		tools = append(tools, m.Tools...)
 	}
+	if _, ok := f.Modules["api"]; ok {
+		tools = p.API.Tools(tools, version.Platform())
+	}
 	slices.Sort(p.Modules)
 
 	// Codemods newer than the version that applied the project last; the checks of all

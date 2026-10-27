@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+// A proto2 package with a service named like one of shop.v1.
+package legacy.v1;
+
+import "google/api/annotations.proto";
+
+// The old product service.
+service ProductService {
+  option deprecated = true;
+
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (google.api.http) = {get: "/legacy/ping"};
+  }
+}
+
+message PingRequest {
+  optional string echo = 1;
+}
+
+message PingResponse {
+  optional string echo = 1;
+  required int32 count = 2;
+}

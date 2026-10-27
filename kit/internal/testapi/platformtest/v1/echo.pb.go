@@ -14,6 +14,13 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	anypb "google.golang.org/protobuf/types/known/anypb"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
+	structpb "google.golang.org/protobuf/types/known/structpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	wrapperspb "google.golang.org/protobuf/types/known/wrapperspb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -25,6 +32,55 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type Color int32
+
+const (
+	Color_COLOR_UNSPECIFIED Color = 0
+	Color_COLOR_RED         Color = 1
+	Color_COLOR_GREEN       Color = 2
+)
+
+// Enum value maps for Color.
+var (
+	Color_name = map[int32]string{
+		0: "COLOR_UNSPECIFIED",
+		1: "COLOR_RED",
+		2: "COLOR_GREEN",
+	}
+	Color_value = map[string]int32{
+		"COLOR_UNSPECIFIED": 0,
+		"COLOR_RED":         1,
+		"COLOR_GREEN":       2,
+	}
+)
+
+func (x Color) Enum() *Color {
+	p := new(Color)
+	*p = x
+	return p
+}
+
+func (x Color) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Color) Descriptor() protoreflect.EnumDescriptor {
+	return file_platformtest_v1_echo_proto_enumTypes[0].Descriptor()
+}
+
+func (Color) Type() protoreflect.EnumType {
+	return &file_platformtest_v1_echo_proto_enumTypes[0]
+}
+
+func (x Color) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Color.Descriptor instead.
+func (Color) EnumDescriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{0}
+}
 
 type File struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -563,11 +619,361 @@ func (*FailResponse) Descriptor() ([]byte, []int) {
 	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{9}
 }
 
+type KindsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Full          bool                   `protobuf:"varint,2,opt,name=full,proto3" json:"full,omitempty"`
+	Color         Color                  `protobuf:"varint,3,opt,name=color,proto3,enum=platformtest.v1.Color" json:"color,omitempty"`
+	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KindsRequest) Reset() {
+	*x = KindsRequest{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KindsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KindsRequest) ProtoMessage() {}
+
+func (x *KindsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KindsRequest.ProtoReflect.Descriptor instead.
+func (*KindsRequest) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *KindsRequest) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *KindsRequest) GetFull() bool {
+	if x != nil {
+		return x.Full
+	}
+	return false
+}
+
+func (x *KindsRequest) GetColor() Color {
+	if x != nil {
+		return x.Color
+	}
+	return Color_COLOR_UNSPECIFIED
+}
+
+func (x *KindsRequest) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+type KindsResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Big    uint64                 `protobuf:"varint,2,opt,name=big,proto3" json:"big,omitempty"`
+	Small  int32                  `protobuf:"varint,3,opt,name=small,proto3" json:"small,omitempty"`
+	Ratio  float64                `protobuf:"fixed64,4,opt,name=ratio,proto3" json:"ratio,omitempty"`
+	Part   float32                `protobuf:"fixed32,5,opt,name=part,proto3" json:"part,omitempty"`
+	Flag   bool                   `protobuf:"varint,6,opt,name=flag,proto3" json:"flag,omitempty"`
+	Text   string                 `protobuf:"bytes,7,opt,name=text,proto3" json:"text,omitempty"`
+	Data   []byte                 `protobuf:"bytes,8,opt,name=data,proto3" json:"data,omitempty"`
+	Color  Color                  `protobuf:"varint,9,opt,name=color,proto3,enum=platformtest.v1.Color" json:"color,omitempty"`
+	Tags   []string               `protobuf:"bytes,10,rep,name=tags,proto3" json:"tags,omitempty"`
+	Counts map[string]int64       `protobuf:"bytes,11,rep,name=counts,proto3" json:"counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	Meta   *Meta                  `protobuf:"bytes,12,opt,name=meta,proto3" json:"meta,omitempty"`
+	Note   *string                `protobuf:"bytes,13,opt,name=note,proto3,oneof" json:"note,omitempty"`
+	// Types that are valid to be assigned to Choice:
+	//
+	//	*KindsResponse_Word
+	//	*KindsResponse_Number
+	Choice        isKindsResponse_Choice  `protobuf_oneof:"choice"`
+	At            *timestamppb.Timestamp  `protobuf:"bytes,16,opt,name=at,proto3" json:"at,omitempty"`
+	Took          *durationpb.Duration    `protobuf:"bytes,17,opt,name=took,proto3" json:"took,omitempty"`
+	Maybe         *wrapperspb.StringValue `protobuf:"bytes,18,opt,name=maybe,proto3" json:"maybe,omitempty"`
+	Extra         *structpb.Struct        `protobuf:"bytes,19,opt,name=extra,proto3" json:"extra,omitempty"`
+	Anything      *structpb.Value         `protobuf:"bytes,20,opt,name=anything,proto3" json:"anything,omitempty"`
+	Metas         []*Meta                 `protobuf:"bytes,21,rep,name=metas,proto3" json:"metas,omitempty"`
+	Mask          *fieldmaskpb.FieldMask  `protobuf:"bytes,22,opt,name=mask,proto3" json:"mask,omitempty"`
+	Packed        *anypb.Any              `protobuf:"bytes,23,opt,name=packed,proto3" json:"packed,omitempty"`
+	Nothing       *emptypb.Empty          `protobuf:"bytes,24,opt,name=nothing,proto3" json:"nothing,omitempty"`
+	ByNumber      map[int32]*Meta         `protobuf:"bytes,25,rep,name=by_number,json=byNumber,proto3" json:"by_number,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Negative      int64                   `protobuf:"zigzag64,26,opt,name=negative,proto3" json:"negative,omitempty"`
+	Unsigned      uint32                  `protobuf:"fixed32,27,opt,name=unsigned,proto3" json:"unsigned,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KindsResponse) Reset() {
+	*x = KindsResponse{}
+	mi := &file_platformtest_v1_echo_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KindsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KindsResponse) ProtoMessage() {}
+
+func (x *KindsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_platformtest_v1_echo_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KindsResponse.ProtoReflect.Descriptor instead.
+func (*KindsResponse) Descriptor() ([]byte, []int) {
+	return file_platformtest_v1_echo_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *KindsResponse) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetBig() uint64 {
+	if x != nil {
+		return x.Big
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetSmall() int32 {
+	if x != nil {
+		return x.Small
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetRatio() float64 {
+	if x != nil {
+		return x.Ratio
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetPart() float32 {
+	if x != nil {
+		return x.Part
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetFlag() bool {
+	if x != nil {
+		return x.Flag
+	}
+	return false
+}
+
+func (x *KindsResponse) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *KindsResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetColor() Color {
+	if x != nil {
+		return x.Color
+	}
+	return Color_COLOR_UNSPECIFIED
+}
+
+func (x *KindsResponse) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetCounts() map[string]int64 {
+	if x != nil {
+		return x.Counts
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetMeta() *Meta {
+	if x != nil {
+		return x.Meta
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetNote() string {
+	if x != nil && x.Note != nil {
+		return *x.Note
+	}
+	return ""
+}
+
+func (x *KindsResponse) GetChoice() isKindsResponse_Choice {
+	if x != nil {
+		return x.Choice
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetWord() string {
+	if x != nil {
+		if x, ok := x.Choice.(*KindsResponse_Word); ok {
+			return x.Word
+		}
+	}
+	return ""
+}
+
+func (x *KindsResponse) GetNumber() int32 {
+	if x != nil {
+		if x, ok := x.Choice.(*KindsResponse_Number); ok {
+			return x.Number
+		}
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.At
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetTook() *durationpb.Duration {
+	if x != nil {
+		return x.Took
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetMaybe() *wrapperspb.StringValue {
+	if x != nil {
+		return x.Maybe
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetExtra() *structpb.Struct {
+	if x != nil {
+		return x.Extra
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetAnything() *structpb.Value {
+	if x != nil {
+		return x.Anything
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetMetas() []*Meta {
+	if x != nil {
+		return x.Metas
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.Mask
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetPacked() *anypb.Any {
+	if x != nil {
+		return x.Packed
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetNothing() *emptypb.Empty {
+	if x != nil {
+		return x.Nothing
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetByNumber() map[int32]*Meta {
+	if x != nil {
+		return x.ByNumber
+	}
+	return nil
+}
+
+func (x *KindsResponse) GetNegative() int64 {
+	if x != nil {
+		return x.Negative
+	}
+	return 0
+}
+
+func (x *KindsResponse) GetUnsigned() uint32 {
+	if x != nil {
+		return x.Unsigned
+	}
+	return 0
+}
+
+type isKindsResponse_Choice interface {
+	isKindsResponse_Choice()
+}
+
+type KindsResponse_Word struct {
+	Word string `protobuf:"bytes,14,opt,name=word,proto3,oneof"`
+}
+
+type KindsResponse_Number struct {
+	Number int32 `protobuf:"varint,15,opt,name=number,proto3,oneof"`
+}
+
+func (*KindsResponse_Word) isKindsResponse_Choice() {}
+
+func (*KindsResponse_Number) isKindsResponse_Choice() {}
+
 var File_platformtest_v1_echo_proto protoreflect.FileDescriptor
 
 const file_platformtest_v1_echo_proto_rawDesc = "" +
 	"\n" +
-	"\x1aplatformtest/v1/echo.proto\x12\x0fplatformtest.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\"_\n" +
+	"\x1aplatformtest/v1/echo.proto\x12\x0fplatformtest.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x19google/protobuf/any.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/wrappers.proto\"_\n" +
 	"\x04File\x12\x1a\n" +
 	"\bfilename\x18\x01 \x01(\tR\bfilename\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x18\n" +
@@ -602,13 +1008,60 @@ const file_platformtest_v1_echo_proto_rawDesc = "" +
 	"\ashouted\x18\x03 \x01(\bR\ashouted\"!\n" +
 	"\vFailRequest\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\"\x0e\n" +
-	"\fFailResponse2\xfc\x03\n" +
+	"\fFailResponse\"t\n" +
+	"\fKindsRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04full\x18\x02 \x01(\bR\x04full\x12,\n" +
+	"\x05color\x18\x03 \x01(\x0e2\x16.platformtest.v1.ColorR\x05color\x12\x12\n" +
+	"\x04tags\x18\x04 \x03(\tR\x04tags\"\xfb\b\n" +
+	"\rKindsResponse\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x10\n" +
+	"\x03big\x18\x02 \x01(\x04R\x03big\x12\x14\n" +
+	"\x05small\x18\x03 \x01(\x05R\x05small\x12\x14\n" +
+	"\x05ratio\x18\x04 \x01(\x01R\x05ratio\x12\x12\n" +
+	"\x04part\x18\x05 \x01(\x02R\x04part\x12\x12\n" +
+	"\x04flag\x18\x06 \x01(\bR\x04flag\x12\x12\n" +
+	"\x04text\x18\a \x01(\tR\x04text\x12\x12\n" +
+	"\x04data\x18\b \x01(\fR\x04data\x12,\n" +
+	"\x05color\x18\t \x01(\x0e2\x16.platformtest.v1.ColorR\x05color\x12\x12\n" +
+	"\x04tags\x18\n" +
+	" \x03(\tR\x04tags\x12B\n" +
+	"\x06counts\x18\v \x03(\v2*.platformtest.v1.KindsResponse.CountsEntryR\x06counts\x12)\n" +
+	"\x04meta\x18\f \x01(\v2\x15.platformtest.v1.MetaR\x04meta\x12\x17\n" +
+	"\x04note\x18\r \x01(\tH\x01R\x04note\x88\x01\x01\x12\x14\n" +
+	"\x04word\x18\x0e \x01(\tH\x00R\x04word\x12\x18\n" +
+	"\x06number\x18\x0f \x01(\x05H\x00R\x06number\x12*\n" +
+	"\x02at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\x12-\n" +
+	"\x04took\x18\x11 \x01(\v2\x19.google.protobuf.DurationR\x04took\x122\n" +
+	"\x05maybe\x18\x12 \x01(\v2\x1c.google.protobuf.StringValueR\x05maybe\x12-\n" +
+	"\x05extra\x18\x13 \x01(\v2\x17.google.protobuf.StructR\x05extra\x122\n" +
+	"\banything\x18\x14 \x01(\v2\x16.google.protobuf.ValueR\banything\x12+\n" +
+	"\x05metas\x18\x15 \x03(\v2\x15.platformtest.v1.MetaR\x05metas\x12.\n" +
+	"\x04mask\x18\x16 \x01(\v2\x1a.google.protobuf.FieldMaskR\x04mask\x12,\n" +
+	"\x06packed\x18\x17 \x01(\v2\x14.google.protobuf.AnyR\x06packed\x120\n" +
+	"\anothing\x18\x18 \x01(\v2\x16.google.protobuf.EmptyR\anothing\x12I\n" +
+	"\tby_number\x18\x19 \x03(\v2,.platformtest.v1.KindsResponse.ByNumberEntryR\bbyNumber\x12\x1a\n" +
+	"\bnegative\x18\x1a \x01(\x12R\bnegative\x12\x1a\n" +
+	"\bunsigned\x18\x1b \x01(\aR\bunsigned\x1a9\n" +
+	"\vCountsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\x1aR\n" +
+	"\rByNumberEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x05R\x03key\x12+\n" +
+	"\x05value\x18\x02 \x01(\v2\x15.platformtest.v1.MetaR\x05value:\x028\x01B\b\n" +
+	"\x06choiceB\a\n" +
+	"\x05_note*>\n" +
+	"\x05Color\x12\x15\n" +
+	"\x11COLOR_UNSPECIFIED\x10\x00\x12\r\n" +
+	"\tCOLOR_RED\x10\x01\x12\x0f\n" +
+	"\vCOLOR_GREEN\x10\x022\xdc\x04\n" +
 	"\vEchoService\x12X\n" +
 	"\x04Echo\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x13\x82\xd3\xe4\x93\x02\r:\x01*\"\b/v1/echo\x12\\\n" +
 	"\x04Fail\x12\x1c.platformtest.v1.FailRequest\x1a\x1d.platformtest.v1.FailResponse\"\x17\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/fail/{kind}\x12`\n" +
 	"\x06Upload\x12\x1e.platformtest.v1.UploadRequest\x1a\x1f.platformtest.v1.UploadResponse\"\x15\x82\xd3\xe4\x93\x02\x0f:\x01*\"\n" +
 	"/v1/upload\x12b\n" +
-	"\aOldEcho\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x1a\x82\xd3\xe4\x93\x02\x11:\x01*\"\f/v1/old-echo\x88\x02\x01\x12o\n" +
+	"\aOldEcho\x12\x1c.platformtest.v1.EchoRequest\x1a\x1d.platformtest.v1.EchoResponse\"\x1a\x82\xd3\xe4\x93\x02\x11:\x01*\"\f/v1/old-echo\x88\x02\x01\x12^\n" +
+	"\x05Kinds\x12\x1d.platformtest.v1.KindsRequest\x1a\x1e.platformtest.v1.KindsResponse\"\x16\x82\xd3\xe4\x93\x02\x10\x12\x0e/v1/kinds/{id}\x12o\n" +
 	"\vCreateThing\x12#.platformtest.v1.CreateThingRequest\x1a$.platformtest.v1.CreateThingResponse\"\x15\x82\xd3\xe4\x93\x02\x0f:\x01*\"\n" +
 	"/v1/thingsBTZRgithub.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1b\x06proto3"
 
@@ -624,38 +1077,69 @@ func file_platformtest_v1_echo_proto_rawDescGZIP() []byte {
 	return file_platformtest_v1_echo_proto_rawDescData
 }
 
-var file_platformtest_v1_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_platformtest_v1_echo_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_platformtest_v1_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_platformtest_v1_echo_proto_goTypes = []any{
-	(*File)(nil),                // 0: platformtest.v1.File
-	(*Meta)(nil),                // 1: platformtest.v1.Meta
-	(*UploadRequest)(nil),       // 2: platformtest.v1.UploadRequest
-	(*UploadResponse)(nil),      // 3: platformtest.v1.UploadResponse
-	(*CreateThingRequest)(nil),  // 4: platformtest.v1.CreateThingRequest
-	(*CreateThingResponse)(nil), // 5: platformtest.v1.CreateThingResponse
-	(*EchoRequest)(nil),         // 6: platformtest.v1.EchoRequest
-	(*EchoResponse)(nil),        // 7: platformtest.v1.EchoResponse
-	(*FailRequest)(nil),         // 8: platformtest.v1.FailRequest
-	(*FailResponse)(nil),        // 9: platformtest.v1.FailResponse
+	(Color)(0),                     // 0: platformtest.v1.Color
+	(*File)(nil),                   // 1: platformtest.v1.File
+	(*Meta)(nil),                   // 2: platformtest.v1.Meta
+	(*UploadRequest)(nil),          // 3: platformtest.v1.UploadRequest
+	(*UploadResponse)(nil),         // 4: platformtest.v1.UploadResponse
+	(*CreateThingRequest)(nil),     // 5: platformtest.v1.CreateThingRequest
+	(*CreateThingResponse)(nil),    // 6: platformtest.v1.CreateThingResponse
+	(*EchoRequest)(nil),            // 7: platformtest.v1.EchoRequest
+	(*EchoResponse)(nil),           // 8: platformtest.v1.EchoResponse
+	(*FailRequest)(nil),            // 9: platformtest.v1.FailRequest
+	(*FailResponse)(nil),           // 10: platformtest.v1.FailResponse
+	(*KindsRequest)(nil),           // 11: platformtest.v1.KindsRequest
+	(*KindsResponse)(nil),          // 12: platformtest.v1.KindsResponse
+	nil,                            // 13: platformtest.v1.KindsResponse.CountsEntry
+	nil,                            // 14: platformtest.v1.KindsResponse.ByNumberEntry
+	(*timestamppb.Timestamp)(nil),  // 15: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),    // 16: google.protobuf.Duration
+	(*wrapperspb.StringValue)(nil), // 17: google.protobuf.StringValue
+	(*structpb.Struct)(nil),        // 18: google.protobuf.Struct
+	(*structpb.Value)(nil),         // 19: google.protobuf.Value
+	(*fieldmaskpb.FieldMask)(nil),  // 20: google.protobuf.FieldMask
+	(*anypb.Any)(nil),              // 21: google.protobuf.Any
+	(*emptypb.Empty)(nil),          // 22: google.protobuf.Empty
 }
 var file_platformtest_v1_echo_proto_depIdxs = []int32{
-	0, // 0: platformtest.v1.UploadRequest.avatar:type_name -> platformtest.v1.File
-	0, // 1: platformtest.v1.UploadRequest.images:type_name -> platformtest.v1.File
-	1, // 2: platformtest.v1.UploadRequest.meta:type_name -> platformtest.v1.Meta
-	6, // 3: platformtest.v1.EchoService.Echo:input_type -> platformtest.v1.EchoRequest
-	8, // 4: platformtest.v1.EchoService.Fail:input_type -> platformtest.v1.FailRequest
-	2, // 5: platformtest.v1.EchoService.Upload:input_type -> platformtest.v1.UploadRequest
-	6, // 6: platformtest.v1.EchoService.OldEcho:input_type -> platformtest.v1.EchoRequest
-	4, // 7: platformtest.v1.EchoService.CreateThing:input_type -> platformtest.v1.CreateThingRequest
-	7, // 8: platformtest.v1.EchoService.Echo:output_type -> platformtest.v1.EchoResponse
-	9, // 9: platformtest.v1.EchoService.Fail:output_type -> platformtest.v1.FailResponse
-	3, // 10: platformtest.v1.EchoService.Upload:output_type -> platformtest.v1.UploadResponse
-	7, // 11: platformtest.v1.EchoService.OldEcho:output_type -> platformtest.v1.EchoResponse
-	5, // 12: platformtest.v1.EchoService.CreateThing:output_type -> platformtest.v1.CreateThingResponse
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	1,  // 0: platformtest.v1.UploadRequest.avatar:type_name -> platformtest.v1.File
+	1,  // 1: platformtest.v1.UploadRequest.images:type_name -> platformtest.v1.File
+	2,  // 2: platformtest.v1.UploadRequest.meta:type_name -> platformtest.v1.Meta
+	0,  // 3: platformtest.v1.KindsRequest.color:type_name -> platformtest.v1.Color
+	0,  // 4: platformtest.v1.KindsResponse.color:type_name -> platformtest.v1.Color
+	13, // 5: platformtest.v1.KindsResponse.counts:type_name -> platformtest.v1.KindsResponse.CountsEntry
+	2,  // 6: platformtest.v1.KindsResponse.meta:type_name -> platformtest.v1.Meta
+	15, // 7: platformtest.v1.KindsResponse.at:type_name -> google.protobuf.Timestamp
+	16, // 8: platformtest.v1.KindsResponse.took:type_name -> google.protobuf.Duration
+	17, // 9: platformtest.v1.KindsResponse.maybe:type_name -> google.protobuf.StringValue
+	18, // 10: platformtest.v1.KindsResponse.extra:type_name -> google.protobuf.Struct
+	19, // 11: platformtest.v1.KindsResponse.anything:type_name -> google.protobuf.Value
+	2,  // 12: platformtest.v1.KindsResponse.metas:type_name -> platformtest.v1.Meta
+	20, // 13: platformtest.v1.KindsResponse.mask:type_name -> google.protobuf.FieldMask
+	21, // 14: platformtest.v1.KindsResponse.packed:type_name -> google.protobuf.Any
+	22, // 15: platformtest.v1.KindsResponse.nothing:type_name -> google.protobuf.Empty
+	14, // 16: platformtest.v1.KindsResponse.by_number:type_name -> platformtest.v1.KindsResponse.ByNumberEntry
+	2,  // 17: platformtest.v1.KindsResponse.ByNumberEntry.value:type_name -> platformtest.v1.Meta
+	7,  // 18: platformtest.v1.EchoService.Echo:input_type -> platformtest.v1.EchoRequest
+	9,  // 19: platformtest.v1.EchoService.Fail:input_type -> platformtest.v1.FailRequest
+	3,  // 20: platformtest.v1.EchoService.Upload:input_type -> platformtest.v1.UploadRequest
+	7,  // 21: platformtest.v1.EchoService.OldEcho:input_type -> platformtest.v1.EchoRequest
+	11, // 22: platformtest.v1.EchoService.Kinds:input_type -> platformtest.v1.KindsRequest
+	5,  // 23: platformtest.v1.EchoService.CreateThing:input_type -> platformtest.v1.CreateThingRequest
+	8,  // 24: platformtest.v1.EchoService.Echo:output_type -> platformtest.v1.EchoResponse
+	10, // 25: platformtest.v1.EchoService.Fail:output_type -> platformtest.v1.FailResponse
+	4,  // 26: platformtest.v1.EchoService.Upload:output_type -> platformtest.v1.UploadResponse
+	8,  // 27: platformtest.v1.EchoService.OldEcho:output_type -> platformtest.v1.EchoResponse
+	12, // 28: platformtest.v1.EchoService.Kinds:output_type -> platformtest.v1.KindsResponse
+	6,  // 29: platformtest.v1.EchoService.CreateThing:output_type -> platformtest.v1.CreateThingResponse
+	24, // [24:30] is the sub-list for method output_type
+	18, // [18:24] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_platformtest_v1_echo_proto_init() }
@@ -663,18 +1147,23 @@ func file_platformtest_v1_echo_proto_init() {
 	if File_platformtest_v1_echo_proto != nil {
 		return
 	}
+	file_platformtest_v1_echo_proto_msgTypes[11].OneofWrappers = []any{
+		(*KindsResponse_Word)(nil),
+		(*KindsResponse_Number)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_platformtest_v1_echo_proto_rawDesc), len(file_platformtest_v1_echo_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   10,
+			NumEnums:      1,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_platformtest_v1_echo_proto_goTypes,
 		DependencyIndexes: file_platformtest_v1_echo_proto_depIdxs,
+		EnumInfos:         file_platformtest_v1_echo_proto_enumTypes,
 		MessageInfos:      file_platformtest_v1_echo_proto_msgTypes,
 	}.Build()
 	File_platformtest_v1_echo_proto = out.File

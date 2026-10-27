@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+// Types of the shop test API: the shapes the gateway writes.
+package shop.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "platform/i18n/v1/i18n.proto";
+
+// A product of the menu.
+//
+// Products are shown on the tablets by category.
+message Product {
+  // The id of the product.
+  int64 id = 1;
+  string name = 2 [(platform.i18n.v1.i18n_field) = {
+    key: "product.name"
+    instance_key: "id"
+  }];
+  // Price in tiyn.
+  uint64 price = 3 [(buf.validate.field).uint64 = {gte: 1, lte: 100000000}];
+  Status status = 4;
+  repeated string labels = 5 [(buf.validate.field).repeated = {
+    max_items: 10
+    unique: true
+    items: {string: {min_len: 1, max_len: 32}}
+  }];
+  map<string, string> attributes = 6 [(buf.validate.field).map = {
+    max_pairs: 20
+    keys: {string: {pattern: "^[a-z_]+$"}}
+  }];
+  optional string note = 7; // a trailing comment documents the field too
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.StringValue barcode = 9;
+  Image image = 10;
+  oneof discount {
+    uint32 percent = 11 [(buf.validate.field).uint32.lte = 100];
+    int64 amount = 12;
+  }
+  string old_code = 13 [deprecated = true];
+  double weight = 14 [(buf.validate.field).double = {gt: 0, lt: 1000}];
+  string sku = 15 [(buf.validate.field).string = {
+    prefix: "SKU-"
+    max_bytes: 40
+    example: "SKU-1"
+  }];
+  map<int32, Image> gallery = 16;
+  bytes thumbnail = 17;
+}
+
+// The state of a product.
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  // Shown on the tablets.
+  STATUS_ACTIVE = 1;
+  STATUS_HIDDEN = 2;
+  STATUS_ARCHIVED = 3 [deprecated = true];
+}
+
+message Image {
+  string url = 1 [(buf.validate.field).string.uri = true];
+  int32 width = 2;
+}
+
+// FileData is a file of a multipart request.
+message FileData {
+  string filename = 1;
+  string content_type = 2;
+  bytes content = 3;
+}

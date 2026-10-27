@@ -123,6 +123,10 @@ Before v1 the platform is still finding its shape, so the policy is what it can 
 
 Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
 
+### v0.10.0 (unreleased)
+
+- **The platform's own OpenAPI generator, opt-in.** `openapi.generator: platform` in the `api` section of `platformgo.yaml` writes `api/openapi/openapi.yaml` with `protoc-gen-platform-openapi`, a plugin of the platform, instead of protoc-gen-connect-openapi; `apply` pins it in `go.mod` in place of the connect plugin, whose module leaves the project's graph with the next `go mod tidy`. The description changes for the project's clients: every field of a response is required, request schemas of messages a response also uses are named `<message>Input`, int64 fields of a request take a number or a string, tags are per service, every operation has the shared `Error` answer, uploads are `multipart/form-data`. `gnostic` annotations are not read by it. Without the option nothing changes: `buf.gen.yaml`, the pinned tools and the description are the same byte for byte (checked on sendkz and modelwatch). Set it back to `connect` to return.
+
 ### v0.9.1
 
 - **`platformgo upgrade` works again for versions that bring new dependencies.** Up to v0.9.0 it ran `go get` of the module root, which is no package, so `go.sum` got no entries for the modules the new version needs; moving to v0.9.0, which brings `github.com/grafana/pyroscope-go` and `github.com/jackc/pgx-shopspring-decimal`, stopped at `go tool platformgo apply` with `missing go.sum entry`. Now it runs `go get github.com/aidarbn/platform-go/cmd/platformgo@<version>`, which records what the new tool needs; `apply` tidies the rest as before. The dry run does the same in its copy.
