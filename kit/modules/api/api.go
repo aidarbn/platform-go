@@ -32,6 +32,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -279,6 +280,7 @@ type Registry struct {
 	streamChain []string
 
 	public       func(method string) bool
+	normalizers  []func(proto.Message)
 	idemRequired []string
 	idemUser     func(context.Context) string
 	corsHeaders  []string
@@ -347,6 +349,21 @@ func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc
 			r.entries = append(r.entries, chainEntry{phase: PhaseAuthorize, name: entryName("", stream), stream: stream})
 		}
 	})
+}
+
+// Normalize changes every request message before validation, after the project's
+// authentication and guards: trimming strings, Unicode normalisation, as taply's strutil
+// does. It runs in PhaseTransform+50, after the other transforms of the phase — the
+// base fields the i18n module takes from translations are normalised too — and the
+// functions run in the order they were added.
+//
+//	api.Normalize(app, strutil.Normalize)
+func Normalize(app *platform.App, fn func(proto.Message)) {
+	if fn == nil {
+		panic("api: a nil normalizer")
+	}
+	r := registry(app)
+	r.add(func() { r.normalizers = append(r.normalizers, fn) })
 }
 
 // PublicMethods tells the API which methods are public, for their separate rate limit.
@@ -603,6 +620,9 @@ func (m *Module) Start(ctx context.Context) error {
 			return fmt.Errorf("api: rate limit per principal: %w", err)
 		}
 		entries = append(entries, chainEntry{phase: PhaseGuard, name: "rate-limit-principal", unary: m.principals.unary})
+	}
+	if len(m.registry.normalizers) > 0 {
+		entries = append(entries, chainEntry{phase: PhaseTransform + 50, name: "normalize", unary: normalizeUnary(m.registry.normalizers)})
 	}
 	entries = append(entries, chainEntry{phase: PhaseValidate, name: "validate", unary: validateUnary(validator)})
 	if idem != nil {
