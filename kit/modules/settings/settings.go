@@ -213,6 +213,18 @@ func (r *repo) Save(ctx context.Context, key, value, actor string) error {
 	return err
 }
 
+// SaveIfAbsent lets an import store a value without overwriting one an administrator set
+// in the meantime: the check and the write are one statement.
+func (r *repo) SaveIfAbsent(ctx context.Context, key, value, actor string) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		"INSERT INTO "+r.table+" (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING",
+		key, value, actor)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 func (r *repo) Delete(ctx context.Context, key string) error {
 	_, err := r.pool.Exec(ctx, "DELETE FROM "+r.table+" WHERE key = $1", key)
 	return err
