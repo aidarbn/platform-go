@@ -270,14 +270,13 @@ type Service struct {
 // Registry holds what the project adds to the API. It lives in the container and is
 // filled from wireDomain, before the module starts.
 type Registry struct {
-	mu         sync.Mutex
-	sealed     bool
-	services   []Service
-	unary      []grpc.UnaryServerInterceptor
-	stream     []grpc.StreamServerInterceptor
-	authUnary  []grpc.UnaryServerInterceptor
-	authStream []grpc.StreamServerInterceptor
-	methods    []string
+	mu          sync.Mutex
+	sealed      bool
+	services    []Service
+	entries     []chainEntry
+	methods     []string
+	chain       []string
+	streamChain []string
 
 	public       func(method string) bool
 	idemRequired []string
@@ -322,30 +321,30 @@ func Register(app *platform.App, s Service) {
 	r.add(func() { r.services = append(r.services, s) })
 }
 
-// AddUnaryInterceptor adds a project interceptor, such as authentication. Project
-// interceptors run after recovery, metrics and logging and before request validation.
+// AddUnaryInterceptor adds a project interceptor, such as authentication, in
+// PhaseAuthenticate: after recovery, metrics, logging, the rate limit by address and the
+// translation of errors, and before the access check and request validation.
+// AddUnaryInterceptorAt places one in another phase.
 func AddUnaryInterceptor(app *platform.App, i grpc.UnaryServerInterceptor) {
-	r := registry(app)
-	r.add(func() { r.unary = append(r.unary, i) })
+	AddUnaryInterceptorAt(app, PhaseAuthenticate, "", i)
 }
 
-// AddStreamInterceptor adds a project stream interceptor.
+// AddStreamInterceptor adds a project stream interceptor in PhaseAuthenticate.
 func AddStreamInterceptor(app *platform.App, i grpc.StreamServerInterceptor) {
-	r := registry(app)
-	r.add(func() { r.stream = append(r.stream, i) })
+	AddStreamInterceptorAt(app, PhaseAuthenticate, "", i)
 }
 
-// Authorize adds an access check. It runs after every project interceptor — so the
-// caller's identity is already in the context — and before request validation. The rbac
-// module registers itself here.
+// Authorize adds an access check in PhaseAuthorize. It runs after the project's
+// authentication — so the caller's identity is already in the context — and before
+// request validation. The rbac module registers itself here.
 func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc.StreamServerInterceptor) {
 	r := registry(app)
 	r.add(func() {
 		if unary != nil {
-			r.authUnary = append(r.authUnary, unary)
+			r.entries = append(r.entries, chainEntry{phase: PhaseAuthorize, name: entryName("", unary), unary: unary})
 		}
 		if stream != nil {
-			r.authStream = append(r.authStream, stream)
+			r.entries = append(r.entries, chainEntry{phase: PhaseAuthorize, name: entryName("", stream), stream: stream})
 		}
 	})
 }
@@ -576,38 +575,45 @@ func (m *Module) Start(ctx context.Context) error {
 		return fmt.Errorf("api metrics: %w", err)
 	}
 
-	// The client address is settled first, so everything after it sees the checked one.
-	// Metrics and logging are outermost after it, so they see a recovered panic and a
-	// hidden internal error as the Internal status the client gets. The rate limit by
-	// address comes before project interceptors, so a flood never reaches token
-	// validation; the one by principal comes after them, once the principal is known;
-	// idempotency comes last, so a rejected call is not remembered.
+	// The chain, by phase (see Phase): the outer recovery first, so a panic anywhere in
+	// the chain is answered with Internal. The client address is settled next, so
+	// everything after it sees the checked one; metrics and logging come after it. The
+	// rate limit by address comes before the project's interceptors, so a flood never
+	// reaches token validation; the one by principal comes after them, once the principal
+	// is known. Idempotency comes after validation, so a rejected call is not remembered,
+	// and the inner recovery after idempotency, so a panic of the handler is remembered
+	// as the Internal the client got instead of holding the key.
 	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted, log: m.log}
-	platformUnary := []grpc.UnaryServerInterceptor{m.clientIP.unary, m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
+	entries := []chainEntry{
+		{phase: PhaseRecover, name: "recover", unary: recoverUnary(m.log, m.metrics), stream: recoverStream(m.log, m.metrics)},
+		{phase: PhaseObserve, name: "client-ip", unary: m.clientIP.unary, stream: m.clientIP.stream},
+		{phase: PhaseObserve, name: "metrics", unary: m.metrics.unary, stream: m.metrics.stream},
+		{phase: PhaseObserve, name: "log", unary: logUnary(m.log), stream: logStream(m.log)},
+		{phase: PhaseObserve, name: "errors", unary: errorsUnary(m.log)},
+	}
 	if m.cfg.RateLimit.RPS > 0 {
 		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {
 			return fmt.Errorf("api: rate limit: %w", err)
 		}
-		platformUnary = append(platformUnary, m.limiter.unary)
+		entries = append(entries, chainEntry{phase: PhaseLimit, name: "rate-limit", unary: m.limiter.unary})
 	}
-	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.registry.replacements, m.log, m.deprecated))
-	var tail []grpc.UnaryServerInterceptor
+	entries = append(entries, chainEntry{phase: PhaseLimit, name: "deprecated", unary: deprecatedUnary(deprecated, m.registry.replacements, m.log, m.deprecated)})
 	if m.cfg.RateLimit.PrincipalRPS > 0 && m.registry.rateKey != nil {
 		if m.principals, err = newPrincipalLimiter(m.cfg.RateLimit, m.registry.rateKey, m.app.Metrics()); err != nil {
 			return fmt.Errorf("api: rate limit per principal: %w", err)
 		}
-		tail = append(tail, m.principals.unary)
+		entries = append(entries, chainEntry{phase: PhaseGuard, name: "rate-limit-principal", unary: m.principals.unary})
 	}
-	tail = append(tail, validateUnary(validator))
+	entries = append(entries, chainEntry{phase: PhaseValidate, name: "validate", unary: validateUnary(validator)})
 	if idem != nil {
-		tail = append(tail, idem.unary)
+		entries = append(entries, chainEntry{phase: PhaseIdempotency, name: "idempotency", unary: idem.unary})
 	}
-	unary := slices.Concat(platformUnary, m.registry.unary, m.registry.authUnary, tail)
-	stream := slices.Concat(
-		[]grpc.StreamServerInterceptor{m.clientIP.stream, m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
-		m.registry.stream,
-		m.registry.authStream,
-	)
+	entries = append(entries, chainEntry{phase: PhaseHandlerRecover, name: "recover", unary: recoverUnary(m.log, m.metrics), stream: recoverStream(m.log, m.metrics)})
+	unary, stream, unaryNames, streamNames := buildChain(entries, m.registry.entries)
+	m.registry.mu.Lock()
+	m.registry.chain, m.registry.streamChain = unaryNames, streamNames
+	m.registry.mu.Unlock()
+	m.log.Info("the interceptor chain", "unary", strings.Join(unaryNames, " > "), "stream", strings.Join(streamNames, " > "))
 
 	m.grpcSrv = grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),

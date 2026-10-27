@@ -16,13 +16,38 @@ import (
 
 // ResponseInterceptor translates responses and error messages by the locale of the
 // request. skip, when set, turns substitution off for a call — taply does that for
-// tablets of a restaurant with translations disabled; errors are translated anyway.
+// tablets of a restaurant with translations disabled; errors are translated anyway. It is
+// ErrorInterceptor and FieldsInterceptor in one; the i18n module puts the two in separate
+// places of the chain.
 func (c *Client) ResponseInterceptor(skip func(ctx context.Context) bool) grpc.UnaryServerInterceptor {
+	errs, fields := c.ErrorInterceptor(), c.FieldsInterceptor(skip)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return errs(ctx, req, info, func(ctx context.Context, req any) (any, error) {
+			return fields(ctx, req, info, handler)
+		})
+	}
+}
+
+// ErrorInterceptor translates the message of an error by the locale of the request. It
+// belongs outside the project's authentication, so its refusals are translated too.
+func (c *Client) ErrorInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		resp, err := handler(ctx, req)
-		locale := c.ResolveLocale(ctx)
 		if err != nil {
-			return resp, c.TranslateError(err, locale)
+			return resp, c.TranslateError(err, c.ResolveLocale(ctx))
+		}
+		return resp, nil
+	}
+}
+
+// FieldsInterceptor puts the translations of annotated fields into a response by the
+// locale of the request. skip, when set, leaves a call untranslated; it belongs after
+// the project's authentication, so skip sees the caller.
+func (c *Client) FieldsInterceptor(skip func(ctx context.Context) bool) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if err != nil {
+			return resp, err
 		}
 		if skip != nil && skip(ctx) {
 			return resp, nil
@@ -38,7 +63,7 @@ func (c *Client) ResponseInterceptor(skip func(ctx context.Context) bool) grpc.U
 		}
 		cache := c.load(ctx, refs)
 		if len(cache) > 0 {
-			substitute(msg.ProtoReflect(), cache, locale)
+			substitute(msg.ProtoReflect(), cache, c.ResolveLocale(ctx))
 		}
 		return resp, nil
 	}

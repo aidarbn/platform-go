@@ -85,7 +85,7 @@ func start(t *testing.T, cfg api.Config, opts ...api.Option) *service {
 			Gateway: testv1.RegisterEchoServiceHandler,
 		})
 		// A project interceptor, such as authentication, sees REST calls as gRPC calls.
-		api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		api.AddUnaryInterceptorAt(app, api.PhaseAuthenticate, "test-auth", func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 			md, _ := metadata.FromIncomingContext(ctx)
 			s.seen <- info.FullMethod + " user=" + strings.Join(md.Get("x-user"), ",")
 			return h(ctx, req)
