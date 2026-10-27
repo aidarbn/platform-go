@@ -27,6 +27,7 @@ The body is `{"type": "order.paid", "timestamp": "...", "data": <order>}`, built
 - A 2xx answer completes the job, `410 Gone` cancels it, anything else is retried: `webhookx.DeliveryAttempts` (15) attempts with River's backoff, about two days.
 - The last failed attempt logs the alert `webhook_delivery_failed` (`app.DeclareAlerts(webhookx.AlertDeliveryFailed)`); so does a pending job whose endpoint was removed from the configuration.
 - Deliveries are counted in `river_jobs_total{kind="webhook_delivery"}` like every job.
+- Deliveries go to River's `default` queue: a project that sets its queues with `RIVER_QUEUES` or `riverx.QueuesFrom` keeps `default` among them, or the webhooks wait unsent. `riverx.MaxAttemptsFrom` may change the attempts for the kind `webhook_delivery`.
 - Endpoints come from the project's configuration, not from users: there is no protection against a URL pointing inside the network.
 
 `webhookx.NewSecret()` makes a secret to hand to the receiving side.
@@ -57,6 +58,8 @@ The receiver verifies the signature against any of the secrets and the timestamp
 | `401` | wrong signature or a timestamp outside the tolerance |
 | `405`, `413` | not a POST, a body over `MaxBody` (1 MiB) |
 | `500` | `Handle` failed: the sender retries |
+
+A webhook the receiver refuses or fails is logged by the API with its body, as every failed request is; `api.MaskLogBodies(app, "/webhooks/")` keeps the bodies out when they carry personal data.
 
 Processed ids live in `platform_webhook_inbound`, versioned like the other platform tables, and are removed after `Retention` (24h), at most once an hour by the receiver itself. The retention must exceed twice the tolerance, or a replay could slip in after its id is gone; `NewReceiver` refuses a shorter one.
 
