@@ -66,6 +66,18 @@ func TestMetricAliasesAtMetrics(t *testing.T) {
 	if strings.Index(body, "maas_deprecated") > strings.Index(body, "old_calls_total") {
 		t.Error("families are not sorted by name")
 	}
+
+	// both names grow together
+	calls.WithLabelValues("/a.v1.S/Old").Add(2)
+	body = scrapeOps(t, addr, "")
+	for _, want := range []string{
+		`api_deprecated_calls_total{method="/a.v1.S/Old"} 5`,
+		`maas_deprecated_rpc_calls_total{method="/a.v1.S/Old"} 5`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("after an increment metrics lack %q", want)
+		}
+	}
 }
 
 func TestAliasMetricRejectsBadNames(t *testing.T) {
