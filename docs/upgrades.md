@@ -18,7 +18,7 @@ The guarantee rests on three layers: an architecture that leaves almost nothing 
 ## 2. What `platformgo upgrade` does
 
 1. warns when `go.mod` is not tidy before the upgrade: `apply` runs `go mod tidy`, and somebody else's leftovers would land in the upgrade commit, so they go into a commit of their own first;
-2. `go get` of the new version, the version recorded in `platformgo.yaml`;
+2. `go get github.com/aidarbn/platform-go/cmd/platformgo@<version>` — of the platform tool rather than the module, so `go.sum` gets every module the new tool needs, new ones included — and the version recorded in `platformgo.yaml`;
 3. `go tool platformgo apply` by the new version: generated files, pinned tools, codemods, the lock;
 4. checks: `go build ./...`, `platformgo verify`, `go test ./...`. A failed check leaves the upgrade in place to be fixed or reverted and prints a warning; the command still succeeds, as it did before the checks existed. `--strict` makes a failed check fail the command, `--no-check` skips the checks, for CI that runs its own.
 
@@ -59,7 +59,7 @@ warning: upgrade: v0.5.11 → v0.8.0 would fail checks: go build, platformgo ver
 
 A project created by the platform has `.github/workflows/platform-upgrade.yml`. Every Monday, and by hand from the Actions tab, it calls the upgrade workflow of the platform (`.github/workflows/upgrade.yml`):
 
-1. `platformgo upgrade latest`, with `--no-check` when the version of the project knows it; a project already on the latest release ends here;
+1. `platformgo upgrade --no-check latest`, run by the latest platformgo release (`go run github.com/aidarbn/platform-go/cmd/platformgo@latest`) rather than by the version the project pins, so a fix of the upgrade itself reaches every project with the next run; the project is still applied by the version it moves to. A project already on the latest release ends here;
 2. build, vet and `platformgo verify` — the checks that need no database;
 3. the result goes to a branch and a pull request against the base branch, a draft when the checks failed; a later release replaces the branch;
 4. the CI run of the pull request waits for approval, because the pull request was opened with the workflow token; the workflow approves it, and the checks show up on the pull request. When approval is not allowed, it starts the project CI on the branch through `workflow_dispatch` instead, and the checks land on the commit. With a `token` secret that may start workflows the pull request starts CI by itself.
@@ -85,7 +85,7 @@ A project created before this workflow adds the file by hand, together with `wor
 
 | Check | What it catches |
 |---|---|
-| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout: `apply` by the new version, `verify`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
+| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout by `platformgo upgrade` of the checkout, as a real upgrade: the checkout stands in for a version of its own through `replace`, with no `go mod tidy` beforehand, so a module the new version needs and the upgrade leaves out of `go.sum` fails it. Then `verify`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
 | `kit` API compatibility | `apidiff` against the previous tag. Every run reports the changes; a release tag fails when an incompatible change ships without a new minor version (before v1) or major version (after v1) |
 | Reference projects | demo services in the repository, one per typical module set, always on the latest version |
 | Codemods | before and after tests: the result matches, keeps comments, compiles with the new `kit` and a second run changes nothing |
@@ -122,6 +122,11 @@ Before v1 the platform is still finding its shape, so the policy is what it can 
 ## Behaviour changes
 
 Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
+
+### v0.9.1
+
+- **`platformgo upgrade` works again for versions that bring new dependencies.** Up to v0.9.0 it ran `go get` of the module root, which is no package, so `go.sum` got no entries for the modules the new version needs; moving to v0.9.0, which brings `github.com/grafana/pyroscope-go` and `github.com/jackc/pgx-shopspring-decimal`, stopped at `go tool platformgo apply` with `missing go.sum entry`. Now it runs `go get github.com/aidarbn/platform-go/cmd/platformgo@<version>`, which records what the new tool needs; `apply` tidies the rest as before. The dry run does the same in its copy.
+- **The `upgrade` workflow runs the latest platformgo, not the one the project pins.** It used `go tool platformgo upgrade`, so a project on v0.9.0 or older kept the broken step whatever was fixed on the platform; now it runs `go run github.com/aidarbn/platform-go/cmd/platformgo@latest upgrade --no-check <version>`. The inputs are the same, and a project on v0.5 to v0.9.0 is upgraded by its next run with nothing to change. To upgrade by hand from v0.9.0 or older, get the fixed tool first: `go get github.com/aidarbn/platform-go/cmd/platformgo@v0.9.1 && go tool platformgo upgrade v0.9.1`; a `platformgo` v0.9.1 on the path does it too, since it drives the upgrade itself.
 
 ### v0.9.0
 
