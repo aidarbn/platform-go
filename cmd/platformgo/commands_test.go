@@ -53,7 +53,7 @@ func flagSets(t *testing.T) map[string][]string {
 				switch {
 				case sel.Sel.Name == "NewFlagSet":
 					command, _, _ = strings.Cut(value, " ")
-				case slices.Contains([]string{"String", "Bool", "Int", "Duration"}, sel.Sel.Name):
+				case slices.Contains([]string{"String", "Bool", "Int", "Duration", "Func"}, sel.Sel.Name):
 					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "fs" {
 						flags = append(flags, value)
 					}
