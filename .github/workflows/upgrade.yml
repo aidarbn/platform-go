@@ -6,7 +6,7 @@ name: platform upgrade
 #
 #   jobs:
 #     upgrade:
-#       uses: aidarbn/platform-go/.github/workflows/upgrade.yml@v0.5.11
+#       uses: aidarbn/platform-go/.github/workflows/upgrade.yml@main
 #       permissions: { contents: write, pull-requests: write, actions: write }
 #       with:
 #         base: main
@@ -14,6 +14,11 @@ name: platform upgrade
 # The upgrade is `platformgo upgrade`: go get, then apply by the new version —
 # generated files, pinned tools, codemods, the lock. Nothing happens when the project
 # is already on the latest release.
+#
+# The upgrade is driven by the latest platformgo release, not by the platformgo the
+# project pins: a fix of the upgrade itself then reaches every project at once. The
+# pinned v0.9.0 and older could not move a project to a version with new dependencies
+# (missing go.sum entries); the project itself is still applied by the version it moves to.
 #
 # The CI run of a pull request opened with the workflow token waits for approval (a
 # GitHub rule against loops); the workflow approves it, so the checks show up on the
@@ -45,7 +50,7 @@ on:
         type: string
         default: "chore: platform-go {from} → {to}"
       setup-go:
-        description: install Go with actions/setup-go; false uses the Go of the runner (GOTOOLCHAIN=auto), whose module cache outlives the run on a self-hosted runner
+        description: install Go with actions/setup-go; false uses the Go of the runner (GOTOOLCHAIN=auto), whose module cache outlives the run on a self-hosted runner. The upgrade builds the latest platformgo, which may need a newer Go than the project; GOTOOLCHAIN=local on the runner then fails it
         type: boolean
         default: true
       ci-workflow:
@@ -76,14 +81,14 @@ jobs:
 
       - name: Upgrade
         id: upgrade
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           from=$(go list -m -f '{{.Version}}' "$MODULE")
-          # The checks below need no database; versions that check after the upgrade
-          # themselves are told not to, older ones do not know the flag.
-          check=
-          help=$(go tool platformgo upgrade -h 2>&1 || true) # -h exits 1, and pipefail is on
-          case "$help" in *-no-check*) check=--no-check ;; esac
-          go tool platformgo upgrade $check "${{ inputs.version }}"
+          # go run of a package at a version builds it outside the project, so the
+          # upgrade logic is the latest release whatever the project pins. The checks
+          # below need no database; the project CI runs the full ones.
+          go run "$MODULE/cmd/platformgo@latest" upgrade --no-check "$VERSION"
           to=$(go list -m -f '{{.Version}}' "$MODULE")
           echo "from=$from" >> "$GITHUB_OUTPUT"
           echo "to=$to" >> "$GITHUB_OUTPUT"

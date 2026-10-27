@@ -25,6 +25,9 @@ import (
 // Module is the Go module of the platform.
 const Module = "github.com/aidarbn/platform-go"
 
+// Tool is the package of the platform tool the project runs with go tool.
+const Tool = Module + "/cmd/platformgo"
+
 // Runner runs the go command in the project. Tests replace it.
 type Runner func(ctx context.Context, dir string, out io.Writer, args ...string) error
 
@@ -137,7 +140,11 @@ func upgrade(ctx context.Context, dir, version string, run Runner, out io.Writer
 		}
 	}
 
-	if err := run(ctx, dir, out, "get", Module+"@"+version); err != nil {
+	// go get of the tool package rather than of the module: go get records the
+	// checksums of what the named packages need, and the module root is no package, so
+	// the modules a new version brings in would be missing from go.sum and go tool
+	// platformgo apply would stop at "missing go.sum entry" before it could tidy.
+	if err := run(ctx, dir, out, "get", Tool+"@"+version); err != nil {
 		return res, fmt.Errorf("upgrade: %w", err)
 	}
 	after, err := gomod.Read(dir)

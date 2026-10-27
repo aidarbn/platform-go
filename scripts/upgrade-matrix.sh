@@ -4,13 +4,19 @@
 #
 #   scripts/upgrade-matrix.sh v0.2.0 [v0.2.1 ...]
 #
-# The checkout is not released yet, so the project points at it with replace and runs
-# what platformgo upgrade runs after go get: go tool platformgo apply.
+# The checkout is not released yet, so the project points at it with replace under a
+# version of its own and is upgraded by platformgo upgrade of the checkout, as a real
+# upgrade is: no go mod tidy beforehand, go.sum as the old version left it. A new
+# dependency of the platform that upgrade leaves out of go.sum fails here, as it did in
+# v0.9.0 (missing go.sum entry).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 module=github.com/aidarbn/platform-go
 [ "$#" -gt 0 ] || { echo "usage: $0 <released version>..." >&2; exit 2; }
+# The version the checkout is given in the projects: newer than any release, so the
+# codemods of every release run, and clearly not a release.
+next=v0.999.0-matrix
 
 for from in "$@"; do
   echo "== $from → $(git -C "$root" describe --tags --always --dirty)"
@@ -19,6 +25,8 @@ for from in "$@"; do
   old="$work/platformgo-$from"
   GOBIN="$work" go install "$module/cmd/platformgo@$from"
   mv "$work/platformgo" "$old"
+  new="$work/platformgo-checkout"
+  (cd "$root" && go build -o "$new" ./cmd/platformgo)
 
   # Every module the old version knew, read from its own help.
   modules="$({ "$old" new -h 2>&1 || true; } | sed -n 's/.*comma separated modules: //p' | tr -d ' ')"
@@ -31,9 +39,10 @@ for from in "$@"; do
     go mod tidy
     go build ./...
 
+    # Every version of the platform is the checkout; go get of $next takes it from there.
     go mod edit -replace "$module=$root"
-    go mod tidy # what go get does in platformgo upgrade
-    go tool platformgo apply
+    "$new" upgrade --no-check "$next"
+    grep -q "^platform: $next\$" platformgo.yaml
     go tool platformgo verify
     go build ./...
     go vet ./...
