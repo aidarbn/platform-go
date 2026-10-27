@@ -284,3 +284,131 @@ func TestBufWithoutOpenAPI(t *testing.T) {
 		}
 	})
 }
+
+// The platform's generator writes a folder of marked yaml: generation removes the ones
+// of proto files that are gone, the check compares every one of them and names a stale
+// or an extra one, and files without the mark — base.yaml — are the project's.
+func TestBufSplitOpenAPI(t *testing.T) {
+	ctx := context.Background()
+	l := codegen.APILayout{ProtoDir: "proto", OpenAPI: true, Split: true}
+	mark := codegen.OpenAPIMark + " DO NOT EDIT.\n"
+	split := func(t *testing.T) {
+		t.Helper()
+		orig := codegen.GoCommand
+		t.Cleanup(func() { codegen.GoCommand = orig })
+		codegen.GoCommand = func(_ context.Context, dir string, _ io.Writer, args ...string) error {
+			base := dir
+			if i := slices.Index(args, "--output"); i >= 0 {
+				base = args[i+1]
+			}
+			if slices.Contains(args, "generate") {
+				write(t, base, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
+				write(t, base, "api/openapi/openapi.yaml", mark+"openapi: 3.1.0\n")
+				write(t, base, "api/openapi/openapi.bundle.yaml", mark+"openapi: 3.1.0\n")
+				write(t, base, "api/openapi/orders/v1/orders.yaml", mark+"paths: {}\n")
+			}
+			return nil
+		}
+	}
+
+	t.Run("generate removes stale files", func(t *testing.T) {
+		dir := t.TempDir()
+		split(t)
+		write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+		write(t, dir, "buf.lock", "version: v2\n")
+		write(t, dir, "api/openapi/gone/v1/gone.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/base.yaml", "openapi: 3.1.0\n")
+		write(t, dir, "api/openapi/notes.yaml", "# the project's own\n")
+		if err := codegen.Buf(ctx, dir, l, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if exists(dir, "api/openapi/gone/v1/gone.yaml") || exists(dir, "api/openapi/gone") {
+			t.Error("the yaml of a removed proto file stayed")
+		}
+		for _, f := range []string{"api/openapi/base.yaml", "api/openapi/notes.yaml", "api/openapi/orders/v1/orders.yaml", "api/openapi/openapi.bundle.yaml"} {
+			if !exists(dir, f) {
+				t.Errorf("%s is missing", f)
+			}
+		}
+	})
+
+	t.Run("check compares every file", func(t *testing.T) {
+		dir := t.TempDir()
+		split(t)
+		write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+		write(t, dir, "buf.lock", "version: v2\n")
+		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
+		write(t, dir, "api/openapi/openapi.yaml", mark+"openapi: 3.1.0\n")
+		write(t, dir, "api/openapi/openapi.bundle.yaml", mark+"openapi: 3.1.0\n")
+		write(t, dir, "api/openapi/orders/v1/orders.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/base.yaml", "openapi: 3.1.0\n")
+		if err := codegen.BufCheck(ctx, dir, l); err != nil {
+			t.Fatalf("BufCheck: %v", err)
+		}
+		write(t, dir, "api/openapi/orders/v1/orders.yaml", mark+"paths: {/old: {}}\n")
+		write(t, dir, "api/openapi/gone/v1/gone.yaml", mark+"paths: {}\n")
+		err := codegen.BufCheck(ctx, dir, l)
+		if err == nil || !strings.Contains(err.Error(), "api/openapi/orders/v1/orders.yaml") || !strings.Contains(err.Error(), "api/openapi/gone/v1/gone.yaml") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("no protos", func(t *testing.T) {
+		dir := t.TempDir()
+		split(t)
+		write(t, dir, "api/openapi/orders/v1/orders.yaml", mark+"paths: {}\n")
+		write(t, dir, "api/openapi/openapi.yaml", mark+"openapi: 3.1.0\n")
+		write(t, dir, "api/openapi/base.yaml", "openapi: 3.1.0\n")
+		if err := codegen.BufCheck(ctx, dir, l); err == nil {
+			t.Error("the description of removed protos passed the check")
+		}
+		if err := codegen.Buf(ctx, dir, l, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if exists(dir, "api/openapi/orders") || exists(dir, "api/openapi/openapi.yaml") || !exists(dir, "api/openapi/base.yaml") {
+			t.Error("generation without protos left the description or took base.yaml")
+		}
+	})
+}
+
+// Marked yaml left by the platform's generator: connect writes none of them, so they
+// are stale and generation removes them; with none the folder is the project's.
+func TestBufLeftoversOfThePlatformGenerator(t *testing.T) {
+	ctx := context.Background()
+	mark := codegen.OpenAPIMark + " DO NOT EDIT.\n"
+	setup := func(t *testing.T) string {
+		dir := t.TempDir()
+		fakeBuf(t, pbFile)
+		write(t, dir, "proto/orders/v1/orders.proto", `syntax = "proto3";`)
+		write(t, dir, "buf.lock", "version: v2\n")
+		write(t, dir, "internal/api/gen/orders/v1/orders.pb.go", pbFile)
+		write(t, dir, "api/openapi/openapi.yaml", "openapi: 3.1.0\n")
+		write(t, dir, "api/openapi/openapi.bundle.yaml", mark+"openapi: 3.1.0\n")
+		return dir
+	}
+	t.Run("connect", func(t *testing.T) {
+		dir := setup(t)
+		if err := codegen.BufCheck(ctx, dir, codegen.DefaultAPI); err == nil || !strings.Contains(err.Error(), "openapi.bundle.yaml") {
+			t.Fatalf("err = %v", err)
+		}
+		if err := codegen.Buf(ctx, dir, codegen.DefaultAPI, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if exists(dir, "api/openapi/openapi.bundle.yaml") {
+			t.Error("the bundle of the platform's generator stayed and would be served")
+		}
+	})
+	t.Run("none", func(t *testing.T) {
+		dir := setup(t)
+		l := codegen.APILayout{ProtoDir: "proto"}
+		if err := codegen.BufCheck(ctx, dir, l); err != nil {
+			t.Fatalf("BufCheck: %v", err)
+		}
+		if err := codegen.Buf(ctx, dir, l, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir, "api/openapi/openapi.bundle.yaml") {
+			t.Error("a file of the project was removed")
+		}
+	})
+}

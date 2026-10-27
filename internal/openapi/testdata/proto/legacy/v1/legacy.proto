@@ -12,6 +12,14 @@ service ProductService {
   rpc Ping(PingRequest) returns (PingResponse) {
     option (google.api.http) = {get: "/legacy/ping"};
   }
+
+  // Shares a path with shop.v1: the root holds the item itself.
+  rpc Add(PingRequest) returns (PingResponse) {
+    option (google.api.http) = {
+      post: "/v1/products"
+      body: "*"
+    };
+  }
 }
 
 message PingRequest {

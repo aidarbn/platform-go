@@ -122,8 +122,8 @@ var shopFiles = []string{"shop/v1/shop.proto", "shop/v1/types.proto", "legacy/v1
 func TestGoldenShop(t *testing.T) {
 	files := compile(t, "testdata/proto", shopFiles...)
 	for _, c := range []struct{ name, param string }{
-		{"shop.yaml", ""},
-		{"shop-base.yaml", "base=testdata/base.yaml,path=shop-base.yaml"},
+		{"shop.yaml", "layout=single,path=shop.yaml"},
+		{"shop-base.yaml", "base=testdata/base.yaml,layout=single,path=shop-base.yaml"},
 	} {
 		resp := run(t, c.param, shopFiles, files)
 		if resp.GetError() != "" {
@@ -150,7 +150,7 @@ func TestGoldenShop(t *testing.T) {
 // types on the request side.
 func TestGoldenRules(t *testing.T) {
 	files := compile(t, "testdata/proto", "rules/v1/rules.proto")
-	resp := run(t, "path=rules.yaml", []string{"rules/v1/rules.proto"}, files)
+	resp := run(t, "layout=single,path=rules.yaml", []string{"rules/v1/rules.proto"}, files)
 	if resp.GetError() != "" {
 		t.Fatal(resp.GetError())
 	}
@@ -180,6 +180,7 @@ func TestErrorsGoIntoTheResponse(t *testing.T) {
 	files := compile(t, "testdata/proto", shopFiles...)
 	for param, want := range map[string]string{
 		"color=red":        `unknown option "color"`,
+		"layout=tree":      `layout "tree": split or single`,
 		"base=testdata":    "testdata",
 		"base=missing.yml": "base: open missing.yml",
 	} {

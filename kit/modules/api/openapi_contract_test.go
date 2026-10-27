@@ -49,7 +49,7 @@ func TestOpenAPIDescribesTheGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := resp["openapi.yaml"]
+	doc := resp[openapi.BundleFile]
 	if err := oascheck.Validate(doc); err != nil {
 		t.Fatalf("%v\n%s", err, doc)
 	}

@@ -326,6 +326,19 @@ func TestPlainRouteDocsAndCORS(t *testing.T) {
 	}
 }
 
+// The platform's generator writes the description in parts and in one file: the
+// bundle is what /openapi.yaml serves.
+func TestDocsServeTheBundle(t *testing.T) {
+	spec := fstest.MapFS{
+		"openapi.yaml":        {Data: []byte("openapi: 3.1.0\npaths: {/v1/echo: {$ref: 'echo.yaml#/paths/~1v1~1echo'}}\n")},
+		"openapi.bundle.yaml": {Data: []byte("openapi: 3.1.0\n# the bundle\n")},
+	}
+	s := start(t, api.Config{Docs: true}, api.WithOpenAPI(spec))
+	if code, body, _ := s.do("GET", "/openapi.yaml", "", nil); code != http.StatusOK || !strings.Contains(body, "# the bundle") {
+		t.Errorf("openapi.yaml: %d %s", code, body)
+	}
+}
+
 func TestDocsOffByDefaultWithoutSpec(t *testing.T) {
 	s := start(t, api.Config{Docs: true})
 	if code, _, _ := s.do("GET", "/openapi.yaml", "", nil); code != http.StatusNotFound {

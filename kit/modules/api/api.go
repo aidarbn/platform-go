@@ -527,7 +527,8 @@ func WithIdempotencyStore(store IdempotencyStore) Option {
 }
 
 // WithOpenAPI gives the module the generated OpenAPI description: a directory holding
-// openapi.yaml. The generated wiring passes the embedded api/openapi directory.
+// openapi.bundle.yaml, the description in one file, or openapi.yaml. The generated
+// wiring passes the embedded api/openapi directory.
 func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys } }
 
 // Module implements platform.Module.
@@ -883,7 +884,13 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 		mux.Handle(r.pattern, withRoute(r.pattern, refuseTooLarge(r.handler)))
 	}
 	if m.cfg.Docs && m.openapi != nil {
-		if spec, err := fs.ReadFile(m.openapi, "openapi.yaml"); err == nil {
+		// The platform's generator writes the description in parts and in one file,
+		// the bundle; other generators write openapi.yaml alone.
+		spec, err := fs.ReadFile(m.openapi, "openapi.bundle.yaml")
+		if err != nil {
+			spec, err = fs.ReadFile(m.openapi, "openapi.yaml")
+		}
+		if err == nil {
 			mux.Handle("GET /openapi.yaml", withRoute("/openapi.yaml", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/yaml")
 				_, _ = w.Write(spec)

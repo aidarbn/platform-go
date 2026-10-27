@@ -14,7 +14,7 @@ import (
 )
 
 func TestRun(t *testing.T) {
-	in, err := proto.Marshal(openapi.RequestFor("path=api.yaml", emptypb.File_google_protobuf_empty_proto))
+	in, err := proto.Marshal(openapi.RequestFor("", emptypb.File_google_protobuf_empty_proto))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,9 +26,12 @@ func TestRun(t *testing.T) {
 	if err := proto.Unmarshal(out.Bytes(), resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.GetError() != "" || len(resp.GetFile()) != 1 || resp.GetFile()[0].GetName() != "api.yaml" ||
-		!strings.Contains(resp.GetFile()[0].GetContent(), "openapi: 3.1.0") {
-		t.Errorf("response = %v", resp)
+	var names []string
+	for _, f := range resp.GetFile() {
+		names = append(names, f.GetName())
+	}
+	if resp.GetError() != "" || strings.Join(names, ",") != "common.yaml,openapi.bundle.yaml,openapi.yaml" {
+		t.Errorf("error = %q, files = %v", resp.GetError(), names)
 	}
 	if err := run(strings.NewReader("garbage"), &out); err == nil {
 		t.Error("garbage is a request")

@@ -321,6 +321,20 @@ modules:
 
 `base.yaml` keeps what it says: info, servers, security, its tags and their descriptions, its own components; the generator adds tags it found, the paths and the schemas, and a schema of the same name replaces the one in the base. The output is deterministic, so `verify` compares bytes.
 
+The description is split the way the proto files are, so a change to a method shows up in the yaml of its proto file and review stays readable:
+
+```
+api/openapi/
+  base.yaml                    # the project's: info, intro, tags, security
+  openapi.yaml                 # generated root: base, tags and a $ref to every path
+  shop/v1/shop.yaml            # one per proto file (proto/shop/v1/shop.proto): its paths and schemas
+  common.yaml                  # the error body and the messages of dependencies such as googleapis
+  openapi.bundle.yaml          # everything in one file, no external $ref
+  openapi.gen.go               # embeds the folder
+```
+
+References between files are relative (`../../common.yaml#/components/responses/Error`); a path whose methods come from several proto files is written into the root itself. The service serves the bundle at `/openapi.yaml`, so `/docs` and clients keep their URL; the split files are for people and for review, and clients are generated from the bundle. `generate` removes every file with the generator's mark before buf writes the current ones, so the yaml of a deleted proto file goes with it, and `verify` compares all of them; back on `connect`, the marked files are left over and removed the same way, so a stale bundle is never served. With `none` the folder is the project's and nothing in it is removed: a project that keeps the platform's files as its own deletes their first line, the mark. A proto file whose yaml would land on one of the files of the description, such as `common.proto` at the root of the proto folder, fails generation.
+
 The handler is registered from `wire.go`:
 
 ```go
