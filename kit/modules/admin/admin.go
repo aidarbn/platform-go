@@ -322,6 +322,11 @@ func (m *Module) Stop(ctx context.Context) error {
 	return m.srv.Shutdown(ctx)
 }
 
+// StopPhases stops the panel together with the other HTTP servers in a phased shutdown.
+func (m *Module) StopPhases() []platform.StopPhase {
+	return []platform.StopPhase{{Name: "http", Order: platform.PhaseHTTP, Stop: m.Stop}}
+}
+
 // Auth returns the sign in service from the container: project pages use it to know
 // who is signed in.
 func Auth(app *platform.App) *adminx.Auth { return platform.Get[*adminx.Auth](app) }
