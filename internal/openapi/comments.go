@@ -74,3 +74,16 @@ func joinText(parts ...string) string {
 	}
 	return strings.Join(out, "\n\n")
 }
+
+// CommentText is a comment of a proto file as the generator reads it: the indentation
+// its lines share and tool instructions removed.
+func CommentText(text string) string { return cleanComment(text) }
+
+// Summary is the summary of a method the generator takes from its comment, empty when
+// the comment has none it can use and the generator falls back to the method name.
+func Summary(text string) string {
+	if s, _ := summarize("", text); s != "" {
+		return s
+	}
+	return ""
+}

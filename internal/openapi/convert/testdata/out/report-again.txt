@@ -1,0 +1,10 @@
+base api/openapi/base.openapiv2.yaml
+files with openapiv2_swagger: 1
+manual proto/edge/v1/edge.proto:21: b: does not start its line, so a comment cannot document it alone; put it on a line of its own and run again
+manual proto/edge/v1/edge.proto:32: x: does not start its line, so a comment cannot document it alone; put it on a line of its own and run again
+manual proto/shop/v1/shop.proto:66: code: openapiv2_field {pattern: "^[A-Z]+$"} has no counterpart: make it a protovalidate rule or a comment, then remove it
+manual proto/shop/v1/shop.proto:74: price: openapiv2_field {title: "Price"} has no counterpart: make it a protovalidate rule or a comment, then remove it
+manual proto/shop/v1/shop.proto:28: UpdateProduct: has (platform.openapi.v1.method) already; merge openapiv2_operation into it by hand
+manual proto/shop/v1/shop.proto:38: Rebuild: has (platform.openapi.v1.method) already; merge openapiv2_operation into it by hand
+manual proto/shop/v1/shop.proto:11: openapiv2_swagger {host: "shop.example.com"} has no counterpart: move it into api/openapi/base.yaml by hand
+manual api/openapi/base.openapiv2.yaml: api/openapi/base.yaml exists: merge info, security, tags and x-tagGroups from this file into it by hand

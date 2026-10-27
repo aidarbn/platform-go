@@ -1,0 +1,45 @@
+changed proto/apidoc/v1/apidoc.proto
+changed proto/edge/v1/edge.proto
+changed proto/shop/v1/shop.proto
+base api/openapi/base.yaml
+field descriptions: 4
+field descriptions added to a comment: 2
+field descriptions already in the comment: 2
+field examples: 1
+field types left to the generator: 3
+files with openapiv2_swagger: 3
+hidden methods: 1
+message descriptions: 1
+message examples: 1
+method descriptions: 2
+method descriptions added to a comment: 1
+method descriptions already in the comment: 1
+method tags: 2
+multipart content types left to the generator: 2
+service tags: 1
+note proto/apidoc/v1/apidoc.proto:8: the comment above the removed openapiv2 option stays: check what it documents now
+manual proto/apidoc/v1/apidoc.proto: the file declares nothing but the options it had: delete it and its imports
+manual proto/edge/v1/edge.proto:47: b: does not start its line, so a comment cannot document it alone; put it on a line of its own and run again
+note proto/edge/v1/edge.proto:49: id: the description is added to the comment it had
+manual proto/edge/v1/edge.proto:56: x: does not start its line, so a comment cannot document it alone; put it on a line of its own and run again
+note proto/edge/v1/edge.proto:9: the comment above the removed openapiv2 option stays: check what it documents now
+note proto/shop/v1/shop.proto:87: name: the description is added to the comment it had
+manual proto/shop/v1/shop.proto:94: code: openapiv2_field {pattern: "^[A-Z]+$"} has no counterpart: make it a protovalidate rule or a comment, then remove it
+manual proto/shop/v1/shop.proto:104: price: openapiv2_field {title: "Price"} has no counterpart: make it a protovalidate rule or a comment, then remove it
+note proto/shop/v1/shop.proto:20: ProductService: the description of the tag "Products" belongs in the tags of api/openapi/base.yaml
+note proto/shop/v1/shop.proto:36: UpdateProduct: the description is added to the comment it had
+manual proto/shop/v1/shop.proto:36: UpdateProduct: a method has one tag, "Products"; the others stay in openapiv2_operation: Images
+note proto/shop/v1/shop.proto:36: UpdateProduct: x-multipart-request is gone; the generator describes the multipart body from the file fields, its example is not kept
+manual proto/shop/v1/shop.proto:36: UpdateProduct: openapiv2_operation {tags: "Images"} has no counterpart: convert it by hand
+manual proto/shop/v1/shop.proto:54: Rebuild: says multipart/form-data, but GetProductRequest has no file field (content bytes with a filename or a content_type): the generator describes a JSON body only
+manual proto/shop/v1/shop.proto:54: Rebuild: openapiv2_operation {operation_id: "rebuild"} has no counterpart: convert it by hand
+manual proto/shop/v1/shop.proto:10: openapiv2_swagger {host: "shop.example.com"} has no counterpart: move it into api/openapi/base.yaml by hand
+note proto/shop/v1/shop.proto: 1 64-bit integer fields lose type: INTEGER: the description says what the gateway writes, a string, and takes a number or a string in a request
+note proto/platform/openapi/v1/options.proto: the converted files import it: set openapi.generator: platform for the api module in platformgo.yaml, and platformgo apply writes it
+note proto/edge/v1/edge.proto: info "Edge" is left out: the base takes the info of proto/apidoc/v1/apidoc.proto
+manual proto/edge/v1/edge.proto: its security requirements differ from the ones of an earlier file and are left out; OpenAPI has one list for the API, and a method needs its own
+manual proto/edge/v1/edge.proto: tag "Products" is described differently in an earlier file; this description is left out
+manual proto/edge/v1/edge.proto: x-tagGroups is left out: the base takes the groups of an earlier file; merge them by hand
+note proto/shop/v1/shop.proto: info "Shop Admin API" is left out: the base takes the info of proto/apidoc/v1/apidoc.proto
+note proto/shop/v1/shop.proto: schemes, consumes and produces of openapiv2_swagger are left out: OpenAPI 3 has servers, and the generator writes the content types
+note proto/apidoc/v1/apidoc.proto: security scheme Bearer: an API key in the Authorization header is the bearer scheme of HTTP now

@@ -56,6 +56,12 @@ func commands() []setup.Command {
 			{Name: "no-check", Summary: "skip the checks after the upgrade", Bool: true},
 			{Name: "strict", Summary: "fail when a check after the upgrade fails", Bool: true},
 		}},
+		{Name: "openapi", Summary: "move openapiv2 options to the platform's", Sub: []string{"convert"}, Flags: []setup.Flag{
+			dir,
+			{Name: "proto", Summary: "the proto folder", Dir: true},
+			{Name: "base", Summary: "where openapiv2_swagger goes"},
+			{Name: "dry-run", Summary: "report only", Bool: true},
+		}},
 		{Name: "doctor", Summary: "check the environment and the project", Flags: []setup.Flag{
 			dir, {Name: "fix", Summary: "fix what can be fixed", Bool: true},
 		}},

@@ -11,6 +11,7 @@ import (
 	"github.com/aidarbn/platform-go/internal/lock"
 	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
+	"github.com/aidarbn/platform-go/kit/openapipb"
 )
 
 // Files of the api module.
@@ -170,12 +171,20 @@ const bufGenInputs = `inputs:
       - {{dir}}/platform
 `
 
+// OpenAPIOptionsPath is the options of the platform's OpenAPI generator under the proto
+// folder of the project, written with openapi.generator: platform.
+const OpenAPIOptionsPath = "platform/openapi/v1/options.proto"
+
 func apiFiles(f *spec.File, s APISettings) map[string][]byte {
-	return map[string][]byte{
+	files := map[string][]byte{
 		BufPath:     bufConfig(s),
 		BufGenPath:  bufGenConfig(f, s),
 		OpenAPIPath: []byte(openapiGo),
 	}
+	if s.OpenAPI.Generator == OpenAPIPlatform {
+		files[s.ProtoPath(OpenAPIOptionsPath)] = []byte(openapipb.Proto)
+	}
+	return files
 }
 
 func bufConfig(s APISettings) []byte {
@@ -212,7 +221,9 @@ func bufGenConfig(f *spec.File, s APISettings) []byte {
 	default:
 		bufGen += connectOpenAPIPlugin
 	}
-	if _, ok := f.Modules["i18n"]; ok {
+	// The proto files of the platform — the i18n option, the OpenAPI options — are
+	// imported, not generated: their Go code is the platform's.
+	if _, ok := f.Modules["i18n"]; ok || s.OpenAPI.Generator == OpenAPIPlatform {
 		bufGen = strings.Replace(bufGen, "  override:\n", platformProtoInputs+"  override:\n", 1)
 		bufGen += strings.ReplaceAll(bufGenInputs, "{{dir}}", s.ProtoDir)
 	}

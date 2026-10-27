@@ -1,0 +1,32 @@
+# The human part of the API description: info, security, tags and their groups.
+# Converted from the openapiv2_swagger options of proto/apidoc/v1/apidoc.proto, proto/edge/v1/edge.proto, proto/shop/v1/shop.proto.
+openapi: 3.1.0
+info:
+  title: Shop API
+  version: "2"
+  description: |-
+    The shop.
+
+    Two paragraphs.
+externalDocs:
+  description: Docs
+  url: https://example.com/docs
+security:
+  - Bearer: []
+tags:
+  - name: Products
+    description: Products and their prices.
+x-tagGroups:
+  - name: Catalog
+    tags:
+      - Products
+components:
+  securitySchemes:
+    Bearer:
+      type: http
+      scheme: bearer
+      description: A token.
+    Key:
+      type: apiKey
+      in: query
+      name: key

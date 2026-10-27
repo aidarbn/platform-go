@@ -7,6 +7,7 @@ package openapi
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -26,6 +27,7 @@ import (
 	// is decoded, or they stay unknown fields.
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	_ "github.com/aidarbn/platform-go/kit/i18nx/i18npb"
+	_ "github.com/aidarbn/platform-go/kit/openapipb"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 )
 
@@ -212,20 +214,27 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 	doc := &Document{OpenAPI: "3.1.0", Paths: NewOrdered[*PathItem]()}
 	paths := map[string]*PathItem{}
 	ids := map[string]string{}
+	tags := &tagSet{}
 	for _, sd := range services {
-		tag := string(sd.Name())
-		if short[sd.Name()] > 1 {
-			tag = string(sd.FullName())
+		svc := serviceOptions(sd)
+		if svc.GetHidden() {
+			continue
 		}
-		described := false
+		name := string(sd.Name())
+		if short[sd.Name()] > 1 {
+			name = string(sd.FullName())
+		}
+		serviceTag := cmp.Or(svc.GetTag(), name)
 		for i := range sd.Methods().Len() {
 			m := sd.Methods().Get(i)
 			r := httpRule(m)
-			if r == nil {
-				continue // the gateway does not serve it over REST
+			mo := methodOptions(m)
+			if r == nil || mo.GetHidden() {
+				continue // the gateway does not serve it over REST, or the project hides it
 			}
+			tag := cmp.Or(mo.GetTag(), serviceTag)
 			for n, b := range bindings(r) {
-				id := strings.ReplaceAll(tag, ".", "_") + "_" + string(m.Name())
+				id := strings.ReplaceAll(name, ".", "_") + "_" + string(m.Name())
 				if n > 0 {
 					id += fmt.Sprintf("_%d", n+1)
 				}
@@ -235,6 +244,9 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 				}
 				if op == nil {
 					continue
+				}
+				if mo.GetSummary() != "" {
+					op.Summary = mo.GetSummary()
 				}
 				item := paths[path]
 				if item == nil {
@@ -256,12 +268,17 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 						strings.ToUpper(verb), path, ids[verb+" "+path], m.FullName())
 				}
 				ids[verb+" "+path] = string(m.FullName())
-				described = true
+				desc := ""
+				if tag == serviceTag {
+					desc = comment(sd)
+				}
+				tags.add(tag, desc, cmp.Or(mo.GetTagGroup(), svc.GetTagGroup()))
 			}
 		}
-		if described {
-			doc.Tags = append(doc.Tags, &Tag{Name: tag, Description: comment(sd)})
-		}
+	}
+	doc.Tags = tags.list
+	if groups := tags.groups(); groups != nil {
+		doc.Extensions = map[string]any{"x-tagGroups": groups}
 	}
 	g.drain()
 	g.addErrors()
@@ -361,6 +378,30 @@ func mergeNode(base []byte, doc *Document) (*yaml.Node, error) {
 	}
 	if tags := get(&gen, "tags"); tags != nil {
 		mergeTags(root, tags)
+	}
+	if groups := get(&gen, "x-tagGroups"); groups != nil && get(root, "x-tagGroups") == nil {
+		// Groups the base lists itself win: it may group tags of its own too. With
+		// generated ones, a tag only the base has gets a group of its name, or Scalar
+		// and Redoc would hide it.
+		grouped := map[string]bool{}
+		for _, g := range groups.Content {
+			if tags := get(g, "tags"); tags != nil {
+				for _, t := range tags.Content {
+					grouped[t.Value] = true
+				}
+			}
+		}
+		if tags := get(root, "tags"); tags != nil {
+			for _, t := range tags.Content {
+				if n := get(t, "name"); n != nil && !grouped[n.Value] {
+					groups.Content = append(groups.Content, &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+						scalar("name"), scalar(n.Value),
+						scalar("tags"), {Kind: yaml.SequenceNode, Content: []*yaml.Node{scalar(n.Value)}},
+					}})
+				}
+			}
+		}
+		set(root, "x-tagGroups", groups)
 	}
 	if paths := get(&gen, "paths"); paths != nil {
 		if get(root, "paths") == nil {

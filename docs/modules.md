@@ -321,6 +321,51 @@ modules:
 
 `base.yaml` keeps what it says: info, servers, security, its tags and their descriptions, its own components; the generator adds tags it found, the paths and the schemas, and a schema of the same name replaces the one in the base. The output is deterministic, so `verify` compares bytes.
 
+What the proto files cannot say goes into the options of the platform, `platform/openapi/v1/options.proto`, which `apply` writes under the proto folder with `generator: platform` (it is imported, not generated; its Go code is `kit/openapipb`). Back on another generator `apply` keeps the file, as it keeps the i18n option, and says so: delete it once no proto file imports it.
+
+```proto
+import "platform/openapi/v1/options.proto";
+
+service MenuService {
+  option (platform.openapi.v1.service) = {tag: "Menu", tag_group: "Public API"};
+
+  rpc GetMenu(GetMenuRequest) returns (Menu) {
+    option (platform.openapi.v1.method) = {summary: "The menu of a branch"};
+    option (google.api.http) = {get: "/v1/menus/{id}"};
+  }
+  rpc Debug(GetMenuRequest) returns (Menu) {
+    option (platform.openapi.v1.method) = {hidden: true};
+  }
+}
+
+message Menu {
+  string id = 1 [(platform.openapi.v1.field) = {example: "\"m-1\""}];
+}
+```
+
+- `tag` of a service or a method is its section; the service name by default. The description of a section is the comment of its service or the `tags` of `base.yaml`, which win.
+- `tag_group` puts a section into a group of the sidebar, `x-tagGroups` (Scalar and Redoc). A section without a group then gets a group of its own name, since both hide a section that is in no group. Groups in `base.yaml` replace the generated ones.
+- `summary` replaces the first paragraph of the comment as the title of a method; `hidden` leaves a method or a whole service out.
+- `example` of a field or a message is JSON: `"\"Latte\""` for a string, `3`, `{"id": "m-1"}`.
+
+The generator reads neither gnostic nor openapiv2 annotations.
+
+#### Moving from protoc-gen-openapiv2
+
+A project that described its API with the `openapiv2_*` options of grpc-gateway, as taply does, converts them once:
+
+```
+platformgo openapi convert [--dir .] [--proto api/proto] [--base api/openapi/base.yaml] [--dry-run]
+```
+
+- `openapiv2_field`: the description becomes the leading comment of the field (a different comment it had stays, the description becomes its last paragraph), the example `(platform.openapi.v1.field)`, a `type` the generator gives anyway (`INTEGER` on an integer, `STRING` on a string…) goes;
+- `openapiv2_operation`: summary and description become the comment of the method — the summary also `(platform.openapi.v1.method).summary` when the comment would not lead with it —, the first tag `tag`, `x-internal: true` `hidden`; `consumes`/`produces` of `multipart/form-data` and `x-multipart-request` go, since the generator finds file fields itself (the report names a method that says multipart without a file field);
+- `openapiv2_schema` and `openapiv2_tag` likewise for messages and services;
+- `openapiv2_swagger`: info, security schemes and requirements, tags and `x-tagGroups` go into `base.yaml` (next to it as `base.openapiv2.yaml` when the project has one), an API key in the `Authorization` header as the bearer scheme of HTTP;
+- the import of the openapiv2 options goes from a file that has none left, the import of the platform's options comes where they are used.
+
+Anything else — a `pattern` or a `title` of a field, a second tag, an `operation_id`, `host`, the info, tags, security or `x-tagGroups` of a later file that differ from an earlier one, a declaration that shares its line with another — stays as it was or is reported for a person, with the file and the line; nothing is dropped silently. The converted files are compiled before anything is written; `--dry-run` reports only. On taply's 29 annotated files it moves 1016 field options (989 descriptions into new comments, 26 added to comments the fields had, 454 examples, 146 redundant types), 125 operations (125 tags, one `x-internal` as hidden) and three `openapiv2_swagger`, leaving three places for a person: deleting `openapi_options.proto`, which declares nothing else, and two files whose `Bearer` scheme is described differently from the central one. The description it then gets keeps every field description and example of the fields both descriptions share and every operation summary.
+
 The description is split the way the proto files are, so a change to a method shows up in the yaml of its proto file and review stays readable:
 
 ```

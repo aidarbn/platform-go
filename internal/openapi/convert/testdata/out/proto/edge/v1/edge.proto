@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package edge.v1;
+
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+option go_package = "example.com/shop/gen/edge/v1;edgev1";
+// Keep me: this documents the file, not the option below.
+
+service EdgeService {
+  // Gets it.
+  rpc Get(Pair) returns (Pair) {
+    option (google.api.http) = {get: "/v1/edge"};
+    option (platform.openapi.v1.method) = {summary: "Get"};
+  }
+}
+
+message Pair {
+  string a = 1; string b = 2 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Bee"}];
+  // The provider id
+  //
+  // id
+  string id = 3;
+  // See.
+  string c = 4 [
+    deprecated = true // old
+  ];
+}
+
+message One { string x = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "X."}]; }
