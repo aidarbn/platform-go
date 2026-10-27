@@ -10,5 +10,6 @@ package codemod
 func All() []Codemod {
 	return []Codemod{
 		AdminxNoTOTP(),
+		GnosticOptions(),
 	}
 }

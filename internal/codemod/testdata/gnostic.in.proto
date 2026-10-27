@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package shop.v1;
+
+import "google/api/annotations.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+option (gnostic.openapi.v3.document) = {
+  info: {title: "Shop" version: "1"}
+};
+
+service ShopService {
+  rpc Get(GetRequest) returns (Item) {
+    option (google.api.http) = {get: "/v1/items/{id}"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get an item"
+      description: "Returns the item "
+        "with its price."
+      tags: ["Items"]
+    };
+  }
+
+  // Lists the items.
+  rpc List(GetRequest) returns (Item) {
+    option (google.api.http) = {get: "/v1/items"};
+    option (gnostic.openapi.v3.operation) = {
+      summary: "List items"
+      description: "Lists the items."
+      tags: "Items"
+      tags: "Catalog"
+      deprecated: true
+    };
+  }
+
+  rpc Old(GetRequest) returns (Item) {
+    option (gnostic.openapi.v3.operation).summary = "Old";
+  }
+
+  rpc Gone(GetRequest) returns (Item) {
+    option deprecated = true;
+    option (gnostic.openapi.v3.operation) = {deprecated: true description: "It's \'gone\'."};
+  }
+
+  rpc Twice(GetRequest) returns (Item) {
+    option (platform.openapi.v1.method) = {tag: "Mine"};
+    option (gnostic.openapi.v3.operation) = {summary: "Twice"};
+  }
+}
+
+message GetRequest {
+  string id = 1 [(gnostic.openapi.v3.property) = {
+    description: "The id."
+    example: {yaml: "\"i-1\""}
+  }];
+  int32 limit = 2 [(gnostic.openapi.v3.property) = {description: "At most.", format: "int32"}, deprecated = true];
+  string a = 3; string b = 4 [(gnostic.openapi.v3.property) = {description: "Bee"}];
+}
+
+// An item.
+message Item {
+  option (gnostic.openapi.v3.schema) = {
+    title: "Item"
+    description: "An item."
+    example: {yaml: "id: i-1\nprice: 3"}
+  };
+  string id = 1 [(gnostic.openapi.v3.property) = {title: 'it\'s'}];
+  string day = 2 [(gnostic.openapi.v3.property) = {example: {yaml: "2024-01-02"}}];
+}

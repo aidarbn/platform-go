@@ -8,8 +8,6 @@ managed:
     - file_option: go_package
       module: buf.build/bufbuild/protovalidate
     - file_option: go_package
-      module: buf.build/gnostic/gnostic
-    - file_option: go_package
       module: buf.build/grpc-ecosystem/grpc-gateway
     - file_option: go_package
       path: platform
@@ -26,23 +24,14 @@ plugins:
   - local: [go, tool, protoc-gen-grpc-gateway]
     out: internal/api/gen
     opt: [paths=source_relative]
-  - local: [go, tool, protoc-gen-connect-openapi]
+  - local: [go, tool, protoc-gen-platform-openapi]
     out: api/openapi
     strategy: all
     opt:
-      # REST paths from google.api.http, validation rules from protovalidate, and
-      # descriptions from gnostic annotations. connectrpc stays off: the gateway does
-      # not serve Connect paths, so they must not be documented.
-      - features=google.api.http;protovalidate;gnostic
-      - with-proto-names
-      - path=openapi.yaml
-      # The human part of the description: title, intro, tags, security scheme.
+      # The human part of the description: title, intro, tags, security scheme. The
+      # plugin writes openapi.yaml with the paths of every proto file in a yaml of its
+      # own next to it, common.yaml, and openapi.bundle.yaml, which the service serves.
       - base=api/openapi/base.yaml
-      # Sections in the docs page come from gnostic tags in the proto and their
-      # descriptions from the base file; the service itself is not a section, or every
-      # method would be listed twice.
-      - without-default-tags
-      - short-operation-ids
 inputs:
   - directory: api
     exclude_paths:

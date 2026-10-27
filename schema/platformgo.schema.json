@@ -49,11 +49,11 @@
               "description": "the OpenAPI description of the API",
               "properties": {
                 "generator": {
-                  "default": "connect",
-                  "description": "connect: protoc-gen-connect-openapi writes api/openapi/openapi.yaml; platform: the platform's own generator writes it, as the gateway serves the API; none: the project keeps that file itself",
+                  "default": "platform",
+                  "description": "platform: the platform's own generator describes the API as the gateway serves it, split by proto file with a bundle; connect: protoc-gen-connect-openapi writes one api/openapi/openapi.yaml, as before v0.10.0; none: the project keeps api/openapi/openapi.yaml itself",
                   "enum": [
-                    "connect",
                     "platform",
+                    "connect",
                     "none"
                   ],
                   "type": "string"

@@ -436,3 +436,25 @@ func TestMovingProtoDir(t *testing.T) {
 		t.Errorf("plan api = %+v", p.API)
 	}
 }
+
+// The gnostic codemod runs for the platform's generator, the default, and leaves a
+// project on connect alone, which still reads the annotations.
+func TestGnosticCodemodFollowsTheGenerator(t *testing.T) {
+	const proto = "syntax = \"proto3\";\npackage a.v1;\n\nimport \"gnostic/openapi/v3/annotations.proto\";\n\nmessage M {\n  string id = 1 [(gnostic.openapi.v3.property) = {description: \"The id.\"}];\n}\n"
+	for _, c := range []struct {
+		api  string
+		want bool
+	}{
+		{"  api: {}\n", true},
+		{"  api:\n    openapi: {generator: connect}\n", false},
+		{"  api:\n    openapi: {generator: none}\n", false},
+	} {
+		dir := project(t, "schema: 1\nproject:\n  module: example.com/shop-api\nmodules:\n"+c.api)
+		writeFile(t, dir, "proto/a/v1/a.proto", proto)
+		apply.SetCodemods(t, codemod.GnosticOptions())
+		plan := build(t, dir)
+		if got := len(plan.Codemods) == 1; got != c.want {
+			t.Errorf("%s: codemods = %+v", c.api, plan.Codemods)
+		}
+	}
+}

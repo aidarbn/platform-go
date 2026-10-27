@@ -406,9 +406,9 @@ var apiOptions = []Option{
 		Fields: []Option{
 			{
 				Name:        "generator",
-				Description: "connect: protoc-gen-connect-openapi writes api/openapi/openapi.yaml; platform: the platform's own generator writes it, as the gateway serves the API; none: the project keeps that file itself",
-				Enum:        []string{"connect", "platform", "none"},
-				Default:     "connect",
+				Description: "platform: the platform's own generator describes the API as the gateway serves it, split by proto file with a bundle; connect: protoc-gen-connect-openapi writes one api/openapi/openapi.yaml, as before v0.10.0; none: the project keeps api/openapi/openapi.yaml itself",
+				Enum:        []string{"platform", "connect", "none"},
+				Default:     "platform",
 			},
 		},
 	},

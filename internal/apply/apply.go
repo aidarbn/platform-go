@@ -127,7 +127,11 @@ func Build(dir string) (*Plan, error) {
 	// Codemods newer than the version that applied the project last; the checks of all
 	// of them, so a manual step stays open until it is done.
 	all := codemods()
-	mods, err := codemod.Run(dir, codemod.Pending(all, applied.Platform), all)
+	project := codemod.Project{}
+	if _, ok := f.Modules["api"]; ok {
+		project.OpenAPIGenerator = p.API.OpenAPI.Generator
+	}
+	mods, err := codemod.Run(dir, codemod.Applicable(codemod.Pending(all, applied.Platform), project), all)
 	if err != nil {
 		return nil, err
 	}
