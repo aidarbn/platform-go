@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -202,7 +203,10 @@ func fieldOptions(fd protoreflect.FieldDescriptor) *i18npb.I18NFieldOptions {
 }
 
 // TranslateError translates the message of a status error. Internal, unavailable,
-// unknown and unimplemented errors keep their text: they are for developers.
+// unknown and unimplemented errors keep their text: they are for developers; so do the
+// failures of external providers (an ErrorInfo of reason EXTERNAL_UNAVAILABLE or
+// EXTERNAL_TIMEOUT, as api.ExternalUnavailable and api.ExternalTimeout build them),
+// whose text names the provider.
 func (c *Client) TranslateError(err error, locale Locale) error {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -211,6 +215,11 @@ func (c *Client) TranslateError(err error, locale Locale) error {
 	switch st.Code() {
 	case codes.Internal, codes.Unavailable, codes.Unknown, codes.Unimplemented:
 		return err
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && (info.GetReason() == "EXTERNAL_UNAVAILABLE" || info.GetReason() == "EXTERNAL_TIMEOUT") {
+			return err
+		}
 	}
 	translated := c.TranslateMessage(st.Message(), locale)
 	if translated == st.Message() {

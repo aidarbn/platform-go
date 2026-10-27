@@ -54,6 +54,20 @@ func (echo) Fail(ctx context.Context, req *testv1.FailRequest) (*testv1.FailResp
 			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "items", Description: "empty"}},
 		})
 		return nil, st.Err()
+	case "external":
+		return nil, api.ExternalUnavailable("kaspi", "payment service unavailable")
+	case "external_wrong_code":
+		// The reason on a code other than Unavailable is not a provider failure.
+		st, _ := status.New(codes.Internal, "internal error").WithDetails(&errdetails.ErrorInfo{Reason: "EXTERNAL_UNAVAILABLE", Domain: "x"})
+		return nil, st.Err()
+	case "external_timeout":
+		return nil, api.ExternalTimeout("kaspi", "payment service timeout")
+	case "external_own":
+		// A status a project builds itself, as taply does, with its own domain.
+		st, _ := status.New(codes.Unavailable, "poster: external service unavailable").WithDetails(&errdetails.ErrorInfo{
+			Reason: "EXTERNAL_UNAVAILABLE", Domain: "maas-api", Metadata: map[string]string{"provider": "poster"},
+		})
+		return nil, st.Err()
 	case "slow_ok":
 		// Finishes even when the client hangs up.
 		time.Sleep(300 * time.Millisecond)
@@ -102,7 +116,10 @@ func start(t *testing.T, cfg api.Config, opts ...api.Option) *service {
 		// A project interceptor, such as authentication, sees REST calls as gRPC calls.
 		api.AddUnaryInterceptorAt(app, api.PhaseAuthenticate, "test-auth", func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 			md, _ := metadata.FromIncomingContext(ctx)
-			s.seen <- info.FullMethod + " user=" + strings.Join(md.Get("x-user"), ",")
+			select { // tests that make many calls do not read them all
+			case s.seen <- info.FullMethod + " user=" + strings.Join(md.Get("x-user"), ","):
+			default:
+			}
 			return h(ctx, req)
 		})
 		api.HandleHTTP(app, "GET /webhooks/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

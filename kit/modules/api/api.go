@@ -509,7 +509,9 @@ func CORSHeaders(app *platform.App, names ...string) {
 // HTTPErrorHandler replaces how the REST side writes an error, for an API whose contract
 // has its own error body. It receives every error of the gateway: from the handlers,
 // from request decoding and routing, and a body over the limit as a
-// *runtime.HTTPStatusError with 413. A later call replaces an earlier one.
+// *runtime.HTTPStatusError with 413. A failure of an external provider comes as the
+// handler returned it; IsExternalUnavailable tells it, for the 502 the platform's
+// writer answers. A later call replaces an earlier one.
 func HTTPErrorHandler(app *platform.App, h runtime.ErrorHandlerFunc) {
 	r := registry(app)
 	r.add(func() { r.errorHandler = h })

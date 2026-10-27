@@ -57,6 +57,8 @@ func TestIdempotencyRemembersOnlyFinalOutcomes(t *testing.T) {
 		{"details", http.StatusBadRequest, 1},
 		{"internal", http.StatusInternalServerError, 2},
 		{"unavailable", http.StatusServiceUnavailable, 2},
+		{"external", http.StatusBadGateway, 2},
+		{"external_timeout", http.StatusGatewayTimeout, 2},
 		{"panic", http.StatusInternalServerError, 2},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -88,7 +90,7 @@ func TestIdempotencyRemembersOnlyFinalOutcomes(t *testing.T) {
 	for _, want := range []string{
 		`api_idempotency_total{method="/platformtest.v1.EchoService/Fail",result="replay"}`,
 		`api_idempotency_total{method="/platformtest.v1.EchoService/Fail",result="stored"} 3`,
-		`api_idempotency_total{method="/platformtest.v1.EchoService/Fail",result="retry"} 6`,
+		`api_idempotency_total{method="/platformtest.v1.EchoService/Fail",result="retry"} 10`,
 	} {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("no %s in\n%s", want, grepLines(metrics, "api_idempotency_total"))
