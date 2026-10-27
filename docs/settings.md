@@ -133,7 +133,7 @@ func wireDomain(app *platform.App) error {
 }
 ```
 
-Worker counts per queue are an environment parameter (`RIVER_QUEUES=default=5,notify=3`): production and staging differ in capacity while the meaning of the jobs stays the same.
+Worker counts per queue are an environment parameter (`RIVER_QUEUES=default=5,notify=3`): production and staging differ in capacity while the meaning of the jobs stays the same. A project that wants an administrator to size the queues, as taply does with its `*.queue_workers` settings, reads them from business settings with `riverx.QueuesFrom`; mark those settings `requires_restart`, since the queues are sized once at start, and `RIVER_QUEUES`, when set, still wins. The attempts of a job kind can come from business settings the same way, with `riverx.MaxAttemptsFrom`, read on every insert. See the [`river` module](modules.md#the-river-module).
 
 ## Why this split
 
