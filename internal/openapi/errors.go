@@ -1,8 +1,19 @@
 package openapi
 
+import (
+	"bytes"
+
+	"go.yaml.in/yaml/v3"
+)
+
 // The error body of the gateway: google.rpc.Status as JSON, with the protovalidate
 // violations of a request that failed validation and the ErrorInfo of a failed external
-// provider among its details.
+// provider among its details. It is what the default error handler of the api module
+// writes, and a test of the module checks real answers against it.
+//
+// A project that writes errors of its own (api.HTTPErrorHandler) describes them in its
+// base.yaml under components.schemas.Error, and components.responses.Error for the
+// statuses: the generator then leaves them, and every operation points at them.
 
 const (
 	errorSchema   = "Error"
@@ -107,4 +118,40 @@ func orderedMedia(k string, v *MediaType) *Ordered[*MediaType] {
 	o := NewOrdered[*MediaType]()
 	o.Set(k, v)
 	return o
+}
+
+// errorDetails are the schemas only the generated error body names.
+var errorDetails = []string{"buf.validate.FieldPath", "buf.validate.Violations", "google.rpc.ErrorInfo"}
+
+// baseErrors gives the error schema and response the base describes precedence over the
+// generated ones: a project with an error handler of its own writes another body.
+func (g *generator) baseErrors(base []byte) error {
+	if len(bytes.TrimSpace(base)) == 0 {
+		return nil
+	}
+	var file struct {
+		Components struct {
+			Schemas   map[string]yaml.Node `yaml:"schemas"`
+			Responses map[string]yaml.Node `yaml:"responses"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(base, &file); err != nil {
+		return err
+	}
+	g.fromBase = map[string]bool{}
+	if _, ok := file.Components.Schemas[errorSchema]; ok {
+		g.fromBase["schemas/"+errorSchema] = true
+		delete(g.schemas, errorSchema)
+		for _, name := range errorDetails {
+			// A message of the project's own proto files keeps its schema.
+			if _, used := g.homes[name]; !used {
+				delete(g.schemas, name)
+			}
+		}
+	}
+	if _, ok := file.Components.Responses[errorResponse]; ok {
+		g.fromBase["responses/"+errorResponse] = true
+		delete(g.responses, errorResponse)
+	}
+	return nil
 }

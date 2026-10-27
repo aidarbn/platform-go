@@ -112,6 +112,7 @@ paths:
       operationId: legacy_v1_ProductService_Add
       deprecated: true
       requestBody:
+        required: true
         content:
           application/json:
             schema:

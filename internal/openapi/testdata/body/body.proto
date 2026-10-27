@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package body.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// Bodies of every kind, for TestRequestBodyRequired.
+service S {
+  rpc Create(Item) returns (Item) {
+    option (google.api.http) = {
+      post: "/v1/items"
+      body: "*"
+    };
+  }
+
+  rpc Update(UpdateRequest) returns (Item) {
+    option (google.api.http) = {
+      patch: "/v1/items/{id}"
+      body: "item"
+    };
+  }
+
+  // Everything is in the path: there is no body to send.
+  rpc Archive(ArchiveRequest) returns (Item) {
+    option (google.api.http) = {
+      post: "/v1/items/{id}:archive"
+      body: "*"
+    };
+  }
+
+  rpc Rename(RenameRequest) returns (Item) {
+    option (google.api.http) = {
+      post: "/v1/items/{id}:rename"
+      body: "*"
+    };
+  }
+
+  rpc Ping(google.protobuf.Empty) returns (Item) {
+    option (google.api.http) = {
+      post: "/v1/ping"
+      body: "*"
+    };
+  }
+
+  rpc Meta(google.protobuf.Struct) returns (Item) {
+    option (google.api.http) = {
+      post: "/v1/meta"
+      body: "*"
+    };
+  }
+}
+
+message Item {
+  string id = 1;
+  string name = 2;
+}
+
+message UpdateRequest {
+  string id = 1;
+  Item item = 2;
+}
+
+message ArchiveRequest {
+  string id = 1;
+}
+
+message RenameRequest {
+  string id = 1;
+  string name = 2;
+}

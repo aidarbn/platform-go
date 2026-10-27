@@ -13,6 +13,7 @@ paths:
       summary: Check
       operationId: RulesService_Check
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -1294,6 +1295,7 @@ paths:
       operationId: RulesService_Upload
       requestBody:
         description: 'A stream: one JSON object a line.'
+        required: true
         content:
           application/json:
             schema:
@@ -1314,6 +1316,7 @@ paths:
       summary: Put
       operationId: RulesService_Put
       requestBody:
+        required: true
         content:
           application/json:
             schema:

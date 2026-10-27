@@ -1,0 +1,49 @@
+# The human part with an error body of its own: see TestBaseError.
+openapi: 3.1.0
+info:
+  title: Shop API
+  version: "2.0"
+  description: |
+    The shop.
+
+    Two paragraphs.
+servers:
+  - url: https://shop.example.com
+security:
+  - bearerAuth: []
+tags:
+  - name: ProductService
+    description: Products, as the base file describes them.
+  - name: Guides
+    description: A tag of the base only.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  # The project writes errors of its own (api.HTTPErrorHandler): it describes them, and
+  # the generator leaves them.
+  schemas:
+    Error:
+      type: object
+      properties:
+        request_id:
+          type: string
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+      required: [request_id, error]
+    ErrorDetail:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required: [code, message]
+  responses:
+    Error:
+      description: An error of the shop.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

@@ -12,6 +12,7 @@ import (
 	"github.com/bufbuild/protocompile"
 	"github.com/bufbuild/protocompile/linker"
 	"github.com/bufbuild/protocompile/protoutil"
+	"go.yaml.in/yaml/v3"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -27,6 +28,7 @@ import (
 	_ "google.golang.org/protobuf/types/known/durationpb"
 	_ "google.golang.org/protobuf/types/known/emptypb"
 	_ "google.golang.org/protobuf/types/known/fieldmaskpb"
+	_ "google.golang.org/protobuf/types/known/structpb"
 	_ "google.golang.org/protobuf/types/known/timestamppb"
 	_ "google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -235,5 +237,50 @@ func TestErrorsGoIntoTheResponse(t *testing.T) {
 	last := files[len(files)-1:]
 	if resp := run(t, "", []string{last[0].GetName()}, last); resp.GetError() == "" {
 		t.Error("a request without the imports of its files is not an error")
+	}
+}
+
+// A body the HTTP rule asks for is required, as protoc-gen-connect-openapi said: the
+// gateway reads an empty body as {}, so a client can always send one. A body with
+// nothing left once the path took its fields is not.
+func TestRequestBodyRequired(t *testing.T) {
+	files := compile(t, "testdata/body", "body.proto")
+	resp := run(t, "layout=single", []string{"body.proto"}, files)
+	if resp.GetError() != "" {
+		t.Fatal(resp.GetError())
+	}
+	doc := []byte(resp.GetFile()[0].GetContent())
+	if err := oascheck.Validate(doc); err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Paths map[string]map[string]struct {
+			RequestBody *struct {
+				Required bool `yaml:"required"`
+			} `yaml:"requestBody"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(doc, &spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		verb, path string
+		required   bool
+	}{
+		{"post", "/v1/items", true},
+		{"patch", "/v1/items/{id}", true},
+		{"post", "/v1/items/{id}:archive", false},
+		{"post", "/v1/items/{id}:rename", true},
+		{"post", "/v1/meta", true},
+		{"post", "/v1/ping", false},
+	} {
+		rb := spec.Paths[c.path][c.verb].RequestBody
+		if rb == nil {
+			t.Errorf("%s %s has no request body", c.verb, c.path)
+			continue
+		}
+		if rb.Required != c.required {
+			t.Errorf("%s %s: required = %v, want %v", c.verb, c.path, rb.Required, c.required)
+		}
 	}
 }
