@@ -260,3 +260,15 @@ func validateUnary(v protovalidate.Validator) grpc.UnaryServerInterceptor {
 		return handler(ctx, req)
 	}
 }
+
+// normalizeUnary runs the project's normalizers on the request message.
+func normalizeUnary(fns []func(proto.Message)) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if msg, ok := req.(proto.Message); ok {
+			for _, fn := range fns {
+				fn(msg)
+			}
+		}
+		return handler(ctx, req)
+	}
+}

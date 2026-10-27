@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
+	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
 	"github.com/aidarbn/platform-go/kit/modules/api"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
@@ -258,4 +260,49 @@ func TestNilInterceptorPanics(t *testing.T) {
 			add(nil)
 		})
 	}
+}
+
+// Normalizers change the request after the guards and before validation, in the order
+// they were added.
+func TestNormalizeBeforeValidation(t *testing.T) {
+	var app *platform.App
+	extraWire = func(a *platform.App) {
+		app = a
+		api.Normalize(a, func(m proto.Message) {
+			if req, ok := m.(*testv1.EchoRequest); ok {
+				req.MessageText = strings.TrimSpace(req.MessageText)
+			}
+		})
+		api.Normalize(a, func(m proto.Message) {
+			if req, ok := m.(*testv1.EchoRequest); ok {
+				req.MessageText = strings.ToUpper(req.MessageText)
+			}
+		})
+	}
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{})
+
+	if code, body, _ := s.do("POST", "/v1/echo", `{"message_text":"   hi   "}`, nil); code != http.StatusOK || !strings.Contains(body, `"message_text":"HI"`) || !strings.Contains(body, `"length":2`) {
+		t.Errorf("normalized: %d %s", code, body)
+	}
+	// Blanks are trimmed to nothing before validation, which refuses an empty text.
+	if code, body, _ := s.do("POST", "/v1/echo", `{"message_text":"     "}`, nil); code != http.StatusBadRequest {
+		t.Errorf("blanks: %d %s", code, body)
+	}
+	chain := strings.Join(api.Chain(app), " ")
+	if !strings.Contains(chain, "transform+50/normalize validate/validate") {
+		t.Errorf("chain: %s", chain)
+	}
+	if stream := strings.Join(api.StreamChain(app), " "); strings.Contains(stream, "normalize") {
+		t.Errorf("streams are normalized: %s", stream)
+	}
+}
+
+func TestNilNormalizerPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("no panic")
+		}
+	}()
+	api.Normalize(nil, nil)
 }

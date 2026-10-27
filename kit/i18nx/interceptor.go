@@ -316,7 +316,8 @@ func (c *Client) staticOr(key, original string, locale Locale) string {
 
 // RequestInterceptor copies the base value of every annotated field of an editor's
 // request into its field_translations map under the default locale, so the base column
-// and the default translation never disagree. Taken from taply.
+// and the default translation never disagree. Taken from taply. The i18n module runs it
+// after validation, so the translation gets the value the checks passed.
 func (c *Client) RequestInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if msg, ok := req.(proto.Message); ok {
@@ -326,7 +327,52 @@ func (c *Client) RequestInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
+// BaseFromTranslationInterceptor fills the base field of an editor's request from its
+// translation into the default locale, taken from taply: when the request carries the
+// key of the default locale for a field — empty too, which clears it — the base field
+// takes its trimmed value; without the key the base field stays as sent and
+// RequestInterceptor copies it into the translation. An editor that edits only the
+// translations sends the base field as it loaded it, and without this the old base
+// value would overwrite the new translation. It belongs before string normalisation and
+// validation, so a base value from a translation passes the same checks as one sent
+// directly.
+func (c *Client) BaseFromTranslationInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if msg, ok := req.(proto.Message); ok {
+			baseFromTranslation(msg.ProtoReflect(), c.defaultLocale)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// mirror writes the trimmed base value of every annotated field into the default
+// locale of its translations; an empty base value is skipped.
 func mirror(msg protoreflect.Message, locale Locale) {
+	walkEditorFields(msg, func(m protoreflect.Message, fd, ft protoreflect.FieldDescriptor, field string) {
+		if base := strings.TrimSpace(m.Get(fd).String()); base != "" {
+			setTranslation(m, ft, field, locale, base)
+		}
+	})
+}
+
+// baseFromTranslation sets every annotated field whose translation into the default
+// locale was sent to that translation, trimmed, and writes the trimmed value back, so a
+// translation of blanks is saved as empty rather than skipped by mirror.
+func baseFromTranslation(msg protoreflect.Message, locale Locale) {
+	walkEditorFields(msg, func(m protoreflect.Message, fd, ft protoreflect.FieldDescriptor, field string) {
+		text, ok := translation(m, ft, field, locale)
+		if !ok {
+			return
+		}
+		text = strings.TrimSpace(text)
+		m.Set(fd, protoreflect.ValueOfString(text))
+		setTranslation(m, ft, field, locale, text)
+	})
+}
+
+// walkEditorFields calls fn for every annotated string field of a message that has a
+// field_translations map, through nested messages and lists of them.
+func walkEditorFields(msg protoreflect.Message, fn func(m protoreflect.Message, fd, ft protoreflect.FieldDescriptor, field string)) {
 	md := msg.Descriptor()
 	ft := md.Fields().ByName("field_translations")
 	hasFT := ft != nil && ft.IsMap()
@@ -337,12 +383,7 @@ func mirror(msg protoreflect.Message, locale Locale) {
 		if hasFT {
 			if opts := fieldOptions(fd); opts != nil && fd.Kind() == protoreflect.StringKind {
 				if _, field, ok := splitKey(opts.GetKey()); ok {
-					if base := strings.TrimSpace(msg.Get(fd).String()); base != "" {
-						entry := msg.Mutable(ft).Map().Mutable(protoreflect.ValueOfString(field).MapKey()).Message()
-						if values := entry.Descriptor().Fields().ByName("values"); values != nil && values.IsMap() {
-							entry.Mutable(values).Map().Set(protoreflect.ValueOfString(string(locale)).MapKey(), protoreflect.ValueOfString(base))
-						}
-					}
+					fn(msg, fd, ft, field)
 				}
 				continue
 			}
@@ -353,10 +394,43 @@ func mirror(msg protoreflect.Message, locale Locale) {
 		if fd.IsList() {
 			list := msg.Get(fd).List()
 			for j := range list.Len() {
-				mirror(list.Get(j).Message(), locale)
+				walkEditorFields(list.Get(j).Message(), fn)
 			}
 		} else if msg.Has(fd) {
-			mirror(msg.Mutable(fd).Message(), locale)
+			walkEditorFields(msg.Mutable(fd).Message(), fn)
 		}
+	}
+}
+
+// translation reads field_translations[field].values[locale]; ok is false when the
+// field or the locale is not in the request.
+func translation(msg protoreflect.Message, ft protoreflect.FieldDescriptor, field string, locale Locale) (string, bool) {
+	if !msg.Has(ft) {
+		return "", false
+	}
+	key := protoreflect.ValueOfString(field).MapKey()
+	entries := msg.Get(ft).Map()
+	if !entries.Has(key) {
+		return "", false
+	}
+	entry := entries.Get(key).Message()
+	values := entry.Descriptor().Fields().ByName("values")
+	if values == nil || !values.IsMap() {
+		return "", false
+	}
+	byLocale := entry.Get(values).Map()
+	lkey := protoreflect.ValueOfString(string(locale)).MapKey()
+	if !byLocale.Has(lkey) {
+		return "", false
+	}
+	return byLocale.Get(lkey).String(), true
+}
+
+// setTranslation writes field_translations[field].values[locale], keeping the other
+// locales.
+func setTranslation(msg protoreflect.Message, ft protoreflect.FieldDescriptor, field string, locale Locale, text string) {
+	entry := msg.Mutable(ft).Map().Mutable(protoreflect.ValueOfString(field).MapKey()).Message()
+	if values := entry.Descriptor().Fields().ByName("values"); values != nil && values.IsMap() {
+		entry.Mutable(values).Map().Set(protoreflect.ValueOfString(string(locale)).MapKey(), protoreflect.ValueOfString(text))
 	}
 }

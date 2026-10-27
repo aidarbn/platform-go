@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/aidarbn/platform-go/kit/i18nx"
 	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
@@ -55,6 +56,7 @@ func TestTranslationAroundAuthentication(t *testing.T) {
 			}
 			return h(context.WithValue(ctx, userKey{}, user[0]), req)
 		})
+		api.Normalize(a, func(proto.Message) {})
 		i18n.SkipTranslation(a, func(ctx context.Context) bool {
 			user, _ := ctx.Value(userKey{}).(string)
 			mu.Lock()
@@ -97,9 +99,11 @@ func TestTranslationAroundAuthentication(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"errors-i18n/i18n-errors", "authenticate/"},
 		{"authenticate/", "transform/i18n-fields"},
-		{"authenticate/", "transform/i18n-mirror"},
+		{"authenticate/", "transform/i18n-base"},
 		{"transform/i18n-fields", "validate/validate"},
-		{"transform/i18n-mirror", "validate/validate"},
+		{"transform/i18n-base", "transform+50/normalize"},
+		{"transform+50/normalize", "validate/validate"},
+		{"validate/validate", "after-validate/i18n-mirror"},
 	} {
 		if at(pair[0]) > at(pair[1]) {
 			t.Errorf("%s is not before %s in %v", pair[0], pair[1], chain)
