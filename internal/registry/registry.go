@@ -137,6 +137,8 @@ var all = []Module{
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
 			{Key: "API_LOG_BODIES", Example: "true", Comment: "bodies of failed requests in the access log"},
 			{Key: "API_SECURITY_HEADERS", Example: "true", Comment: "security response headers"},
+			{Key: "API_HTTP_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running REST calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "API_GRPC_STOP_TIMEOUT", Example: "", Comment: "then how long running gRPC calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
 			{Key: "API_TRUSTED_PROXIES", Example: "", Comment: "networks whose X-Forwarded-For is believed, and, when set, gRPC peers that may name the client; empty means loopback and private networks for HTTP only, none ignores the header"},
 		},
 		Tools: []Tool{
@@ -270,6 +272,8 @@ var all = []Module{
 			{Key: "RIVER_COMPLETED_RETENTION", Example: "24h", Comment: "how long completed jobs are kept"},
 			{Key: "RIVER_CANCELLED_RETENTION", Example: "24h", Comment: "how long cancelled jobs are kept"},
 			{Key: "RIVER_DISCARDED_RETENTION", Example: "168h", Comment: "how long discarded jobs are kept"},
+			{Key: "RIVER_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running jobs may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "RIVER_CANCEL_TIMEOUT", Example: "", Comment: "then how long cancelled jobs get to return; empty waits without a limit"},
 		},
 	},
 	{

@@ -280,6 +280,7 @@ func env(f *spec.File, modules []registry.Module) []byte {
 		{"APP_ROLE", "all"},
 		{"OPS_ADDR", ":9090"},
 		{"SHUTDOWN_TIMEOUT", "20s"},
+		{"SHUTDOWN_PHASES", "false"},
 		{"LOG_LEVEL", "info"},
 		{"LOG_FORMAT", "json"},
 	} {

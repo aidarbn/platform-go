@@ -313,6 +313,7 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_RATE_IPV6_PREFIX` | 64 | leading bits of an IPv6 address that make one client of the rate limit; `128` limits every address on its own |
 | `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LOCK` | `24h`, `1m` | |
 | `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
+| `API_HTTP_STOP_TIMEOUT`, `API_GRPC_STOP_TIMEOUT` | none | on shutdown, how long running REST calls, then running gRPC calls, may finish before they are cut off; none waits as long as `SHUTDOWN_TIMEOUT` allows |
 | `API_TRUSTED_PROXIES` | loopback and private networks | whose `X-Forwarded-For` names the client; networks set here, not the default, may also name it over gRPC with `api.ClientIPMetadataKey`; a request from elsewhere keeps its connection address, so an allowlist by address cannot be bypassed with a forged header. `none` ignores the header; the gRPC side still trusts loopback, for the gateway. Narrow it to the real proxies when clients can reach the service from a private network |
 
 ## The `river` module
@@ -352,12 +353,33 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 
 `Queue` has `Insert`, `InsertTx` (the job exists exactly when the domain change commits), `InsertAt` and `InsertMany`; `Client()` gives the River client for the rest. Periodic jobs run on the elected leader only, so several instances do not run them twice.
 
+**Queues and attempts from business settings**, as taply sizes its queues and attempts from `app_configs`. Both are opt-in; without them the module behaves as before.
+
+```go
+riverx.QueuesFrom(app, func(ctx context.Context) (map[string]int, error) {
+	return map[string]int{"sync": s.Sync().QueueWorkers(), "orders": s.Orders().QueueWorkers(), "payments": 3}, nil
+})
+riverx.MaxAttemptsFrom(app, func(_ context.Context, kind string) (int, bool) {
+	if kind == (jobs.CreateOrderArgs{}).Kind() {
+		return s.CreateOrder().MaxAttempts(), true
+	}
+	return 0, false // other kinds keep their own attempts
+})
+```
+
+- `QueuesFrom` is called once, when the module starts working jobs and the settings are loaded; a changed value applies after a restart, so mark such settings `requires_restart` in `settings.yaml`. Queues set in `RIVER_QUEUES` or in `Config.Queues` win over it, so an environment can still pin its capacity; with neither the module works `default=10`. An error, an empty map or a queue without workers stops the start. An instance that only inserts (`RIVER_WORK=false`, `APP_ROLE=api`) does not call it.
+- `MaxAttemptsFrom` is asked on every insert through `Queue` and for every periodic job, so a changed value applies to the jobs inserted after the change. Its value replaces the attempts the job carries in `InsertOpts()`; attempts passed explicitly to `Insert`/`InsertTx` or returned by `PeriodicJob.Opts` win over it. A kind it reports `false` or a non positive number for keeps its own attempts. Inserts made with `Client()` directly are River as it is and do not see it.
+
+**Shutdown.** The module stops River softly: no new jobs are fetched and running ones may finish. `RIVER_STOP_TIMEOUT` bounds that wait; when it runs out — or `SHUTDOWN_TIMEOUT` does — the running jobs get their context cancelled and `RIVER_CANCEL_TIMEOUT` to return, so none of them writes into a database pool that is already closed. With phased shutdown (`SHUTDOWN_PHASES`, see [Process roles](#process-roles)) the queue drains after the HTTP servers stop and before gRPC does.
+
 | Variable | Default | |
 |---|---|---|
 | `RIVER_QUEUES` | `default=10` | queues and their capacity: an environment parameter, staging and production differ in it |
 | `RIVER_WORK` | `true` | `false` makes an instance insert only, for splitting API and worker instances |
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
+| `RIVER_STOP_TIMEOUT` | none | on shutdown, how long running jobs may finish; none waits as long as `SHUTDOWN_TIMEOUT` allows. Taply uses `6s` |
+| `RIVER_CANCEL_TIMEOUT` | none | then how long cancelled jobs get to return; none waits without a limit. Taply uses `1s` |
 
 ## The `enums` module
 
@@ -538,7 +560,9 @@ app.DeclareAlerts("pool_empty", "code_send_failed")
 log.ErrorContext(ctx, "the card pool is empty", logx.AlertKey, "pool_empty")
 ```
 
-Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
+**Shutdown** stops the modules in reverse order of initialisation within `SHUTDOWN_TIMEOUT`, so the database outlives what uses it. `SHUTDOWN_PHASES=true` (`platform.Config.ShutdownPhases` in code) switches to taply's order: the HTTP servers — the REST gateway and the admin panel — stop taking requests first, the job queue drains next while gRPC clients are still served, gRPC goes last, and the modules without phases stop after them in reverse order. Each step can have a budget of its own (`API_HTTP_STOP_TIMEOUT`, `RIVER_STOP_TIMEOUT`, `RIVER_CANCEL_TIMEOUT`, `API_GRPC_STOP_TIMEOUT`) inside the shared `SHUTDOWN_TIMEOUT`; taply's are 5s, 6s + 1s and 1s. Set them when turning phases on: the steps share one deadline, so an unbounded HTTP step that takes the whole timeout leaves the queue no time for a soft stop, and its jobs are cancelled at once. A module of a project joins the order by implementing `platform.PhasedStopper`: its `StopPhases()` returns steps with `platform.PhaseHTTP`, `PhaseQueue`, `PhaseGRPC` or a number between them, and together they must do what its `Stop` does; one that returns no steps is stopped with `Stop`.
+
+Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `SHUTDOWN_PHASES` (`false`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
 
 ## Dependencies between modules
 

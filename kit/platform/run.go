@@ -23,6 +23,11 @@ type Config struct {
 	ShutdownTimeout time.Duration // overall shutdown timeout, 20s by default
 	Logger          *slog.Logger
 
+	// ShutdownPhases stops the modules by phase instead of in reverse order of
+	// initialisation: the HTTP servers, then the job queue, then gRPC, then every other
+	// module (see PhasedStopper). Off by default; SHUTDOWN_PHASES=true turns it on.
+	ShutdownPhases bool
+
 	// OnStarted is called once every module and the ops server are up. Tests and local
 	// runs use it to learn the actual ops address.
 	OnStarted func(opsAddr string)
@@ -55,6 +60,9 @@ func (c *Config) setDefaults() error {
 	}
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = l.Duration("SHUTDOWN_TIMEOUT", 20*time.Second)
+	}
+	if !c.ShutdownPhases {
+		c.ShutdownPhases = l.Bool("SHUTDOWN_PHASES", false)
 	}
 	if c.Logger == nil {
 		c.Logger = logx.New(logx.Options{Level: l.String("LOG_LEVEL", "info"), Format: l.String("LOG_FORMAT", "json")})
@@ -98,7 +106,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 	shutdown := func() error {
 		stopCtx, cancel := shutdownContext(ctx, cfg)
 		defer cancel()
-		return stopModules(stopCtx, app, inited)
+		return stopAll(stopCtx, app, inited, cfg.ShutdownPhases)
 	}
 
 	inited, err = initModules(ctx, app, modules)
@@ -130,7 +138,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 
 	stopCtx, cancel := shutdownContext(ctx, cfg)
 	defer cancel()
-	return errors.Join(ops.stop(stopCtx), stopModules(stopCtx, app, inited))
+	return errors.Join(ops.stop(stopCtx), stopAll(stopCtx, app, inited, cfg.ShutdownPhases))
 }
 
 // shutdownContext gives shutdown its own deadline: the run context is already cancelled,
@@ -169,12 +177,55 @@ func startModules(ctx context.Context, app *App, modules []Module) error {
 	return nil
 }
 
-func stopModules(ctx context.Context, app *App, inited []Module) error {
+// stopAll stops the modules that were initialised: in reverse order, or by phase.
+func stopAll(ctx context.Context, app *App, inited []Module, phased bool) error {
+	if !phased {
+		return stopModules(ctx, app, inited, nil)
+	}
+	done, err := stopPhases(ctx, app, inited)
+	return errors.Join(err, stopModules(ctx, app, inited, done))
+}
+
+type phaseOf struct {
+	module string
+	StopPhase
+}
+
+// stopPhases runs the phases of every PhasedStopper by order. Phases of one order run
+// in reverse order of initialisation, as modules do. It reports which modules, by index
+// in inited, had phases: a PhasedStopper without any is stopped with Stop.
+func stopPhases(ctx context.Context, app *App, inited []Module) (map[int]bool, error) {
+	var phases []phaseOf
+	done := map[int]bool{}
+	for i := len(inited) - 1; i >= 0; i-- {
+		if p, ok := inited[i].(PhasedStopper); ok {
+			for _, ph := range p.StopPhases() {
+				phases = append(phases, phaseOf{module: inited[i].Name(), StopPhase: ph})
+				done[i] = true
+			}
+		}
+	}
+	slices.SortStableFunc(phases, func(a, b phaseOf) int { return a.Order - b.Order })
+
+	var errs []error
+	for _, ph := range phases {
+		if err := ph.Stop(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("module %s: stop %s: %w", ph.module, ph.Name, err))
+			continue
+		}
+		app.log.Info("module phase stopped", "module", ph.module, "phase", ph.Name)
+	}
+	return done, errors.Join(errs...)
+}
+
+// stopModules calls Stop in reverse order of initialisation, leaving out the modules
+// whose phases have already run.
+func stopModules(ctx context.Context, app *App, inited []Module, phased map[int]bool) error {
 	var errs []error
 	for i := len(inited) - 1; i >= 0; i-- {
 		m := inited[i]
 		s, ok := m.(Stopper)
-		if !ok {
+		if !ok || phased[i] {
 			continue
 		}
 		if err := s.Stop(ctx); err != nil {

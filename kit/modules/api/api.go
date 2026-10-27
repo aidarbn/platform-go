@@ -79,6 +79,13 @@ type Config struct {
 	// loopback and the server's own address always may, since the gateway of this
 	// process connects from them.
 	TrustedProxies []netip.Prefix
+
+	// Shutdown budgets, as in taply. HTTPStopTimeout is how long running REST calls may
+	// finish once the server stops taking new ones; GRPCStopTimeout is how long running
+	// gRPC calls may finish before their connections are cut. Zero waits as long as the
+	// shutdown timeout allows.
+	HTTPStopTimeout time.Duration
+	GRPCStopTimeout time.Duration
 }
 
 // DefaultTrustedProxies are loopback and the private networks.
@@ -125,6 +132,9 @@ func Load(l *confx.Loader) Config {
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
 		TrustedProxies:  trustedProxies(l),
+
+		HTTPStopTimeout: nonNegative(l, "API_HTTP_STOP_TIMEOUT"),
+		GRPCStopTimeout: nonNegative(l, "API_GRPC_STOP_TIMEOUT"),
 	}
 }
 
@@ -136,6 +146,16 @@ func ipv6Prefix(l *confx.Loader) int {
 		l.Fail(fmt.Errorf("%s: %d is not a prefix length from 1 to 128", l.Key("API_RATE_IPV6_PREFIX"), bits))
 	}
 	return bits
+}
+
+// nonNegative reads a duration that defaults to zero and may not be negative.
+func nonNegative(l *confx.Loader, name string) time.Duration {
+	d := l.Duration(name, 0)
+	if d < 0 {
+		l.Fail(fmt.Errorf("%s: %s is negative", l.Key(name), d))
+		return 0
+	}
+	return d
 }
 
 // trustedProxies reads API_TRUSTED_PROXIES: comma separated networks or addresses, or
@@ -786,17 +806,66 @@ func (m *Module) Health(context.Context) error {
 }
 
 // Stop stops taking requests and lets the running ones finish within the shutdown
-// timeout; what is still running after it is cut off.
+// timeout and the budgets of HTTP and gRPC; what is still running after it is cut off.
 func (m *Module) Stop(ctx context.Context) error {
+	return errors.Join(m.stopHTTP(ctx), m.stopGRPC(ctx))
+}
+
+// StopPhases lets a phased shutdown stop the REST gateway first and gRPC last, with the
+// job queue draining in between while gRPC clients are still served.
+func (m *Module) StopPhases() []platform.StopPhase {
+	return []platform.StopPhase{
+		{Name: "http", Order: platform.PhaseHTTP, Stop: m.stopHTTP},
+		{Name: "grpc", Order: platform.PhaseGRPC, Stop: m.stopGRPC},
+	}
+}
+
+// within bounds ctx by budget when one is set.
+func within(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	if budget <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
+// stopHTTP reports the service as not serving, stops the REST gateway and closes its
+// connection to gRPC.
+func (m *Module) stopHTTP(ctx context.Context) error {
 	if m.health != nil {
 		m.health.Shutdown()
 	}
 	var errs []error
 	if m.httpSrv != nil {
-		errs = append(errs, m.httpSrv.Shutdown(ctx))
+		httpCtx, cancel := within(ctx, m.cfg.HTTPStopTimeout)
+		errs = append(errs, m.httpSrv.Shutdown(httpCtx))
+		cancel()
 	}
 	if m.gwCancel != nil {
 		m.gwCancel()
+	}
+	if m.conn != nil {
+		errs = append(errs, m.conn.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// stopGRPC lets running gRPC calls finish, cuts them off when the budget is spent, then
+// stops the rate limiter and the idempotency cleanup the calls use.
+func (m *Module) stopGRPC(ctx context.Context) error {
+	if m.grpcSrv != nil {
+		grpcCtx, cancel := within(ctx, m.cfg.GRPCStopTimeout)
+		done := make(chan struct{})
+		go func() {
+			m.grpcSrv.GracefulStop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-grpcCtx.Done():
+			m.grpcSrv.Stop()
+			<-done
+		}
+		cancel()
 	}
 	if m.limiter != nil {
 		m.limiter.stop()
@@ -808,20 +877,5 @@ func (m *Module) Stop(ctx context.Context) error {
 		close(m.cleanup)
 		m.cleanup = nil
 	}
-	if m.conn != nil {
-		errs = append(errs, m.conn.Close())
-	}
-	if m.grpcSrv != nil {
-		done := make(chan struct{})
-		go func() {
-			m.grpcSrv.GracefulStop()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-ctx.Done():
-			m.grpcSrv.Stop()
-		}
-	}
-	return errors.Join(errs...)
+	return nil
 }
