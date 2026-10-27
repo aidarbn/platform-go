@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/aidarbn/platform-go/internal/apply"
 	"github.com/aidarbn/platform-go/internal/gen"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
@@ -219,6 +221,31 @@ func TestRemovingModuleThroughApply(t *testing.T) {
 	}
 	if out := mustRun(t, "verify", "--dir", dir); !strings.Contains(out, "up to date") {
 		t.Errorf("verify after apply:\n%s", out)
+	}
+}
+
+// apply tidies go.mod again after the generators: the code they write may need other
+// modules than before, as after the codemod openapi.gnostic, whose proto files no
+// longer import gnostic.
+func TestApplyTidiesAfterGeneration(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	mustRun(t, "new", "example.com/shop-api", "--with", "api", "--dir", dir)
+
+	var steps []string
+	tidy, generate := goModTidy, generators
+	t.Cleanup(func() { goModTidy, generators = tidy, generate })
+	goModTidy = func(string, io.Writer) error { steps = append(steps, "tidy"); return nil }
+	generators = func(*apply.Plan, string, io.Writer) error { steps = append(steps, "generate"); return nil }
+
+	mustRun(t, "apply", "--dir", dir)
+	if got := strings.Join(steps, ", "); got != "tidy, generate, tidy" {
+		t.Errorf("apply ran %s, want tidy, generate, tidy", got)
+	}
+
+	steps = nil
+	mustRun(t, "apply", "--no-tidy", "--dir", dir)
+	if len(steps) != 0 {
+		t.Errorf("apply --no-tidy ran %v", steps)
 	}
 }
 
