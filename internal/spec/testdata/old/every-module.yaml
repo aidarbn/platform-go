@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aidarbn/platform-go/v0.8.0/schema/platformgo.schema.json
+schema: 1
+platform: v0.8.0
+
+project:
+  module: github.com/aidarbn/shop-api
+  go: "1.27"
+
+modules:
+  admin: {}
+  api: {}
+  enums:
+    domain: internal/core/
+  i18n: {}
+  monitoring:
+  postgres: {}
+  rbac: {}
+  river: {}
+  s3: {}
+  settings:
+    schema: config/settings.yaml
+  web: {}

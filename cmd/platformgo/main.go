@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aidarbn/platform-go/internal/apply"
@@ -91,8 +93,9 @@ func usage(out io.Writer) {
 	fmt.Fprint(out, `platformgo — a platform for Go projects
 
   platformgo new <module-path>    create a project
-  platformgo plan                 show what apply would change
-  platformgo apply [--no-tidy]    bring the project in line with platformgo.yaml
+  platformgo plan [--diff]        show what apply would change
+  platformgo apply [--no-tidy] [--adopt] [--force path]
+                                  bring the project in line with platformgo.yaml
   platformgo generate [--check]   apply without go mod tidy; --check fails when stale
   platformgo verify               the same check as generate --check, for CI
   platformgo lint                 every check of the project: format, tidy, build, generation,
@@ -100,7 +103,9 @@ func usage(out io.Writer) {
   platformgo migrate create <name> add an SQL migration to db/migrations
   platformgo migrate lint         lint the migrations the branch adds (--against <branch>)
   platformgo db generate          migrate the database and generate the jet query builder
-  platformgo upgrade [version]    move the project to a platform version, latest by default
+  platformgo upgrade [version]    move the project to a platform version, latest by default, and
+                                  check it: go build, verify, go test (--no-check skips them,
+                                  --strict fails on them); --dry-run does it in a copy
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor [--fix]       check the development environment and the project
   platformgo setup [--alias]      shell completion and the short pgo alias
@@ -161,7 +166,7 @@ func cmdGenerate(args []string, out io.Writer) error {
 	if *check {
 		return verify(*dir, out)
 	}
-	plan, err := runApply(*dir, out)
+	plan, err := runApply(*dir, nil, out)
 	if err != nil {
 		return err
 	}
@@ -173,12 +178,12 @@ func cmdGenerate(args []string, out io.Writer) error {
 func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 	ctx := context.Background()
 	if slices.Contains(plan.Modules, "postgres") {
-		if err := codegen.Sqlc(ctx, dir, out); err != nil {
+		if err := codegen.Sqlc(ctx, dir, sqlcLayout(plan), out); err != nil {
 			return err
 		}
 	}
 	if slices.Contains(plan.Modules, "api") {
-		if err := codegen.Buf(ctx, dir, out); err != nil {
+		if err := codegen.Buf(ctx, dir, apiLayout(plan), out); err != nil {
 			return err
 		}
 	}
@@ -188,6 +193,16 @@ func runSqlc(plan *apply.Plan, dir string, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// sqlcLayout is where sqlc works in the project, from the sqlc option of postgres.
+func sqlcLayout(plan *apply.Plan) codegen.SqlcLayout {
+	return codegen.SqlcLayout{Config: plan.Sqlc.ConfigPath(), Queries: plan.Sqlc.QueriesDir(), Out: plan.Sqlc.Out}
+}
+
+// apiLayout is where buf works in the project, from the options of api.
+func apiLayout(plan *apply.Plan) codegen.APILayout {
+	return codegen.APILayout{ProtoDir: plan.API.ProtoDir, OpenAPI: plan.API.GeneratesOpenAPI()}
 }
 
 func cmdVerify(args []string, out io.Writer) error {
@@ -214,16 +229,24 @@ func checkGenerated(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
+	if len(plan.Conflicts) > 0 {
+		return fmt.Errorf("files platformgo generates are the project's own: %s; resolve them, see platformgo plan --diff and platformgo apply --adopt", strings.Join(plan.ConflictPaths(), ", "))
+	}
 	if !plan.UpToDate() {
 		return fmt.Errorf("generation is stale, run platformgo generate: %s", strings.Join(plan.Pending(), ", "))
 	}
+	if len(plan.Notes) > 0 {
+		var b strings.Builder
+		printNotes(&b, plan)
+		return fmt.Errorf("manual steps of a platform upgrade are open:\n%s", strings.TrimSuffix(b.String(), "\n"))
+	}
 	if slices.Contains(plan.Modules, "postgres") {
-		if err := codegen.SqlcCheck(context.Background(), dir); err != nil {
+		if err := codegen.SqlcCheck(ctx, dir, sqlcLayout(plan)); err != nil {
 			return err
 		}
 	}
 	if slices.Contains(plan.Modules, "api") {
-		if err := codegen.BufCheck(ctx, dir); err != nil {
+		if err := codegen.BufCheck(ctx, dir, apiLayout(plan)); err != nil {
 			return err
 		}
 	}
@@ -255,7 +278,7 @@ func cmdLint(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	opts := lint.Options{MaxLines: *maxLines, Against: *against, Modules: plan.Modules, Exec: lint.ExecCommand}
+	opts := lint.Options{MaxLines: *maxLines, Against: *against, Modules: plan.Modules, API: apiLayout(plan), Exec: lint.ExecCommand}
 	if *skip != "" {
 		for _, name := range strings.Split(*skip, ",") {
 			opts.Skip = append(opts.Skip, strings.TrimSpace(name))
@@ -280,11 +303,17 @@ func cmdApply(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
 	noTidy := fs.Bool("no-tidy", false, "skip go mod tidy")
+	adopt := fs.Bool("adopt", false, "for a project with files of its own: create only what does not exist, report the conflicts in "+apply.AdoptReport)
+	var force stringList
+	fs.Func("force", "take the generated version of a conflicting file; repeat or separate with commas", force.Set)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	plan, err := runApply(*dir, out)
+	if *adopt {
+		return runAdopt(*dir, force, out)
+	}
+	plan, err := runApply(*dir, force, out)
 	if err != nil {
 		return err
 	}
@@ -304,6 +333,46 @@ func cmdApply(args []string, out io.Writer) error {
 	}
 	// The generators are in go.sum now, so the queries can be generated.
 	return runSqlc(plan, *dir, out)
+}
+
+// stringList is a flag that may repeat and holds comma separated values.
+type stringList []string
+
+// Set adds the values of one occurrence of the flag.
+func (l *stringList) Set(v string) error {
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			*l = append(*l, item)
+		}
+	}
+	return nil
+}
+
+// runAdopt applies to a project that has files of its own: only what does not exist is
+// created, and the conflicts go into a report instead of failing.
+func runAdopt(dir string, force []string, out io.Writer) error {
+	plan, err := apply.Build(dir)
+	if err != nil {
+		return err
+	}
+	if err := plan.Force(force...); err != nil {
+		return err
+	}
+	created, report, err := plan.Adopt()
+	if err != nil {
+		return err
+	}
+	for _, path := range created {
+		fmt.Fprintln(out, "created", path)
+	}
+	fmt.Fprintln(out, "wrote", lock.FileName)
+	for _, c := range plan.Conflicts {
+		fmt.Fprintln(out, "!", c.Path+": the project's own, kept")
+	}
+	if report {
+		fmt.Fprintf(out, "report %s: the conflicts and what apply left; run platformgo apply once they are resolved\n", apply.AdoptReport)
+	}
+	return nil
 }
 
 func cmdDB(args []string, out io.Writer) error {
@@ -352,14 +421,22 @@ func cmdDB(args []string, out io.Writer) error {
 	return nil
 }
 
-func runApply(dir string, out io.Writer) (*apply.Plan, error) {
+func runApply(dir string, force []string, out io.Writer) (*apply.Plan, error) {
 	plan, err := apply.Build(dir)
 	if err != nil {
 		return nil, err
 	}
+	if err := plan.Force(force...); err != nil {
+		return nil, err
+	}
 	if plan.UpToDate() {
 		fmt.Fprintln(out, "generation is up to date")
+		printNotes(out, plan)
 		return plan, nil
+	}
+	if len(plan.Conflicts) > 0 {
+		printConflicts(out, plan)
+		return nil, fmt.Errorf("%d generated files are the project's own; nothing was changed: apply --adopt to create the rest and get a report, apply --force <path> to take the generated version", len(plan.Conflicts))
 	}
 	if err := plan.Execute(); err != nil {
 		return nil, err
@@ -371,27 +448,46 @@ func runApply(dir string, out io.Writer) (*apply.Plan, error) {
 func cmdUpgrade(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
+	dryRun := fs.Bool("dry-run", false, "upgrade a copy of the project and print the plan; the project stays as it is")
+	noCheck := fs.Bool("no-check", false, "skip go build, platformgo verify and go test after the upgrade: for CI with its own checks")
+	strict := fs.Bool("strict", false, "fail when a check after the upgrade fails; without it a failed check is a warning")
 	version, err := parsePositional(fs, args)
 	if err != nil {
 		return err
 	}
 
-	run := func(ctx context.Context, dir string, out io.Writer, args ...string) error {
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = dir
-		cmd.Stdout, cmd.Stderr = out, os.Stderr
-		return cmd.Run()
-	}
-	res, err := upgrade.Run(context.Background(), *dir, version, run, out)
+	// Ctrl-C stops go and still removes the copy of a dry run.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := upgrade.Options{Version: version, DryRun: *dryRun, NoCheck: *noCheck, Strict: *strict}
+	res, err := upgrade.Run(ctx, *dir, opts, upgradeRunner, out)
 	if err != nil {
 		return err
 	}
-	if res.From == res.To {
+	switch {
+	case *dryRun:
+	case res.From == res.To:
 		fmt.Fprintf(out, "already on %s\n", res.To)
-		return nil
+	default:
+		fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	}
-	fmt.Fprintf(out, "upgraded %s → %s\n", res.From, res.To)
 	return nil
+}
+
+// upgradeRunner runs the go command for upgrade; tests replace it.
+var upgradeRunner upgrade.Runner = goRunner
+
+// goRunner runs the go command for upgrade. Its output goes to out; its errors go to
+// stderr when out is the terminal output, as they always did, and into out when the
+// output is captured, for a dry run or the go.mod check.
+func goRunner(ctx context.Context, dir string, out io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = out, out
+	if out == io.Writer(os.Stdout) {
+		cmd.Stderr = os.Stderr
+	}
+	return cmd.Run()
 }
 
 func cmdMigrate(args []string, out io.Writer) error {
@@ -440,6 +536,7 @@ func cmdMigrateLint(args []string, out io.Writer) error {
 func cmdPlan(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
+	showDiff := fs.Bool("diff", false, "show each conflict as a diff from the project's file to the generated one")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -464,10 +561,24 @@ func cmdPlan(args []string, out io.Writer) error {
 
 	if plan.UpToDate() && len(plan.Kept) == 0 {
 		fmt.Fprintln(out, "no changes")
+		printNotes(out, plan)
 		return nil
 	}
 	printChanges(out, plan, "+", "~", "-")
+	printConflicts(out, plan)
+	if *showDiff {
+		for _, c := range plan.Conflicts {
+			fmt.Fprint(out, "\n"+apply.UnifiedDiff(c.Path+" (project)", c.Path+" (platformgo)", c.Disk, c.Generated))
+		}
+	}
 	return nil
+}
+
+// printConflicts lists the generated files the project has in a version of its own.
+func printConflicts(out io.Writer, plan *apply.Plan) {
+	for _, c := range plan.Conflicts {
+		fmt.Fprintf(out, "! %s: the project's own, not generated by platformgo; apply keeps it\n", c.Path)
+	}
 }
 
 func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
@@ -494,6 +605,14 @@ func printChanges(out io.Writer, plan *apply.Plan, create, write, del string) {
 	}
 	if plan.LockStale {
 		fmt.Fprintln(out, write, lock.FileName)
+	}
+	printNotes(out, plan)
+}
+
+// printNotes lists what codemods left to a person.
+func printNotes(out io.Writer, plan *apply.Plan) {
+	for _, n := range plan.Notes {
+		fmt.Fprintln(out, "manual", n)
 	}
 }
 

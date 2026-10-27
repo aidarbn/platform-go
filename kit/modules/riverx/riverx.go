@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ import (
 type Config struct {
 	// Queues maps a queue to the number of jobs it works at once. Capacity is an
 	// environment parameter: production and staging differ in it, the jobs do not.
+	// Set in the environment (RIVER_QUEUES) or in code, it wins over QueuesFrom.
 	Queues map[string]int
 
 	// Work turns job processing on. With it off the instance only inserts jobs, which
@@ -47,6 +49,17 @@ type Config struct {
 	CompletedRetention time.Duration
 	CancelledRetention time.Duration
 	DiscardedRetention time.Duration
+
+	// Shutdown budget of the queue. StopTimeout is how long running jobs may finish on
+	// their own; CancelTimeout is how long they then get to return once their context
+	// is cancelled. Zero StopTimeout waits as long as the shutdown timeout allows, zero
+	// CancelTimeout waits for the cancelled jobs without a limit.
+	StopTimeout   time.Duration
+	CancelTimeout time.Duration
+
+	// queuesDefault marks Queues that Load filled in because RIVER_QUEUES is unset, so
+	// QueuesFrom may replace them.
+	queuesDefault bool
 }
 
 // Load reads the module settings from environment variables.
@@ -57,15 +70,36 @@ func Load(l *confx.Loader) Config {
 		CompletedRetention: l.Duration("RIVER_COMPLETED_RETENTION", 24*time.Hour),
 		CancelledRetention: l.Duration("RIVER_CANCELLED_RETENTION", 24*time.Hour),
 		DiscardedRetention: l.Duration("RIVER_DISCARDED_RETENTION", 7*24*time.Hour),
+		StopTimeout:        l.Duration("RIVER_STOP_TIMEOUT", 0),
+		CancelTimeout:      l.Duration("RIVER_CANCEL_TIMEOUT", 0),
 	}
-	queues, err := ParseQueues(l.String("RIVER_QUEUES", "default=10"))
+	for _, b := range []struct {
+		name string
+		d    time.Duration
+	}{{"RIVER_STOP_TIMEOUT", cfg.StopTimeout}, {"RIVER_CANCEL_TIMEOUT", cfg.CancelTimeout}} {
+		if b.d < 0 {
+			l.Fail(fmt.Errorf("%s: %s is negative", l.Key(b.name), b.d))
+		}
+	}
+	raw := l.String("RIVER_QUEUES", "")
+	cfg.queuesDefault = raw == ""
+	if cfg.queuesDefault {
+		raw = defaultQueues
+	}
+	queues, err := ParseQueues(raw)
 	l.Fail(err)
 	cfg.Queues = queues
 	return cfg
 }
 
+const defaultQueues = "default=10"
+
 // ParseQueues reads "default=10,notify=3".
 func ParseQueues(raw string) (map[string]int, error) {
+	return parseQueues("RIVER_QUEUES", raw)
+}
+
+func parseQueues(source, raw string) (map[string]int, error) {
 	out := map[string]int{}
 	for _, part := range strings.Split(raw, ",") {
 		part = strings.TrimSpace(part)
@@ -76,12 +110,12 @@ func ParseQueues(raw string) (map[string]int, error) {
 		name = strings.TrimSpace(name)
 		n, err := strconv.Atoi(strings.TrimSpace(count))
 		if !ok || name == "" || err != nil || n <= 0 {
-			return nil, fmt.Errorf("RIVER_QUEUES: %q: expected queue=workers, for example default=10", part)
+			return nil, fmt.Errorf("%s: %q: expected queue=workers, for example default=10", source, part)
 		}
 		out[name] = n
 	}
 	if len(out) == 0 {
-		return nil, errors.New("RIVER_QUEUES: no queues")
+		return nil, fmt.Errorf("%s: no queues", source)
 	}
 	return out, nil
 }
@@ -136,6 +170,7 @@ type Registry struct {
 	count    int
 	periodic []PeriodicJob
 	atStart  []func(context.Context, *Queue) error
+	queues   func(context.Context) (map[string]int, error)
 }
 
 func (r *Registry) add(fn func()) {
@@ -180,11 +215,69 @@ func AtStart(app *platform.App, fn func(ctx context.Context, q *Queue) error) {
 	r.add(func() { r.atStart = append(r.atStart, fn) })
 }
 
+// QueuesFrom takes the queues and their capacity from the application, typically from
+// business settings, as taply sizes its queues from app_configs. fn is called once, when
+// the module starts and the settings are loaded; a changed value applies after a
+// restart, so mark such settings requires_restart. Queues set in RIVER_QUEUES or in
+// Config win over fn; without either the module works default=10.
+//
+//	riverx.QueuesFrom(app, func(context.Context) (map[string]int, error) {
+//		return map[string]int{"sync": s.Sync().QueueWorkers(), "payments": 3}, nil
+//	})
+func QueuesFrom(app *platform.App, fn func(ctx context.Context) (map[string]int, error)) {
+	if fn == nil {
+		panic("riverx: QueuesFrom needs a function")
+	}
+	r := platform.Get[*Registry](app)
+	r.add(func() {
+		if r.queues != nil {
+			panic("riverx: QueuesFrom is called twice")
+		}
+		r.queues = fn
+	})
+}
+
+// MaxAttemptsFrom takes the number of attempts of a job kind from the application at
+// insert time, as taply reads create_order.max_attempts: a changed value applies to the
+// jobs inserted after the change. fn reports false for kinds it does not manage.
+//
+// The value replaces the attempts the job carries in its InsertOpts; attempts passed
+// explicitly to Insert or InsertTx, or returned by PeriodicJob.Opts, win over it. It
+// applies to every insert of Queue and to periodic jobs, not to inserts made through
+// Client(), which is River as it is.
+//
+//	riverx.MaxAttemptsFrom(app, func(_ context.Context, kind string) (int, bool) {
+//		if kind == (jobs.CreateOrderArgs{}).Kind() {
+//			return s.CreateOrder().MaxAttempts(), true
+//		}
+//		return 0, false
+//	})
+func MaxAttemptsFrom(app *platform.App, fn func(ctx context.Context, kind string) (int, bool)) {
+	if fn == nil {
+		panic("riverx: MaxAttemptsFrom needs a function")
+	}
+	r := platform.Get[*Registry](app)
+	q := platform.Get[*Queue](app)
+	r.add(func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		if q.maxAttempts != nil {
+			panic("riverx: MaxAttemptsFrom is called twice")
+		}
+		q.maxAttempts = &attemptsFrom{fn: fn}
+	})
+}
+
 // Queue inserts jobs. It is available from wireDomain on, before the client starts,
 // so domain services can keep it; inserting before Start returns an error.
 type Queue struct {
-	mu     sync.RWMutex
-	client *river.Client[pgx.Tx]
+	mu          sync.RWMutex
+	client      *river.Client[pgx.Tx]
+	maxAttempts *attemptsFrom // behind a pointer, so Queue stays comparable
+}
+
+type attemptsFrom struct {
+	fn func(context.Context, string) (int, bool)
 }
 
 // ErrNotStarted is returned when a job is inserted before the module has started.
@@ -199,23 +292,49 @@ func (q *Queue) get() (*river.Client[pgx.Tx], error) {
 	return q.client, nil
 }
 
+// opts returns the options of one insert: the ones passed explicitly or carried by the
+// job, with the attempts of MaxAttemptsFrom unless the explicit options set their own.
+func (q *Queue) opts(ctx context.Context, args river.JobArgs, explicit *river.InsertOpts) *river.InsertOpts {
+	opts := optsFor(args, explicit)
+	q.mu.RLock()
+	from := q.maxAttempts
+	q.mu.RUnlock()
+	if from == nil || (explicit != nil && explicit.MaxAttempts > 0) {
+		return opts
+	}
+	n, ok := from.fn(ctx, args.Kind())
+	if !ok || n <= 0 {
+		return opts
+	}
+	out := river.InsertOpts{}
+	if opts != nil {
+		out = *opts
+	}
+	out.MaxAttempts = n
+	return &out
+}
+
 // Insert adds a job.
 func (q *Queue) Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error) {
 	c, err := q.get()
 	if err != nil {
 		return nil, err
 	}
-	return c.Insert(ctx, args, optsFor(args, opts))
+	return c.Insert(ctx, args, q.opts(ctx, args, opts))
 }
 
 // InsertAt adds a job that runs no earlier than at, keeping the options the job carries.
 func (q *Queue) InsertAt(ctx context.Context, args river.JobArgs, at time.Time) (*rivertype.JobInsertResult, error) {
+	c, err := q.get()
+	if err != nil {
+		return nil, err
+	}
 	opts := river.InsertOpts{}
-	if base := optsFor(args, nil); base != nil {
+	if base := q.opts(ctx, args, nil); base != nil {
 		opts = *base
 	}
 	opts.ScheduledAt = at
-	return q.Insert(ctx, args, &opts)
+	return c.Insert(ctx, args, &opts)
 }
 
 // InsertMany adds several jobs in one round trip, each with the options it carries.
@@ -226,7 +345,7 @@ func (q *Queue) InsertMany(ctx context.Context, args ...river.JobArgs) ([]*river
 	}
 	params := make([]river.InsertManyParams, len(args))
 	for i, a := range args {
-		params[i] = river.InsertManyParams{Args: a, InsertOpts: optsFor(a, nil)}
+		params[i] = river.InsertManyParams{Args: a, InsertOpts: q.opts(ctx, a, nil)}
 	}
 	return c.InsertMany(ctx, params)
 }
@@ -238,7 +357,7 @@ func (q *Queue) InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opt
 	if err != nil {
 		return nil, err
 	}
-	return c.InsertTx(ctx, tx, args, optsFor(args, opts))
+	return c.InsertTx(ctx, tx, args, q.opts(ctx, args, opts))
 }
 
 // Client returns the River client for what Queue does not cover. It is nil before
@@ -280,6 +399,7 @@ type scheduled struct {
 func New(cfg Config) *Module {
 	if len(cfg.Queues) == 0 {
 		cfg.Queues = map[string]int{river.QueueDefault: 10}
+		cfg.queuesDefault = true
 	}
 	return &Module{
 		cfg:       cfg,
@@ -334,7 +454,7 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 func (m *Module) Start(ctx context.Context) error {
 	m.registry.mu.Lock()
 	m.registry.sealed = true
-	workerCount, periodic, atStart := m.registry.count, m.registry.periodic, m.registry.atStart
+	workerCount, periodic, atStart, queuesFn := m.registry.count, m.registry.periodic, m.registry.atStart, m.registry.queues
 	m.registry.mu.Unlock()
 
 	pool := platform.Get[*pgxpool.Pool](m.app)
@@ -352,10 +472,15 @@ func (m *Module) Start(ctx context.Context) error {
 	// A client without workers or with work turned off only inserts: River refuses
 	// queues it has nobody to run for.
 	working := m.cfg.Work && workerCount > 0 && m.app.Serves(platform.RoleWorker)
+	queues := m.cfg.Queues
 	if working {
+		var err error
+		if queues, err = m.queues(ctx, queuesFn); err != nil {
+			return err
+		}
 		cfg.Workers = m.registry.workers
-		cfg.Queues = make(map[string]river.QueueConfig, len(m.cfg.Queues))
-		for name, n := range m.cfg.Queues {
+		cfg.Queues = make(map[string]river.QueueConfig, len(queues))
+		for name, n := range queues {
 			cfg.Queues[name] = river.QueueConfig{MaxWorkers: n}
 		}
 	}
@@ -397,9 +522,32 @@ func (m *Module) Start(ctx context.Context) error {
 			}
 		})
 	}
-	m.log.Info("river is working", "queues", m.cfg.Queues, "workers", workerCount, "periodic", len(periodic))
+	m.log.Info("river is working", "queues", queues, "workers", workerCount, "periodic", len(periodic))
 	m.runAtStart(ctx, atStart)
 	return nil
+}
+
+// queues picks the queues to work: RIVER_QUEUES or Config, then QueuesFrom, then the
+// default.
+func (m *Module) queues(ctx context.Context, fn func(context.Context) (map[string]int, error)) (map[string]int, error) {
+	// Queues still default unless code replaced what Load filled in.
+	isDefault := m.cfg.queuesDefault && maps.Equal(m.cfg.Queues, map[string]int{river.QueueDefault: 10})
+	if !isDefault || fn == nil {
+		return m.cfg.Queues, nil
+	}
+	got, err := fn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("river queues: %w", err)
+	}
+	if len(got) == 0 {
+		return nil, errors.New("river queues: QueuesFrom returned no queues")
+	}
+	for name, n := range got {
+		if strings.TrimSpace(name) == "" || n <= 0 {
+			return nil, fmt.Errorf("river queues: QueuesFrom: %q=%d: expected a name and a positive number of workers", name, n)
+		}
+	}
+	return got, nil
 }
 
 func (m *Module) runAtStart(ctx context.Context, fns []func(context.Context, *Queue) error) {
@@ -445,7 +593,7 @@ func (m *Module) schedule(job PeriodicJob) {
 			if opts != nil {
 				o = opts()
 			}
-			return args, optsFor(args, o)
+			return args, m.queue.opts(context.Background(), args, o)
 		},
 		&river.PeriodicJobOpts{RunOnStart: job.RunOnStart},
 	))
@@ -495,7 +643,8 @@ func (m *Module) Health(context.Context) error {
 	return nil
 }
 
-// Stop lets running jobs finish within the shutdown timeout, then cancels them.
+// Stop lets running jobs finish within RIVER_STOP_TIMEOUT and the shutdown timeout,
+// then cancels them and waits up to RIVER_CANCEL_TIMEOUT for them to return.
 func (m *Module) Stop(ctx context.Context) error {
 	select {
 	case <-m.done:
@@ -509,11 +658,43 @@ func (m *Module) Stop(ctx context.Context) error {
 	if !m.started {
 		return nil
 	}
-	if err := m.client.Stop(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	return stopClient(ctx, m.client, m.cfg.StopTimeout, m.cfg.CancelTimeout, m.log)
+}
+
+// StopPhases puts the queue between the HTTP and the gRPC servers of a phased shutdown.
+func (m *Module) StopPhases() []platform.StopPhase {
+	return []platform.StopPhase{{Name: "queue", Order: platform.PhaseQueue, Stop: m.Stop}}
+}
+
+type stopper interface {
+	Stop(ctx context.Context) error
+	StopAndCancel(ctx context.Context) error
+}
+
+// stopClient is the shutdown of taply: a soft stop waits for the running jobs, and the
+// jobs that do not finish in time get their context cancelled and the rest of the
+// budget to return, so none of them writes into a database pool that is closed.
+func stopClient(ctx context.Context, c stopper, soft, hard time.Duration, log *slog.Logger) error {
+	softCtx := ctx
+	if soft > 0 {
+		var cancel context.CancelFunc
+		softCtx, cancel = context.WithTimeout(ctx, soft)
+		defer cancel()
+	}
+	err := c.Stop(softCtx)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if ctx.Err() != nil {
-		return m.client.StopAndCancel(context.WithoutCancel(ctx))
+	log.Warn("river jobs did not finish in time, cancelling them")
+
+	hardCtx := context.WithoutCancel(ctx)
+	if hard > 0 {
+		var cancel context.CancelFunc
+		hardCtx, cancel = context.WithTimeout(hardCtx, hard)
+		defer cancel()
 	}
-	return nil
+	return c.StopAndCancel(hardCtx)
 }

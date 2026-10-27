@@ -84,8 +84,16 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 
 	platform.Provide(app, m)
 	platform.Provide(app, m.client)
-	api.AddUnaryInterceptor(app, m.client.ResponseInterceptor(m.skipCall))
-	api.AddUnaryInterceptor(app, m.client.RequestInterceptor())
+	// Error messages are translated outside the project's authentication, so its
+	// refusals are translated too; response fields inside it, so SkipTranslation sees
+	// the caller. An editor's request takes its base fields from the default
+	// translation before normalisation and validation, so they pass the same checks as
+	// fields sent directly, and the base fields are copied back into the translation
+	// after validation, so the translation gets the value the checks passed.
+	api.AddUnaryInterceptorAt(app, api.PhaseErrorsI18n, "i18n-errors", m.client.ErrorInterceptor())
+	api.AddUnaryInterceptorAt(app, api.PhaseTransform, "i18n-fields", m.client.FieldsInterceptor(m.skipCall))
+	api.AddUnaryInterceptorAt(app, api.PhaseTransform, "i18n-base", m.client.BaseFromTranslationInterceptor())
+	api.AddUnaryInterceptorAt(app, api.PhaseAfterValidate, "i18n-mirror", m.client.RequestInterceptor())
 	return nil
 }
 
@@ -100,8 +108,9 @@ func (m *Module) skipCall(ctx context.Context) bool {
 func From(app *platform.App) *i18nx.Client { return platform.Get[*i18nx.Client](app) }
 
 // SkipTranslation turns response substitution off for the calls fn picks — taply does it
-// for tablets of a restaurant with translations disabled. Error messages are still
-// translated.
+// for tablets of a restaurant with translations disabled. fn runs after the project's
+// authentication, so it sees the caller the authentication put into the context. Error
+// messages are still translated.
 func SkipTranslation(app *platform.App, fn func(ctx context.Context) bool) {
 	m := platform.Get[*Module](app)
 	m.mu.Lock()

@@ -9,8 +9,8 @@
 | Command | What it does | State |
 |---|---|---|
 | `platformgo new <module-path>` | creates a project: wiring, compose, and — following taply — Dockerfile, Makefile, golangci-lint configuration and CI | ready |
-| `platformgo plan` | shows what `apply` would do: modules added and removed, files to create, rewrite and delete | ready |
-| `platformgo apply` | brings the project in line with `platformgo.yaml`: generated files, files a module needs, removal of what a removed module left, `platformgo.lock`, `go mod tidy` | ready |
+| `platformgo plan [--diff]` | shows what `apply` would do: modules added and removed, files to create, rewrite and delete, conflicts with files of the project | ready |
+| `platformgo apply [--adopt] [--force path]` | brings the project in line with `platformgo.yaml`: generated files, files a module needs, removal of what a removed module left, `platformgo.lock`, `go mod tidy`; never overwrites a file of the project's own, `--adopt` moves an existing service (see [config.md](docs/config.md#adopting-an-existing-service)) | ready |
 | `platformgo generate [--check]` | `apply` without `go mod tidy`, plus sqlc and buf; `--check` fails when anything is stale | ready |
 | `platformgo verify` | the check for CI, same as `generate --check` | ready |
 | `platformgo migrate create <name>` | adds a goose SQL migration to `db/migrations` | ready |
@@ -18,7 +18,7 @@
 | `platformgo db generate [--dsn]` | migrates the database and regenerates the jet query builder | ready |
 | `platformgo lint` | the checks of taply in one command: format, go mod tidy, build, generation, file length, golangci-lint, proto lint and breaking changes with `api`, new migrations with `postgres`, govulncheck; `--against <branch>` is the base for both | ready |
 | `platformgo doctor [--fix]` | checks Go, git, Docker, shell completion and, inside a project, `platformgo.yaml`, the pinned platform version, generation and `.env` files; `--fix` applies generation, copies `.env` files from their examples and installs completion | ready |
-| `platformgo upgrade [version]` | moves a project to a platform version: `go get`, the version recorded in `platformgo.yaml`, `apply` by the new version; codemods are planned | ready |
+| `platformgo upgrade [version]` | moves a project to a platform version: `go get`, the version recorded in `platformgo.yaml`, `apply` by the new version with its codemods, then `go build`, `platformgo verify` and `go test`, a warning when they fail (`--strict` fails, `--no-check` skips them); `--dry-run` does it all in a copy and prints the plan | ready |
 | `platformgo setup [--alias] [--remove]` | shell completion for zsh, bash and fish and the short `pgo` alias, as one block in the shell configuration that a second run replaces | ready |
 | `platformgo completion <shell>` | prints the completion script | ready |
 
@@ -30,7 +30,7 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 
 | Module | State |
 |---|---|
-| `postgres` — pool, health, metrics, transactions, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
+| `postgres` — pool, health, metrics, transactions, `numeric` as decimal, connection hooks, application pool defaults, migrations on start, sqlc static and jet dynamic queries, local database in compose | ready |
 | `settings` — business settings from `settings.yaml`, stored in the database, typed access | ready |
 | `admin` — admin panel: sign in with a password, roles, accounts, audit log, settings pages, project pages | ready |
 | `api` — gRPC and REST gateway from proto files, OpenAPI 3.1 with validation rules, interceptors, health, CORS, docs | ready |

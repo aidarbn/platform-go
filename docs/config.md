@@ -41,7 +41,7 @@ Modules document their variables in the generated `.env.example`. Variables of t
 
 ## Rules
 
-- **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones: a typo fails `plan` instead of being ignored.
+- **Only what the platform knows is accepted.** An unknown field, module or module option is an error that names the known ones, and an option of the wrong type is an error with its line: a typo fails `plan` instead of being ignored. See [Module options](#module-options).
 - **A JSON schema** is published for every platform version (`schema/platformgo.schema.json`, also printed by `platformgo schema`); the first line of a new project points editors at it, which turns on completion and validation.
 - **No secrets in the file.** Only structure and technical options; values come from environment variables, and `.env.example` is generated from the enabled modules.
 - **A module is enabled** by adding its section under `modules` and removed by deleting it. `apply` removes what generation produced for it and the tools it added to `go.mod`; files that belong to the project stay.
@@ -50,23 +50,73 @@ Modules document their variables in the generated `.env.example`. Variables of t
 
 | Module | Options |
 |---|---|
-| `postgres`, `admin`, `api`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
+| `admin`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
+| `api` | `proto_dir` — the proto folder, `proto` by default; `buf.deps` and `buf.breaking_except` on top of the platform's; `openapi.generator` — `connect` (default) or `none`, see [modules.md](modules.md#the-api-module) |
+| `postgres` | `sqlc` — where `sqlc.yaml`, the queries and the generated code live and Go types on top of the platform's; the defaults are `db/sqlc.yaml`, `db/queries`, `internal/db/sqlcgen`, see [modules.md](modules.md#the-postgres-module) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 | `enums` | `domain` — the Go package scanned for go-enum markers, `internal/domain` by default |
+
+## Module options
+
+Every option of a module has a type, declared once in the module registry. `settings` and `enums` have one string option each, `postgres.sqlc` is an object with a list of overrides and a map of renames, `api` has a string, lists and a string with allowed values (the table above). The same declaration checks `platformgo.yaml` and builds the JSON schema, so the editor and `plan` never disagree.
+
+| Type | In YAML | Example |
+|---|---|---|
+| string | a scalar the YAML reads as a string; quote numbers and versions | `schema: settings.yaml`, `go_type: "1.5"` |
+| string with allowed values | one of the listed strings | `generator: connect` |
+| bool | `true` or `false`, unquoted | `emit_interface: false` |
+| integer | an unquoted whole number | `workers: 4` |
+| list | a sequence of values of one type | `deps: [buf.build/grpc-ecosystem/grpc-gateway]` |
+| object | a mapping with the declared keys only; some are required | `openapi: {generator: none}` |
+| map | a mapping with any keys, values of one type | `renames: {url: URL}` |
+| one of | a value of one of several shapes, told apart by the shape | `go_type: int64` or `go_type: {type: int64, pointer: true}` |
+
+An option left out takes its default, which the schema shows; an empty string counts as left out, and an object left out still gets the defaults of its keys. An empty value of an option (`schema:` with nothing after it, `~` or `null`) is an error, not the default, for an object option too (`sqlc: ~`): delete the key instead. A module section with nothing in it (`monitoring:`, `monitoring: ~`, `monitoring: null`) is the same as `{}`, and is checked as `{}`: an option the module requires is required there too. A scalar with a YAML tag of its own (`!custom x`) is a string when YAML reads it as text, as before typed options. YAML anchors, aliases and merge keys (`<<`) work and are checked as the merged result.
+
+Errors say where and what:
+
+```
+platformgo.yaml: line 10: module enums: option domain must be a string, got a list
+line 11: module enums: unknown option "domian", known options: domain
+line 8: module settings: option schema must be a string, got a number 1.5: quote it, "1.5"
+```
+
+Code that generates files reads the options of a module into a typed struct with `spec.File.DecodeOptions`: the registry defaults fill what the file leaves out, and a key the struct has no field for is an error rather than silently dropped.
+
+## Schema version
+
+`schema: 1` is the format of the file. Adding an option, a type or a module does not change it: a file that was valid stays valid and means the same, and an older `platformgo` rejects the new key by name. The number goes up only when a key is renamed, moved, removed or changes meaning. Such a release ships a migration that `platformgo upgrade` applies to the file (see [upgrades.md](upgrades.md)), and `platformgo` refuses a file with a schema newer than it understands.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `platformgo new <module-path>` | creates a project with `platformgo.yaml`, the core files and the lock |
-| `platformgo plan` | shows how the project differs from `platformgo.yaml`; changes nothing |
-| `platformgo apply` | writes the generated files, creates the files an enabled module needs (such as `settings.yaml`), deletes the generated files of removed modules, updates `platformgo.lock` and runs `go mod tidy` |
+| `platformgo plan [--diff]` | shows how the project differs from `platformgo.yaml`; changes nothing. `--diff` shows each conflict as a diff |
+| `platformgo apply` | writes the generated files, creates the files an enabled module needs (such as `settings.yaml`), deletes the generated files of removed modules, updates `platformgo.lock` and runs `go mod tidy`. Refuses, changing nothing, while there are conflicts; `--adopt` and `--force <path>`, see below |
 | `platformgo generate` | the same without `go mod tidy`; `--check` fails in CI when anything is stale |
 | `platformgo verify` | for CI: the project matches the file, generation is fresh, nothing is left over |
 | `platformgo lint` | every check of the project, as in taply; the proto checks run only with the `api` module and the migrations check only with `postgres`, so the Makefile stays the same when modules change |
 | `platformgo doctor` | checks tools and system dependencies |
 
-`platformgo upgrade [version]` moves the project to a platform version. Planned: `doctor --fix`, `setup`.
+`platformgo upgrade [version]` moves the project to a platform version and checks it; `--dry-run` shows the plan first (see [upgrades.md](upgrades.md)). Planned: `doctor --fix`, `setup`.
+
+## Adopting an existing service
+
+A service that was not made by the platform has files of its own where platformgo generates them: `docker-compose.yml`, `.env.example`, `buf.yaml`, `buf.gen.yaml`, `sqlc.yaml`. Such a file — on disk, without the platformgo mark on its first line and not in `platformgo.lock` — is a **conflict**: `apply` never overwrites it. A file that carries the mark or that the lock records is the platform's, and `apply` rewrites it as before, so a project made by the platform has no conflicts.
+
+```
+$ platformgo plan --diff          # the conflicts, marked !, and a diff for each
+! docker-compose.yml: the project's own, not generated by platformgo; apply keeps it
+$ platformgo apply                # fails and changes nothing while there are conflicts
+$ platformgo apply --adopt        # creates what does not exist, writes the lock and platformgo.adopt.md
+$ platformgo apply --force docker-compose.yml   # takes the generated version of one file
+```
+
+- `apply --adopt` creates only files that do not exist yet — the wiring, `migrations.gen.go`, `api/openapi/base.yaml` and the like — and the conflicts given with `--force`. Nothing else that exists is changed: no file, no codemod, no `go.mod` and no `go mod tidy`. `platformgo.lock` records only that: the written files join its generated files, while the platform version, modules and tools stay as they were, so a later `apply` still refuses the conflicts and still runs the codemods, deletions and tool changes adopt left. It exits with 0 and leaves `platformgo.adopt.md` (and removes an old one when nothing is left): every conflict with a diff from the project's file to the generated one and where its content goes on the platform (services into `docker-compose.override.yml`, variables into `.env.project.example`, buf and sqlc settings into module options), and what `apply` will still do. The report is a work list, not documentation: delete it when done.
+- Resolve a conflict by carrying over what the project needs and then taking the generated version: `apply --force <path>` (repeat the flag or separate paths with commas), or delete the file and run `apply`. With no conflicts left, a plain `apply` finishes the job: tools in `go.mod`, codemods, `go mod tidy`.
+- `generate` fails like `apply`; `verify` and `doctor` name the conflicts.
+- Two generated files cannot carry the mark — the i18n option `<proto_dir>/platform/i18n/v1/i18n.proto`, which is the very file the platform builds from, and the Grafana dashboard JSON — and are recognised by the lock only.
 
 A generated file of a removed module is deleted only while it still carries the generated mark on its first line. A file taken over by hand stays, and `plan` says so. Files that belong to the project — `settings.yaml`, `main.go`, `wire.go`, the Makefile — are never deleted.
 

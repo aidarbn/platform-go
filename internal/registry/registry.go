@@ -27,13 +27,6 @@ type Tool struct {
 	Version string
 }
 
-// Option is a technical setting of a module in platformgo.yaml.
-type Option struct {
-	Name        string
-	Description string
-	Default     string
-}
-
 // Module describes a platform module.
 type Module struct {
 	Name     string   // section name in platformgo.yaml
@@ -58,16 +51,6 @@ type Module struct {
 	Tools []Tool
 
 	Options []Option // what the module section of platformgo.yaml may contain
-}
-
-// Option returns an option of the module by name.
-func (m Module) Option(name string) (Option, bool) {
-	for _, o := range m.Options {
-		if o.Name == name {
-			return o, true
-		}
-	}
-	return Option{}, false
 }
 
 // Runtime reports whether the module runs inside the service. A module without runtime
@@ -101,6 +84,7 @@ var all = []Module{
 		ProjectPkg:   "db/migrations",
 		ProjectAlias: "migrations",
 		ExtraArgs:    []string{"postgres.WithMigrations(migrations.FS)"},
+		Options:      []Option{sqlcOption},
 		Compose: `  postgres:
     image: postgres:18-alpine
     environment:
@@ -130,10 +114,15 @@ var all = []Module{
 		ProjectPkg:   "api/openapi",
 		ProjectAlias: "openapi",
 		ExtraArgs:    []string{"api.WithOpenAPI(openapi.FS)"},
+		Options:      apiOptions,
 		Env: []EnvVar{
 			{Key: "API_HTTP_ADDR", Example: ":8080", Comment: "REST gateway address"},
 			{Key: "API_GRPC_ADDR", Example: "127.0.0.1:9091", Comment: "gRPC address"},
 			{Key: "API_CORS_ORIGINS", Example: "http://localhost:3000", Comment: "origins allowed to call the REST API from a browser, comma separated"},
+			{Key: "API_CORS_HEADERS", Example: "", Comment: "request headers a browser may send on top of the platform's, comma separated"},
+			{Key: "API_CORS_EXPOSE", Example: "", Comment: "response headers a page may read on top of X-Request-ID, comma separated"},
+			{Key: "API_CORS_CREDENTIALS", Example: "true", Comment: "allow cookies on CORS calls; false with * answers a literal *"},
+			{Key: "API_CORS_MAX_AGE", Example: "86400", Comment: "seconds a browser may cache a preflight"},
 			{Key: "API_DOCS", Example: "true", Comment: "serve /openapi.yaml and /docs"},
 			{Key: "API_REFLECTION", Example: "false", Comment: "gRPC server reflection"},
 			{Key: "API_MAX_RECV_MB", Example: "16", Comment: "largest request"},
@@ -142,12 +131,19 @@ var all = []Module{
 			{Key: "API_RATE_BURST", Example: "100", Comment: "burst per client"},
 			{Key: "API_PUBLIC_RATE_RPS", Example: "30", Comment: "calls per second per client for public methods"},
 			{Key: "API_PUBLIC_RATE_BURST", Example: "60", Comment: "burst per client for public methods"},
+			{Key: "API_PRINCIPAL_RATE_RPS", Example: "50", Comment: "calls per second per principal named by api.RateLimitKey; 0 turns it off"},
+			{Key: "API_PRINCIPAL_RATE_BURST", Example: "100", Comment: "burst per principal"},
+			{Key: "API_RATE_IPV6_PREFIX", Example: "64", Comment: "leading bits of an IPv6 address that make one client of the rate limit; 128 limits every address on its own"},
 			{Key: "API_IDEMPOTENCY_RETENTION", Example: "24h", Comment: "how long an Idempotency-Key call is remembered"},
-			{Key: "API_IDEMPOTENCY_LOCK", Example: "1m", Comment: "how long a running call holds its key"},
+			{Key: "API_IDEMPOTENCY_LEASE", Example: "2m", Comment: "lease of a running Idempotency-Key call, extended while it runs; API_IDEMPOTENCY_LOCK is its old name"},
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
 			{Key: "API_LOG_BODIES", Example: "true", Comment: "bodies of failed requests in the access log"},
+			{Key: "API_LOG_BODIES_MASK_PATHS", Example: "", Comment: "path parts whose request bodies never reach the access log, comma separated"},
+			{Key: "API_METRICS_TENANT_HEADER", Example: "", Comment: "request header whose value labels the call metrics as tenant_name; empty leaves the label out"},
 			{Key: "API_SECURITY_HEADERS", Example: "true", Comment: "security response headers"},
-			{Key: "API_TRUSTED_PROXIES", Example: "", Comment: "networks whose X-Forwarded-For is believed; empty means loopback and private networks, none ignores the header"},
+			{Key: "API_HTTP_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running REST calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "API_GRPC_STOP_TIMEOUT", Example: "", Comment: "then how long running gRPC calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "API_TRUSTED_PROXIES", Example: "", Comment: "networks whose X-Forwarded-For is believed, and, when set, gRPC peers that may name the client; empty means loopback and private networks for HTTP only, none ignores the header"},
 		},
 		Tools: []Tool{
 			{Module: "github.com/bufbuild/buf", Package: "github.com/bufbuild/buf/cmd/buf", Version: "v1.73.0"},
@@ -280,6 +276,8 @@ var all = []Module{
 			{Key: "RIVER_COMPLETED_RETENTION", Example: "24h", Comment: "how long completed jobs are kept"},
 			{Key: "RIVER_CANCELLED_RETENTION", Example: "24h", Comment: "how long cancelled jobs are kept"},
 			{Key: "RIVER_DISCARDED_RETENTION", Example: "168h", Comment: "how long discarded jobs are kept"},
+			{Key: "RIVER_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running jobs may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "RIVER_CANCEL_TIMEOUT", Example: "", Comment: "then how long cancelled jobs get to return; empty waits without a limit"},
 		},
 	},
 	{
@@ -325,4 +323,93 @@ func Names() []string {
 		out = append(out, m.Name)
 	}
 	return out
+}
+
+// sqlcOption is the sqlc configuration of the postgres module. The defaults are the
+// layout every project had before the option existed.
+var sqlcOption = Option{
+	Name:        "sqlc",
+	Description: "static queries: where sqlc.yaml, the queries and the generated code live, and Go types on top of the platform's",
+	Kind:        KindObject,
+	Fields: []Option{
+		{Name: "dir", Description: "folder of the generated sqlc.yaml, relative to the project root", Default: "db"},
+		{Name: "queries", Description: "folder of the *.sql queries, relative to dir", Default: "queries"},
+		{Name: "out", Description: "folder of the generated Go code, relative to the project root", Default: "internal/db/sqlcgen"},
+		{Name: "package", Description: "Go package name of the generated code", Default: "sqlcgen"},
+		{Name: "emit_interface", Description: "generate the Querier interface", Kind: KindBool, Default: true},
+		{
+			Name:        "overrides",
+			Description: "Go types of database types or columns; they come before the platform's, and sqlc takes the first match",
+			Kind:        KindList,
+			Default:     []any{},
+			Items: &Option{Kind: KindObject, Fields: []Option{
+				{Name: "db_type", Description: "database type, as sqlc names it: int4, pg_catalog.numeric; or set column"},
+				{Name: "column", Description: "column, table.column or schema.table.column; or set db_type"},
+				{Name: "nullable", Description: "the override is for nullable columns", Kind: KindBool, Default: false},
+				{
+					Name:        "go_type",
+					Description: "Go type: a name such as int64, or an object",
+					Required:    true,
+					OneOf: []Option{
+						{Kind: KindString},
+						{Kind: KindObject, Fields: []Option{
+							{Name: "import", Description: "import path of the type"},
+							{Name: "package", Description: "package name when it differs from the last element of import"},
+							{Name: "type", Description: "type name", Required: true},
+							{Name: "pointer", Description: "a pointer to the type", Kind: KindBool, Default: false},
+							{Name: "slice", Description: "a slice of the type", Kind: KindBool, Default: false},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			Name:        "renames",
+			Description: "Go names of columns and tables, sqlc rename: {url: URL}",
+			Kind:        KindMap,
+			Default:     map[string]any{},
+			Values:      &Option{},
+		},
+	},
+}
+
+// apiOptions are where the proto files of the api module live, buf settings on top of the
+// platform's and the generator of the OpenAPI description. The defaults are what every
+// project had before the options existed.
+var apiOptions = []Option{
+	{Name: "proto_dir", Description: "folder of the proto files, the buf module, relative to the project root", Default: "proto"},
+	{
+		Name:        "buf",
+		Description: "buf.yaml on top of the platform's",
+		Kind:        KindObject,
+		Fields: []Option{
+			{
+				Name:        "deps",
+				Description: "buf modules the proto files import, added to the platform's: buf.build/grpc-ecosystem/grpc-gateway",
+				Kind:        KindList,
+				Default:     []any{},
+				Items:       &Option{},
+			},
+			{
+				Name:        "breaking_except",
+				Description: "breaking rules left out of FILE: FILE_NO_DELETE, RPC_NO_DELETE, MESSAGE_NO_DELETE, FIELD_NO_DELETE",
+				Kind:        KindList,
+				Default:     []any{},
+				Items:       &Option{},
+			},
+		},
+	},
+	{
+		Name:        "openapi",
+		Description: "the OpenAPI description of the API",
+		Kind:        KindObject,
+		Fields: []Option{
+			{
+				Name:        "generator",
+				Description: "connect: protoc-gen-connect-openapi writes api/openapi/openapi.yaml; none: the project keeps that file itself; platform: the platform's own generator, not available yet",
+				Enum:        []string{"connect", "platform", "none"},
+				Default:     "connect",
+			},
+		},
+	},
 }

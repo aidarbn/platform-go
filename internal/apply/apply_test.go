@@ -373,3 +373,66 @@ func TestProjectWithoutPlatformInLock(t *testing.T) {
 		t.Errorf("codemods = %+v, lock stale = %v", plan.Codemods, plan.LockStale)
 	}
 }
+
+func TestManualStepsAreNotes(t *testing.T) {
+	dir := project(t, withSettings)
+	execute(t, dir)
+	writeFile(t, dir, "internal/users/totp.go", "package users\n\nimport \"github.com/aidarbn/platform-go/kit/adminx\"\n\nvar _ = adminx.VerifyTOTP\n")
+
+	// The check of an applied codemod still sees what is left to do by hand; it is not
+	// generation, so the plan stays up to date.
+	apply.SetCodemods(t, codemod.AdminxNoTOTP())
+	plan := build(t, dir)
+	if !plan.UpToDate() || len(plan.Notes) != 1 || plan.Notes[0].Path != "internal/users/totp.go" || plan.Notes[0].Line != 5 {
+		t.Errorf("up to date = %v, notes = %+v", plan.UpToDate(), plan.Notes)
+	}
+}
+
+// Moving the sqlc configuration writes it in the new place and removes the old file,
+// which the lock records as generated.
+func TestMovingSqlcConfig(t *testing.T) {
+	dir := project(t, withoutSettings)
+	execute(t, dir)
+	if !exists(dir, gen.SqlcPath) {
+		t.Fatalf("%s was not generated", gen.SqlcPath)
+	}
+
+	writeFile(t, dir, spec.FileName, strings.Replace(withoutSettings, "postgres: {}", "postgres:\n    sqlc: {dir: db/sqlc, out: internal/store}", 1))
+	p := execute(t, dir)
+	if !slices.Contains(p.Delete, gen.SqlcPath) || !slices.Contains(p.Write, "db/sqlc/sqlc.yaml") {
+		t.Errorf("delete = %v, write = %v", p.Delete, p.Write)
+	}
+	if exists(dir, gen.SqlcPath) || !exists(dir, "db/sqlc/sqlc.yaml") {
+		t.Error("the configuration did not move")
+	}
+	if p.Sqlc.QueriesDir() != "db/sqlc/queries" || p.Sqlc.Out != "internal/store" {
+		t.Errorf("plan sqlc = %+v", p.Sqlc)
+	}
+	if !build(t, dir).UpToDate() {
+		t.Error("not up to date after apply")
+	}
+}
+
+// Moving proto_dir moves the i18n option of the platform. The old copy has no mark of
+// its own (it is the very file kit/i18nx is generated from), so it is kept and reported.
+func TestMovingProtoDir(t *testing.T) {
+	const base = "schema: 1\nproject:\n  module: example.com/shop-api\nmodules:\n  postgres: {}\n  i18n: {}\n"
+	dir := project(t, base+"  api: {}\n")
+	execute(t, dir)
+	if !exists(dir, gen.I18nProtoPath) {
+		t.Fatalf("%s was not generated", gen.I18nProtoPath)
+	}
+
+	writeFile(t, dir, spec.FileName, base+"  api:\n    proto_dir: api\n")
+	p := execute(t, dir)
+	if !exists(dir, "api/platform/i18n/v1/i18n.proto") || !slices.Contains(p.Kept, gen.I18nProtoPath) {
+		t.Errorf("write = %v, kept = %v", p.Write, p.Kept)
+	}
+	buf, _ := os.ReadFile(filepath.Join(dir, gen.BufPath))
+	if !strings.Contains(string(buf), "  - path: api\n") {
+		t.Errorf("buf.yaml:\n%s", buf)
+	}
+	if p.API.ProtoDir != "api" {
+		t.Errorf("plan api = %+v", p.API)
+	}
+}

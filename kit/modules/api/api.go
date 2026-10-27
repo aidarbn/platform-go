@@ -32,6 +32,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/aidarbn/platform-go/kit/confx"
 	"github.com/aidarbn/platform-go/kit/platform"
@@ -48,23 +49,59 @@ type Config struct {
 	Docs        bool     // serve /openapi.yaml and the /docs page
 	Reflection  bool     // gRPC server reflection, for grpcurl and similar tools
 
-	// RateLimit per client address; zero rates turn it off.
+	// CORS beyond the allowed origins. CORSHeaders are request headers a browser may
+	// send on top of the platform's and those of api.CORSHeaders; CORSExpose are
+	// response headers a page may read on top of X-Request-ID. CORSNoCredentials drops
+	// Access-Control-Allow-Credentials, and with "*" among the origins the answer is a
+	// literal "*" instead of the caller's origin. CORSMaxAge is how long a browser may
+	// cache a preflight, in seconds; zero means a day.
+	CORSHeaders       []string
+	CORSExpose        []string
+	CORSNoCredentials bool
+	CORSMaxAge        int
+
+	// RateLimit per client address, and per principal; zero rates turn it off.
 	RateLimit RateLimit
 
-	// Idempotency: how long a finished call is remembered, and how long a running one
-	// holds its key before a repeat may take over.
+	// Idempotency: how long a finished call is remembered, and the lease a running one
+	// holds its key with. The lease is extended while the handler runs, so it only
+	// decides how soon a repeat may take over the key of a call that died.
 	IdempotencyRetention time.Duration
-	IdempotencyLock      time.Duration
+	IdempotencyLease     time.Duration
+	// Deprecated: IdempotencyLock is the old name of IdempotencyLease, used when the
+	// lease is not set.
+	IdempotencyLock time.Duration
 
 	AccessLog       bool // log every HTTP request, as taply does
 	LogBodies       bool // put the bodies of failed requests into the access log
 	SecurityHeaders bool // taply's security response headers
 
+	// LogBodiesMaskPaths keep bodies out of the access log: a failed request whose path
+	// contains one of them is logged with [REDACTED] instead of its bodies, as taply does
+	// for certificate uploads. api.MaskLogBodies adds paths in code.
+	LogBodiesMaskPaths []string
+
+	// MetricsTenantHeader names the request header whose value labels the call metrics
+	// as tenant_name, "unknown" without it, as taply's do. Empty, the default, leaves the
+	// metrics without the label. Every distinct value is a new series, so the header must
+	// carry one of a bounded set of tenants.
+	MetricsTenantHeader string
+
 	// TrustedProxies are the networks whose X-Forwarded-For is believed. A request from
 	// anywhere else is identified by its connection address, so a client reaching the
 	// service directly cannot pose as another address. Empty means the private networks
-	// and loopback, where a reverse proxy normally runs.
+	// and loopback, where a reverse proxy normally runs. On the gRPC side the networks
+	// set here, never the default, may name the client with ClientIPMetadataKey;
+	// loopback and the server's own address always may, since the gateway of this
+	// process connects from them.
 	TrustedProxies []netip.Prefix
+
+	// Shutdown budgets, as in taply. HTTPStopTimeout is how long running REST calls may
+	// finish once the server stops taking new ones; GRPCStopTimeout is how long running
+	// gRPC calls may finish before their connections are cut. Zero waits as long as the
+	// shutdown timeout allows.
+	HTTPStopTimeout time.Duration
+	GRPCStopTimeout time.Duration
 }
 
 // DefaultTrustedProxies are loopback and the private networks.
@@ -79,7 +116,11 @@ var DefaultTrustedProxies = []netip.Prefix{
 
 // Load reads the module settings from environment variables.
 func Load(l *confx.Loader) Config {
+	lease, lock := idempotencyLease(l)
 	return Config{
+		IdempotencyLease: lease,
+		IdempotencyLock:  lock,
+
 		GRPCAddr:    l.String("API_GRPC_ADDR", "127.0.0.1:9091"),
 		HTTPAddr:    l.String("API_HTTP_ADDR", ":8080"),
 		MaxRecvSize: l.Int("API_MAX_RECV_MB", 16) << 20,
@@ -93,15 +134,62 @@ func Load(l *confx.Loader) Config {
 			Burst:       l.Int("API_RATE_BURST", 100),
 			PublicRPS:   float64(l.Int("API_PUBLIC_RATE_RPS", 30)),
 			PublicBurst: l.Int("API_PUBLIC_RATE_BURST", 60),
+
+			PrincipalRPS:   float64(l.Int("API_PRINCIPAL_RATE_RPS", 50)),
+			PrincipalBurst: l.Int("API_PRINCIPAL_RATE_BURST", 100),
+
+			IPv6Prefix: ipv6Prefix(l),
 		},
 		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
-		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
+
+		CORSHeaders:       headerNames(l, "API_CORS_HEADERS"),
+		CORSExpose:        headerNames(l, "API_CORS_EXPOSE"),
+		CORSNoCredentials: !l.Bool("API_CORS_CREDENTIALS", true),
+		CORSMaxAge:        corsMaxAge(l),
 
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
 		SecurityHeaders: l.Bool("API_SECURITY_HEADERS", true),
 		TrustedProxies:  trustedProxies(l),
+
+		HTTPStopTimeout: nonNegative(l, "API_HTTP_STOP_TIMEOUT"),
+		GRPCStopTimeout: nonNegative(l, "API_GRPC_STOP_TIMEOUT"),
+
+		LogBodiesMaskPaths:  l.Strings("API_LOG_BODIES_MASK_PATHS", nil),
+		MetricsTenantHeader: tenantHeader(l),
 	}
+}
+
+// ipv6Prefix reads API_RATE_IPV6_PREFIX: how many leading bits of an IPv6 address make
+// one client of the rate limit.
+func ipv6Prefix(l *confx.Loader) int {
+	bits := l.Int("API_RATE_IPV6_PREFIX", defaultIPv6Prefix)
+	if bits < 1 || bits > 128 {
+		l.Fail(fmt.Errorf("%s: %d is not a prefix length from 1 to 128", l.Key("API_RATE_IPV6_PREFIX"), bits))
+	}
+	return bits
+}
+
+// idempotencyLease reads API_IDEMPOTENCY_LEASE and its old name API_IDEMPOTENCY_LOCK:
+// the old one goes to the deprecated field, so the module warns about it on start.
+func idempotencyLease(l *confx.Loader) (lease, lock time.Duration) {
+	if !l.IsSet("API_IDEMPOTENCY_LEASE") && l.IsSet("API_IDEMPOTENCY_LOCK") {
+		return 0, l.Duration("API_IDEMPOTENCY_LOCK", defaultIdempotencyLease)
+	}
+	return l.Duration("API_IDEMPOTENCY_LEASE", defaultIdempotencyLease), 0
+}
+
+// defaultIdempotencyLease is taply's lease of a running call.
+const defaultIdempotencyLease = 2 * time.Minute
+
+// nonNegative reads a duration that defaults to zero and may not be negative.
+func nonNegative(l *confx.Loader, name string) time.Duration {
+	d := l.Duration(name, 0)
+	if d < 0 {
+		l.Fail(fmt.Errorf("%s: %s is negative", l.Key(name), d))
+		return 0
+	}
+	return d
 }
 
 // trustedProxies reads API_TRUSTED_PROXIES: comma separated networks or addresses, or
@@ -127,7 +215,39 @@ func trustedProxies(l *confx.Loader) []netip.Prefix {
 	return out
 }
 
+// tenantHeader reads API_METRICS_TENANT_HEADER, the name of one request header.
+func tenantHeader(l *confx.Loader) string {
+	name := l.String("API_METRICS_TENANT_HEADER", "")
+	if name != "" && !validHeaderName(name) {
+		l.Fail(fmt.Errorf("%s: %q is not a header name", l.Key("API_METRICS_TENANT_HEADER"), name))
+	}
+	return name
+}
+
+// headerNames reads a comma separated list of HTTP header names.
+func headerNames(l *confx.Loader, key string) []string {
+	names := l.Strings(key, nil)
+	for _, name := range names {
+		if !validHeaderName(name) {
+			l.Fail(fmt.Errorf("%s: %q is not a header name", l.Key(key), name))
+		}
+	}
+	return names
+}
+
+// corsMaxAge reads API_CORS_MAX_AGE in seconds.
+func corsMaxAge(l *confx.Loader) int {
+	age := l.Int("API_CORS_MAX_AGE", defaultCORSMaxAge)
+	if age <= 0 {
+		l.Fail(fmt.Errorf("%s: %d is not a positive number of seconds", l.Key("API_CORS_MAX_AGE"), age))
+	}
+	return age
+}
+
 func (c *Config) setDefaults() {
+	if c.CORSMaxAge <= 0 {
+		c.CORSMaxAge = defaultCORSMaxAge
+	}
 	if c.GRPCAddr == "" {
 		c.GRPCAddr = "127.0.0.1:9091"
 	}
@@ -146,8 +266,14 @@ func (c *Config) setDefaults() {
 	if c.IdempotencyRetention <= 0 {
 		c.IdempotencyRetention = 24 * time.Hour
 	}
-	if c.IdempotencyLock <= 0 {
-		c.IdempotencyLock = time.Minute
+	if c.IdempotencyLease <= 0 {
+		c.IdempotencyLease = c.IdempotencyLock
+	}
+	if c.IdempotencyLease <= 0 {
+		c.IdempotencyLease = defaultIdempotencyLease
+	}
+	if c.RateLimit.IPv6Prefix <= 0 || c.RateLimit.IPv6Prefix > 128 {
+		c.RateLimit.IPv6Prefix = defaultIPv6Prefix
 	}
 }
 
@@ -167,18 +293,24 @@ type Service struct {
 // Registry holds what the project adds to the API. It lives in the container and is
 // filled from wireDomain, before the module starts.
 type Registry struct {
-	mu         sync.Mutex
-	sealed     bool
-	services   []Service
-	unary      []grpc.UnaryServerInterceptor
-	stream     []grpc.StreamServerInterceptor
-	authUnary  []grpc.UnaryServerInterceptor
-	authStream []grpc.StreamServerInterceptor
-	methods    []string
+	mu          sync.Mutex
+	sealed      bool
+	services    []Service
+	entries     []chainEntry
+	methods     []string
+	chain       []string
+	streamChain []string
 
 	public       func(method string) bool
+	normalizers  []func(proto.Message)
 	idemRequired []string
+	idemMethods  []string
+	idemListed   bool
 	idemUser     func(context.Context) string
+	corsHeaders  []string
+	rateKey      func(context.Context) string
+	replacements map[string]string
+	maskPaths    []string
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
 	errorHandler runtime.ErrorHandlerFunc
@@ -215,32 +347,47 @@ func Register(app *platform.App, s Service) {
 	r.add(func() { r.services = append(r.services, s) })
 }
 
-// AddUnaryInterceptor adds a project interceptor, such as authentication. Project
-// interceptors run after recovery, metrics and logging and before request validation.
+// AddUnaryInterceptor adds a project interceptor, such as authentication, in
+// PhaseAuthenticate: after recovery, metrics, logging, the rate limit by address and the
+// translation of errors, and before the access check and request validation.
+// AddUnaryInterceptorAt places one in another phase.
 func AddUnaryInterceptor(app *platform.App, i grpc.UnaryServerInterceptor) {
-	r := registry(app)
-	r.add(func() { r.unary = append(r.unary, i) })
+	AddUnaryInterceptorAt(app, PhaseAuthenticate, "", i)
 }
 
-// AddStreamInterceptor adds a project stream interceptor.
+// AddStreamInterceptor adds a project stream interceptor in PhaseAuthenticate.
 func AddStreamInterceptor(app *platform.App, i grpc.StreamServerInterceptor) {
-	r := registry(app)
-	r.add(func() { r.stream = append(r.stream, i) })
+	AddStreamInterceptorAt(app, PhaseAuthenticate, "", i)
 }
 
-// Authorize adds an access check. It runs after every project interceptor — so the
-// caller's identity is already in the context — and before request validation. The rbac
-// module registers itself here.
+// Authorize adds an access check in PhaseAuthorize. It runs after the project's
+// authentication — so the caller's identity is already in the context — and before
+// request validation. The rbac module registers itself here.
 func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc.StreamServerInterceptor) {
 	r := registry(app)
 	r.add(func() {
 		if unary != nil {
-			r.authUnary = append(r.authUnary, unary)
+			r.entries = append(r.entries, chainEntry{phase: PhaseAuthorize, name: entryName("", unary), unary: unary})
 		}
 		if stream != nil {
-			r.authStream = append(r.authStream, stream)
+			r.entries = append(r.entries, chainEntry{phase: PhaseAuthorize, name: entryName("", stream), stream: stream})
 		}
 	})
+}
+
+// Normalize changes every request message before validation, after the project's
+// authentication and guards: trimming strings, Unicode normalisation, as taply's strutil
+// does. It runs in PhaseTransform+50, after the other transforms of the phase — the
+// base fields the i18n module takes from translations are normalised too — and the
+// functions run in the order they were added.
+//
+//	api.Normalize(app, strutil.Normalize)
+func Normalize(app *platform.App, fn func(proto.Message)) {
+	if fn == nil {
+		panic("api: a nil normalizer")
+	}
+	r := registry(app)
+	r.add(func() { r.normalizers = append(r.normalizers, fn) })
 }
 
 // PublicMethods tells the API which methods are public, for their separate rate limit.
@@ -257,8 +404,34 @@ func RequireIdempotency(app *platform.App, methods ...string) {
 	r.add(func() { r.idemRequired = append(r.idemRequired, methods...) })
 }
 
+// IdempotencyMethods lists the methods whose Idempotency-Key counts, on top of those of
+// RequireIdempotency; a key on any other method is ignored. Without the call the keys
+// count on every method that changes something: one whose HTTP binding is not a GET
+// and whose idempotency_level is not NO_SIDE_EFFECTS. The list wins over that default,
+// as taply keeps its own.
+func IdempotencyMethods(app *platform.App, methods ...string) {
+	r := registry(app)
+	r.add(func() {
+		r.idemListed = true
+		r.idemMethods = append(r.idemMethods, methods...)
+	})
+}
+
+// RateLimitKey names the principal of a call — a user, an API client, a device — for the
+// second rate limit, API_PRINCIPAL_RATE_RPS per principal. It runs after the project's
+// interceptors, so the authentication has put the principal into the context; an empty
+// key, an anonymous call, is left to the limit by address. The limit by address still
+// applies to every call.
+func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
+	r := registry(app)
+	r.add(func() { r.rateKey = key })
+}
+
 // IdempotencyUser scopes idempotency keys to the caller: two users may use the same key.
-// The project's authentication supplies the user.
+// The project's authentication supplies the user. A key counts only for a caller this
+// names: without the call, or for an empty user — an anonymous caller — the key is
+// ignored, since anonymous callers would share one space of keys and could get each
+// other's answers.
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
 	r := registry(app)
 	r.add(func() { r.idemUser = user })
@@ -271,6 +444,36 @@ func Methods(app *platform.App) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.methods)
+}
+
+// DeprecatedReplacements names what replaces each deprecated method, for the replacement
+// label of api_deprecated_calls_total and the log line of a call, as taply keeps them.
+// A method listed here counts as deprecated even without `option deprecated = true`; an
+// empty replacement means there is none. Without this call the metric keeps the method
+// label only.
+//
+//	api.DeprecatedReplacements(app, map[string]string{
+//		"/shop.v1.OrdersService/GetOrderOld": "/shop.v1.OrdersService/GetOrder",
+//	})
+func DeprecatedReplacements(app *platform.App, replacements map[string]string) {
+	r := registry(app)
+	r.add(func() {
+		if r.replacements == nil {
+			r.replacements = map[string]string{}
+		}
+		for method, replacement := range replacements {
+			r.replacements[method] = replacement
+		}
+	})
+}
+
+// MaskLogBodies keeps the bodies of requests whose path contains one of the given parts
+// out of the access log: a failed request there is logged with [REDACTED] instead. For
+// endpoints that take secrets, such as a certificate upload. API_LOG_BODIES_MASK_PATHS
+// adds more per stand.
+func MaskLogBodies(app *platform.App, pathParts ...string) {
+	r := registry(app)
+	r.add(func() { r.maskPaths = append(r.maskPaths, pathParts...) })
 }
 
 // HandleHTTP serves a plain HTTP route next to the gateway: webhooks, file downloads,
@@ -286,10 +489,29 @@ func UseHTTP(app *platform.App, mw func(http.Handler) http.Handler) {
 	r.add(func() { r.middleware = append(r.middleware, mw) })
 }
 
+// CORSHeaders lets browsers send the request headers the API cannot work without, such
+// as a tenant header, on top of the platform's: Authorization, Content-Type, Accept,
+// X-Request-ID and Idempotency-Key. They belong in code rather than in the environment
+// of every stand; API_CORS_HEADERS adds more. It takes effect where API_CORS_ORIGINS
+// allows an origin.
+//
+//	api.CORSHeaders(app, "X-Restaurant-Id")
+func CORSHeaders(app *platform.App, names ...string) {
+	for _, name := range names {
+		if !validHeaderName(name) {
+			panic(fmt.Sprintf("api: %q is not a header name", name))
+		}
+	}
+	r := registry(app)
+	r.add(func() { r.corsHeaders = append(r.corsHeaders, names...) })
+}
+
 // HTTPErrorHandler replaces how the REST side writes an error, for an API whose contract
 // has its own error body. It receives every error of the gateway: from the handlers,
 // from request decoding and routing, and a body over the limit as a
-// *runtime.HTTPStatusError with 413. A later call replaces an earlier one.
+// *runtime.HTTPStatusError with 413. A failure of an external provider comes as the
+// handler returned it; IsExternalUnavailable tells it, for the 502 the platform's
+// writer answers. A later call replaces an earlier one.
 func HTTPErrorHandler(app *platform.App, h runtime.ErrorHandlerFunc) {
 	r := registry(app)
 	r.add(func() { r.errorHandler = h })
@@ -310,13 +532,19 @@ func WithOpenAPI(fsys fs.FS) Option { return func(m *Module) { m.openapi = fsys 
 
 // Module implements platform.Module.
 type Module struct {
-	cfg     Config
+	cfg Config
+	// grpcTrusted are the networks given in TrustedProxies, without the default.
+	grpcTrusted []netip.Prefix
+	// oldLock is set when the lease came from the deprecated IdempotencyLock.
+	oldLock bool
 	skipped bool
 	http    *httpMetrics
 	app     *platform.App
 
 	idemStore  IdempotencyStore
 	limiter    *rateLimiter
+	principals *rateLimiter
+	clientIP   *clientIPResolver
 	deprecated *prometheus.CounterVec
 	cleanup    chan struct{}
 	openapi    fs.FS
@@ -335,8 +563,13 @@ type Module struct {
 
 // New creates the module from ready settings.
 func New(cfg Config, opts ...Option) *Module {
+	// The default trusted proxies, every private network, are not trusted to name the
+	// client over gRPC: a gRPC port open to the private network would let any host
+	// there pick its own bucket. Only networks the operator listed are.
+	grpcTrusted := cfg.TrustedProxies
+	oldLock := cfg.IdempotencyLease <= 0 && cfg.IdempotencyLock > 0
 	cfg.setDefaults()
-	m := &Module{cfg: cfg, registry: &Registry{}}
+	m := &Module{cfg: cfg, registry: &Registry{}, grpcTrusted: grpcTrusted, oldLock: oldLock}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -348,7 +581,7 @@ func (m *Module) Name() string { return "api" }
 // Init puts the registry into the container, so wireDomain can register services.
 func (m *Module) Init(_ context.Context, app *platform.App) error {
 	m.log = app.Logger().With("module", "api")
-	met, err := newMetrics(app.Metrics())
+	met, err := newMetrics(app.Metrics(), m.cfg.MetricsTenantHeader, app.OpenMetrics())
 	if err != nil {
 		return err
 	}
@@ -358,12 +591,6 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 	}
 	m.skipped = !app.Serves(platform.RoleAPI)
 	m.app = app
-	m.deprecated = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "api", Name: "deprecated_calls_total", Help: "calls to methods marked deprecated in the proto files",
-	}, []string{"method"})
-	if err := app.Metrics().Register(m.deprecated); err != nil {
-		return fmt.Errorf("api metrics: %w", err)
-	}
 	platform.Provide(app, m.registry)
 	return nil
 }
@@ -376,6 +603,12 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.skipped {
 		m.log.Info("the API is not served in this role")
 		return nil
+	}
+	if err := checkCORSHeaders(m.cfg); err != nil {
+		return err
+	}
+	if !m.cfg.CORSNoCredentials && slices.Contains(m.cfg.CORSOrigins, "*") {
+		m.log.Warn("API_CORS_ORIGINS has * with credentials: every origin is echoed back and may call the API with the user's cookies; set API_CORS_CREDENTIALS=false for a public API")
 	}
 
 	validator, err := protovalidate.New()
@@ -391,29 +624,61 @@ func (m *Module) Start(ctx context.Context) error {
 	// Build the server first: the deprecated methods are read from the registered
 	// services, and the chain below refers to them.
 	deprecated := map[string]bool{}
+	// The metric is built here, once wireDomain has said whether there are replacements:
+	// without them it keeps the single method label it always had.
+	labels := []string{"method"}
+	if m.registry.replacements != nil {
+		labels = append(labels, "replacement")
+	}
+	m.deprecated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "api", Name: "deprecated_calls_total", Help: "calls to methods marked deprecated in the proto files",
+	}, labels)
+	if err := m.app.Metrics().Register(m.deprecated); err != nil {
+		return fmt.Errorf("api metrics: %w", err)
+	}
 
-	// Metrics and logging are outermost, so they see a recovered panic and a hidden
-	// internal error as the Internal status the client gets. The rate limit comes before
-	// project interceptors, so a flood never reaches token validation; idempotency comes
-	// last, so a rejected call is not remembered.
-	platformUnary := []grpc.UnaryServerInterceptor{m.metrics.unary, logUnary(m.log), recoverUnary(m.log, m.metrics), errorsUnary(m.log)}
+	// The chain, by phase (see Phase): the outer recovery first, so a panic anywhere in
+	// the chain is answered with Internal. The client address is settled next, so
+	// everything after it sees the checked one; metrics and logging come after it. The
+	// rate limit by address comes before the project's interceptors, so a flood never
+	// reaches token validation; the one by principal comes after them, once the principal
+	// is known. Idempotency comes after validation, so a rejected call is not remembered,
+	// and the inner recovery after idempotency, so a panic of the handler is remembered
+	// as the Internal the client got instead of holding the key.
+	m.clientIP = &clientIPResolver{trusted: m.grpcTrusted, log: m.log}
+	entries := []chainEntry{
+		{phase: PhaseRecover, name: "recover", unary: recoverUnary(m.log, m.metrics), stream: recoverStream(m.log, m.metrics)},
+		{phase: PhaseObserve, name: "client-ip", unary: m.clientIP.unary, stream: m.clientIP.stream},
+		{phase: PhaseObserve, name: "metrics", unary: m.metrics.unary, stream: m.metrics.stream},
+		{phase: PhaseObserve, name: "log", unary: logUnary(m.log), stream: logStream(m.log)},
+		{phase: PhaseObserve, name: "errors", unary: errorsUnary(m.log)},
+	}
 	if m.cfg.RateLimit.RPS > 0 {
 		if m.limiter, err = newRateLimiter(m.cfg.RateLimit, m.registry.public, m.app.Metrics()); err != nil {
 			return fmt.Errorf("api: rate limit: %w", err)
 		}
-		platformUnary = append(platformUnary, m.limiter.unary)
+		entries = append(entries, chainEntry{phase: PhaseLimit, name: "rate-limit", unary: m.limiter.unary})
 	}
-	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.log, m.deprecated))
-	tail := []grpc.UnaryServerInterceptor{validateUnary(validator)}
+	entries = append(entries, chainEntry{phase: PhaseLimit, name: "deprecated", unary: deprecatedUnary(deprecated, m.registry.replacements, m.log, m.deprecated)})
+	if m.cfg.RateLimit.PrincipalRPS > 0 && m.registry.rateKey != nil {
+		if m.principals, err = newPrincipalLimiter(m.cfg.RateLimit, m.registry.rateKey, m.app.Metrics()); err != nil {
+			return fmt.Errorf("api: rate limit per principal: %w", err)
+		}
+		entries = append(entries, chainEntry{phase: PhaseGuard, name: "rate-limit-principal", unary: m.principals.unary})
+	}
+	if len(m.registry.normalizers) > 0 {
+		entries = append(entries, chainEntry{phase: PhaseTransform + 50, name: "normalize", unary: normalizeUnary(m.registry.normalizers)})
+	}
+	entries = append(entries, chainEntry{phase: PhaseValidate, name: "validate", unary: validateUnary(validator)})
 	if idem != nil {
-		tail = append(tail, idem.unary)
+		entries = append(entries, chainEntry{phase: PhaseIdempotency, name: "idempotency", unary: idem.unary})
 	}
-	unary := slices.Concat(platformUnary, m.registry.unary, m.registry.authUnary, tail)
-	stream := slices.Concat(
-		[]grpc.StreamServerInterceptor{m.metrics.stream, logStream(m.log), recoverStream(m.log, m.metrics)},
-		m.registry.stream,
-		m.registry.authStream,
-	)
+	entries = append(entries, chainEntry{phase: PhaseHandlerRecover, name: "recover", unary: recoverUnary(m.log, m.metrics), stream: recoverStream(m.log, m.metrics)})
+	unary, stream, unaryNames, streamNames := buildChain(entries, m.registry.entries)
+	m.registry.mu.Lock()
+	m.registry.chain, m.registry.streamChain = unaryNames, streamNames
+	m.registry.mu.Unlock()
+	m.log.Info("the interceptor chain", "unary", strings.Join(unaryNames, " > "), "stream", strings.Join(streamNames, " > "))
 
 	m.grpcSrv = grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -431,15 +696,30 @@ func (m *Module) Start(ctx context.Context) error {
 		s.GRPC(m.grpcSrv)
 	}
 	m.recordMethods()
+	if idem != nil {
+		idem.accept = m.idempotentMethods()
+	}
 	// Every method shows up in the metrics from the start, with zero counts, so a rate is
 	// defined before the first call.
 	m.metrics.server.InitializeMetrics(m.grpcSrv)
 	for method := range deprecatedMethods(m.grpcSrv) {
 		deprecated[method] = true
 	}
+	for method := range m.registry.replacements {
+		if !slices.Contains(m.registry.methods, method) {
+			m.log.Warn("api.DeprecatedReplacements names a method the API does not serve", "method", method)
+			continue
+		}
+		deprecated[method] = true
+	}
 
 	if m.grpcLn, err = net.Listen("tcp", m.cfg.GRPCAddr); err != nil {
 		return fmt.Errorf("api: gRPC on %s: %w", m.cfg.GRPCAddr, err)
+	}
+	if tcp, ok := m.grpcLn.Addr().(*net.TCPAddr); ok && !tcp.IP.IsUnspecified() {
+		if self, ok := netip.AddrFromSlice(tcp.IP); ok {
+			m.clientIP.self = self.Unmap()
+		}
 	}
 	go func() {
 		if err := m.grpcSrv.Serve(m.grpcLn); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
@@ -516,29 +796,72 @@ func (m *Module) idempotency(ctx context.Context) (*idempotency, error) {
 	for _, method := range m.registry.idemRequired {
 		required[method] = true
 	}
+	if m.oldLock {
+		m.log.Warn("API_IDEMPOTENCY_LOCK (Config.IdempotencyLock) is deprecated: set API_IDEMPOTENCY_LEASE (Config.IdempotencyLease)")
+	}
+	if m.registry.idemUser == nil {
+		level := slog.LevelInfo
+		if len(required) > 0 {
+			level = slog.LevelWarn
+		}
+		m.log.Log(ctx, level, "Idempotency-Key is ignored: no api.IdempotencyUser names the caller")
+	}
+	calls := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "api", Name: "idempotency_total",
+		Help: "calls with an Idempotency-Key by outcome: replay, aborted, mismatch, lease_lost, stored, retry, save_failed",
+	}, []string{"method", "result"})
+	if err := m.app.Metrics().Register(calls); err != nil {
+		return nil, fmt.Errorf("api metrics: %w", err)
+	}
+
 	m.cleanup = make(chan struct{})
 	done := m.cleanup // the goroutine keeps its own reference: Stop clears the field
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
+		clean := func(now time.Time) {
+			if n, err := store.DeleteExpired(context.Background(), now); err != nil {
+				m.log.Error("idempotency cleanup failed", "err", err)
+			} else if n > 0 {
+				m.log.Info("expired idempotency records removed", "count", n)
+			}
+		}
+		clean(time.Now())
 		for {
 			select {
 			case <-done:
 				return
 			case now := <-ticker.C:
-				if n, err := store.DeleteExpired(context.Background(), now); err != nil {
-					m.log.Error("idempotency cleanup failed", "err", err)
-				} else if n > 0 {
-					m.log.Info("expired idempotency records removed", "count", n)
-				}
+				clean(now)
 			}
 		}
 	}()
 	return &idempotency{
 		store: store, required: required, user: m.registry.idemUser,
-		retention: m.cfg.IdempotencyRetention, lock: m.cfg.IdempotencyLock,
-		log: m.log, now: time.Now,
+		retention: m.cfg.IdempotencyRetention, lease: m.cfg.IdempotencyLease,
+		log: m.log, now: time.Now, calls: calls,
 	}, nil
+}
+
+// idempotentMethods are the served methods whose keys count: the listed ones, or every
+// method that changes something.
+func (m *Module) idempotentMethods() map[string]bool {
+	accept := map[string]bool{}
+	if m.registry.idemListed {
+		for _, method := range m.registry.idemMethods {
+			if !slices.Contains(m.registry.methods, method) {
+				m.log.Warn("api.IdempotencyMethods names a method the API does not serve", "method", method)
+			}
+			accept[method] = true
+		}
+		return accept
+	}
+	for _, method := range m.registry.methods {
+		if mutating(method) {
+			accept[method] = true
+		}
+	}
+	return accept
 }
 
 func (m *Module) recordMethods() {
@@ -579,9 +902,12 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	}
 	h = limitBody(int64(m.cfg.MaxRecvSize), h)
 	h = recoverHTTP(m.log, m.metrics, h)
-	h = m.http.observe(m.log, m.cfg.AccessLog, m.cfg.LogBodies, h)
+	h = m.http.observe(m.log, accessLog{
+		on: m.cfg.AccessLog, bodies: m.cfg.LogBodies,
+		mask: slices.Concat(m.cfg.LogBodiesMaskPaths, m.registry.maskPaths),
+	}, h)
 	if len(m.cfg.CORSOrigins) > 0 {
-		h = cors(m.cfg.CORSOrigins, h)
+		h = newCORS(m.cfg, m.registry.corsHeaders).wrap(h)
 	}
 	if m.cfg.SecurityHeaders {
 		h = securityHeaders(h)
@@ -591,7 +917,8 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 
 // newGateway configures the REST side: snake_case JSON as in the proto files, every
 // field present in responses, unknown request fields ignored so old clients keep
-// working, and request headers forwarded to the gRPC handlers as metadata.
+// working, and request headers forwarded to the gRPC handlers as metadata — except the
+// client address, which the gateway passes on itself.
 func newGateway(errors runtime.ErrorHandlerFunc) *runtime.ServeMux {
 	json := &runtime.JSONPb{
 		MarshalOptions:   protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true},
@@ -604,6 +931,7 @@ func newGateway(errors runtime.ErrorHandlerFunc) *runtime.ServeMux {
 		runtime.WithErrorHandler(errors),
 		runtime.WithRoutingErrorHandler(routingError),
 		runtime.WithMetadata(annotateRoute),
+		runtime.WithMetadata(annotateClientIP),
 	)
 }
 
@@ -617,6 +945,9 @@ func forwardHeader(key string) (string, bool) {
 	lower := strings.ToLower(key)
 	switch {
 	case slices.Contains(hopByHop, lower):
+		return "", false
+	case lower == ClientIPMetadataKey || lower == strings.ToLower(legacyClientIPHeader):
+		// Only the gateway names the client: see ClientIPMetadataKey.
 		return "", false
 	case lower == "user-agent":
 		// gRPC sets its own user-agent on the gateway's connection; the client's travels
@@ -663,29 +994,54 @@ func (m *Module) Health(context.Context) error {
 }
 
 // Stop stops taking requests and lets the running ones finish within the shutdown
-// timeout; what is still running after it is cut off.
+// timeout and the budgets of HTTP and gRPC; what is still running after it is cut off.
 func (m *Module) Stop(ctx context.Context) error {
+	return errors.Join(m.stopHTTP(ctx), m.stopGRPC(ctx))
+}
+
+// StopPhases lets a phased shutdown stop the REST gateway first and gRPC last, with the
+// job queue draining in between while gRPC clients are still served.
+func (m *Module) StopPhases() []platform.StopPhase {
+	return []platform.StopPhase{
+		{Name: "http", Order: platform.PhaseHTTP, Stop: m.stopHTTP},
+		{Name: "grpc", Order: platform.PhaseGRPC, Stop: m.stopGRPC},
+	}
+}
+
+// within bounds ctx by budget when one is set.
+func within(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	if budget <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
+// stopHTTP reports the service as not serving, stops the REST gateway and closes its
+// connection to gRPC.
+func (m *Module) stopHTTP(ctx context.Context) error {
 	if m.health != nil {
 		m.health.Shutdown()
 	}
 	var errs []error
 	if m.httpSrv != nil {
-		errs = append(errs, m.httpSrv.Shutdown(ctx))
+		httpCtx, cancel := within(ctx, m.cfg.HTTPStopTimeout)
+		errs = append(errs, m.httpSrv.Shutdown(httpCtx))
+		cancel()
 	}
 	if m.gwCancel != nil {
 		m.gwCancel()
 	}
-	if m.limiter != nil {
-		m.limiter.stop()
-	}
-	if m.cleanup != nil {
-		close(m.cleanup)
-		m.cleanup = nil
-	}
 	if m.conn != nil {
 		errs = append(errs, m.conn.Close())
 	}
+	return errors.Join(errs...)
+}
+
+// stopGRPC lets running gRPC calls finish, cuts them off when the budget is spent, then
+// stops the rate limiter and the idempotency cleanup the calls use.
+func (m *Module) stopGRPC(ctx context.Context) error {
 	if m.grpcSrv != nil {
+		grpcCtx, cancel := within(ctx, m.cfg.GRPCStopTimeout)
 		done := make(chan struct{})
 		go func() {
 			m.grpcSrv.GracefulStop()
@@ -693,9 +1049,21 @@ func (m *Module) Stop(ctx context.Context) error {
 		}()
 		select {
 		case <-done:
-		case <-ctx.Done():
+		case <-grpcCtx.Done():
 			m.grpcSrv.Stop()
+			<-done
 		}
+		cancel()
 	}
-	return errors.Join(errs...)
+	if m.limiter != nil {
+		m.limiter.stop()
+	}
+	if m.principals != nil {
+		m.principals.stop()
+	}
+	if m.cleanup != nil {
+		close(m.cleanup)
+		m.cleanup = nil
+	}
+	return nil
 }

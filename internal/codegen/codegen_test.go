@@ -56,7 +56,7 @@ func TestSqlcKeepsCodeWhenQueriesBreak(t *testing.T) {
 	write(t, dir, "db/queries/orders.sql", "-- name: GetOrder :one\nSELEC 1;\n")
 	write(t, dir, "internal/db/sqlcgen/orders.sql.go", sqlcFile)
 
-	if err := codegen.Sqlc(context.Background(), dir, io.Discard); err == nil {
+	if err := codegen.Sqlc(context.Background(), dir, codegen.DefaultSqlc, io.Discard); err == nil {
 		t.Fatal("a broken query passed")
 	}
 	if !exists(dir, "internal/db/sqlcgen/orders.sql.go") {
@@ -71,7 +71,7 @@ func TestSqlcRunsWithQueries(t *testing.T) {
 	write(t, dir, "internal/db/sqlcgen/removed.sql.go", sqlcFile)
 	write(t, dir, "internal/db/sqlcgen/helpers.go", "package sqlcgen\n\n// Written by hand.\n")
 
-	if err := codegen.Sqlc(context.Background(), dir, io.Discard); err != nil {
+	if err := codegen.Sqlc(context.Background(), dir, codegen.DefaultSqlc, io.Discard); err != nil {
 		t.Fatalf("Sqlc: %v", err)
 	}
 	if len(*calls) != 2 || !slices.Equal((*calls)[0].args, []string{"tool", "sqlc", "compile", "-f", "db/sqlc.yaml"}) ||
@@ -92,7 +92,7 @@ func TestSqlcWithoutQueriesCleansUp(t *testing.T) {
 	calls := fakeGo(t, nil)
 	write(t, dir, "internal/db/sqlcgen/db.go", sqlcFile)
 
-	if err := codegen.Sqlc(context.Background(), dir, io.Discard); err != nil {
+	if err := codegen.Sqlc(context.Background(), dir, codegen.DefaultSqlc, io.Discard); err != nil {
 		t.Fatalf("Sqlc: %v", err)
 	}
 	if len(*calls) != 0 {
@@ -111,7 +111,7 @@ func TestSqlcCheck(t *testing.T) {
 		calls := fakeGo(t, nil)
 		write(t, dir, "db/queries/orders.sql", "")
 		write(t, dir, "internal/db/sqlcgen/orders.sql.go", sqlcFile)
-		if err := codegen.SqlcCheck(ctx, dir); err != nil {
+		if err := codegen.SqlcCheck(ctx, dir, codegen.DefaultSqlc); err != nil {
 			t.Fatalf("SqlcCheck: %v", err)
 		}
 		if len(*calls) != 1 || !slices.Contains((*calls)[0].args, "diff") {
@@ -123,7 +123,7 @@ func TestSqlcCheck(t *testing.T) {
 		dir := t.TempDir()
 		fakeGo(t, errors.New("exit status 1"))
 		write(t, dir, "db/queries/orders.sql", "")
-		if err := codegen.SqlcCheck(ctx, dir); err == nil || !strings.Contains(err.Error(), "sqlc output is stale") {
+		if err := codegen.SqlcCheck(ctx, dir, codegen.DefaultSqlc); err == nil || !strings.Contains(err.Error(), "sqlc output is stale") {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -134,7 +134,7 @@ func TestSqlcCheck(t *testing.T) {
 		fakeGo(t, nil)
 		write(t, dir, "db/queries/orders.sql", "")
 		write(t, dir, "internal/db/sqlcgen/customers.sql.go", sqlcFile)
-		if err := codegen.SqlcCheck(ctx, dir); err == nil || !strings.Contains(err.Error(), "customers.sql.go") {
+		if err := codegen.SqlcCheck(ctx, dir, codegen.DefaultSqlc); err == nil || !strings.Contains(err.Error(), "customers.sql.go") {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -143,7 +143,7 @@ func TestSqlcCheck(t *testing.T) {
 		dir := t.TempDir()
 		calls := fakeGo(t, nil)
 		write(t, dir, "internal/db/sqlcgen/db.go", sqlcFile)
-		if err := codegen.SqlcCheck(ctx, dir); err == nil {
+		if err := codegen.SqlcCheck(ctx, dir, codegen.DefaultSqlc); err == nil {
 			t.Fatal("output of removed queries passed the check")
 		}
 		if len(*calls) != 0 {
@@ -153,7 +153,7 @@ func TestSqlcCheck(t *testing.T) {
 
 	t.Run("nothing at all", func(t *testing.T) {
 		fakeGo(t, nil)
-		if err := codegen.SqlcCheck(ctx, t.TempDir()); err != nil {
+		if err := codegen.SqlcCheck(ctx, t.TempDir(), codegen.DefaultSqlc); err != nil {
 			t.Fatalf("SqlcCheck: %v", err)
 		}
 	})
@@ -251,3 +251,32 @@ func TestDSN(t *testing.T) {
 }
 
 func readRaw(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// A project that moved its sqlc files: the configuration, the queries and the output
+// come from the layout.
+func TestSqlcCustomLayout(t *testing.T) {
+	dir := t.TempDir()
+	calls := fakeGo(t, nil)
+	l := codegen.SqlcLayout{Config: "db/sqlc/sqlc.yaml", Queries: "db/sqlc/queries", Out: "internal/store/gen"}
+	write(t, dir, "db/sqlc/queries/orders.sql", "-- name: GetOrder :one\nSELECT 1;\n")
+	write(t, dir, "db/queries/ignored.sql", "-- name: Ignored :one\nSELECT 1;\n")
+	write(t, dir, "internal/store/gen/removed.sql.go", sqlcFile)
+
+	if err := codegen.Sqlc(context.Background(), dir, l, io.Discard); err != nil {
+		t.Fatalf("Sqlc: %v", err)
+	}
+	if len(*calls) != 2 || !slices.Equal((*calls)[1].args, []string{"tool", "sqlc", "generate", "-f", "db/sqlc/sqlc.yaml"}) {
+		t.Errorf("calls = %+v", *calls)
+	}
+	if exists(dir, "internal/store/gen/removed.sql.go") {
+		t.Error("old output in the moved folder stayed")
+	}
+	if q, _ := codegen.Queries(dir, l); !slices.Equal(q, []string{"orders.sql"}) {
+		t.Errorf("queries = %v", q)
+	}
+
+	write(t, dir, "internal/store/gen/customers.sql.go", sqlcFile)
+	if err := codegen.SqlcCheck(context.Background(), dir, l); err == nil || !strings.Contains(err.Error(), "internal/store/gen/customers.sql.go") {
+		t.Errorf("SqlcCheck = %v", err)
+	}
+}

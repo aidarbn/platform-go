@@ -23,9 +23,13 @@ func commands() []setup.Command {
 			{Name: "service", Summary: "service name"},
 			{Name: "with", Summary: "modules", Values: registry.Names(), List: true},
 		}},
-		{Name: "plan", Summary: "show what apply would change", Flags: []setup.Flag{dir}},
+		{Name: "plan", Summary: "show what apply would change", Flags: []setup.Flag{
+			dir, {Name: "diff", Summary: "show conflicts as diffs", Bool: true},
+		}},
 		{Name: "apply", Summary: "bring the project in line with platformgo.yaml", Flags: []setup.Flag{
 			dir, {Name: "no-tidy", Summary: "skip go mod tidy", Bool: true},
+			{Name: "adopt", Summary: "create only what does not exist, report conflicts", Bool: true},
+			{Name: "force", Summary: "take the generated version of a conflicting file"},
 		}},
 		{Name: "generate", Summary: "regenerate the project", Flags: []setup.Flag{
 			dir, {Name: "check", Summary: "fail when anything is stale", Bool: true},
@@ -46,7 +50,12 @@ func commands() []setup.Command {
 		{Name: "db", Summary: "generate the jet query builder", Sub: []string{"generate"}, Flags: []setup.Flag{
 			dir, {Name: "dsn", Summary: "database address"},
 		}},
-		{Name: "upgrade", Summary: "move the project to a platform version", Flags: []setup.Flag{dir}},
+		{Name: "upgrade", Summary: "move the project to a platform version", Flags: []setup.Flag{
+			dir,
+			{Name: "dry-run", Summary: "upgrade a copy and print the plan", Bool: true},
+			{Name: "no-check", Summary: "skip the checks after the upgrade", Bool: true},
+			{Name: "strict", Summary: "fail when a check after the upgrade fails", Bool: true},
+		}},
 		{Name: "doctor", Summary: "check the environment and the project", Flags: []setup.Flag{
 			dir, {Name: "fix", Summary: "fix what can be fixed", Bool: true},
 		}},

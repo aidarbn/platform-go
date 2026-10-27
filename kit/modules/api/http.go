@@ -9,9 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -23,15 +23,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
-// Headers the HTTP side sets for the gRPC side. They are always overwritten, so a client
-// cannot supply them.
 const (
 	requestIDHeader = "X-Request-ID"
-	clientIPHeader  = "X-Client-IP"
 	maxBodyLogSize  = 4096
 )
 
@@ -57,27 +53,6 @@ func RequestID(ctx context.Context) string {
 	return ""
 }
 
-// ClientIP returns the address of the client. Behind a proxy it is the last address of
-// X-Forwarded-For — the one the proxy itself saw, which the client cannot forge — and
-// the connection address otherwise. The gateway passes it on to gRPC handlers.
-func ClientIP(ctx context.Context) string {
-	if ip, ok := ctx.Value(clientIPKey).(string); ok {
-		return ip
-	}
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if v := md.Get(strings.ToLower(clientIPHeader)); len(v) > 0 && v[0] != "" {
-			return v[0]
-		}
-	}
-	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-		if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
-			return host
-		}
-		return p.Addr.String()
-	}
-	return ""
-}
-
 // userAgent returns the user agent of a call; the gateway forwards the one of the HTTP
 // client under its own metadata key.
 func userAgent(ctx context.Context) string {
@@ -93,38 +68,6 @@ func userAgent(ctx context.Context) string {
 	return ""
 }
 
-// resolveClientIP returns the connection address, or the last address of X-Forwarded-For
-// when the connection comes from a trusted proxy.
-func resolveClientIP(r *http.Request, trusted []netip.Prefix) string {
-	remote := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
-	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" || !isTrusted(remote, trusted) {
-		return remote
-	}
-	parts := strings.Split(xff, ",")
-	if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-		return ip
-	}
-	return remote
-}
-
-func isTrusted(remote string, trusted []netip.Prefix) bool {
-	addr, err := netip.ParseAddr(remote)
-	if err != nil {
-		return false
-	}
-	addr = addr.Unmap()
-	for _, p := range trusted {
-		if p.Contains(addr) {
-			return true
-		}
-	}
-	return false
-}
-
 // newRequestID is a uuidv7: it sorts by time, which helps when logs are searched.
 func newRequestID() string {
 	id, err := uuid.NewV7()
@@ -137,7 +80,10 @@ func newRequestID() string {
 }
 
 // identify gives the request its id and client address, for the HTTP side through the
-// context and for the gRPC side through headers the gateway forwards.
+// context and for the gRPC side through the request id header and the client address
+// annotator of the gateway. X-Client-IP is overwritten with the resolved address, as
+// before, so plain routes can read it; an incoming header of ClientIPMetadataKey is
+// removed, so neither a plain route nor a gRPC handler can mistake it for the platform's.
 func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
@@ -147,7 +93,8 @@ func identify(trusted []netip.Prefix, next http.Handler) http.Handler {
 		ip := resolveClientIP(r, trusted)
 
 		r.Header.Set(requestIDHeader, id)
-		r.Header.Set(clientIPHeader, ip)
+		r.Header.Set(legacyClientIPHeader, ip)
+		r.Header.Del(ClientIPMetadataKey)
 		w.Header().Set(requestIDHeader, id)
 
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
@@ -266,7 +213,7 @@ func (m *Module) gatewayTooLarge(gateway *runtime.ServeMux) http.Handler {
 func (m *Module) gatewayErrors() runtime.ErrorHandlerFunc {
 	handler := m.registry.errorHandler
 	if handler == nil {
-		handler = runtime.DefaultHTTPErrorHandler
+		handler = defaultHTTPErrors
 	}
 	return func(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
 		var withStatus *runtime.HTTPStatusError
@@ -277,31 +224,113 @@ func (m *Module) gatewayErrors() runtime.ErrorHandlerFunc {
 	}
 }
 
-// cors lets browsers on the allowed origins call the REST API. Patterns follow taply:
-// https://*.example.com for any subdomain, http://localhost:* for any port, * for any
-// origin.
-func cors(origins []string, next http.Handler) http.Handler {
-	allowed := originMatcher(origins)
+// The headers a browser may always send and a page may always read.
+var (
+	corsBaseHeaders = []string{"Authorization", "Content-Type", "Accept", requestIDHeader, "Idempotency-Key"}
+	corsBaseExpose  = []string{requestIDHeader}
+)
+
+const defaultCORSMaxAge = 86400
+
+// corsPolicy lets browsers on the allowed origins call the REST API. Patterns follow
+// taply: https://*.example.com for any subdomain, http://localhost:* for any port, *
+// for any origin.
+type corsPolicy struct {
+	allowed     func(string) bool
+	anyOrigin   bool // answer a literal "*": "*" is allowed and credentials are off
+	credentials bool
+	headers     string
+	expose      string
+	maxAge      string
+}
+
+// newCORS builds the policy from the settings and the headers the project registered.
+func newCORS(cfg Config, registered []string) *corsPolicy {
+	return &corsPolicy{
+		allowed:     originMatcher(cfg.CORSOrigins),
+		anyOrigin:   cfg.CORSNoCredentials && slices.Contains(cfg.CORSOrigins, "*"),
+		credentials: !cfg.CORSNoCredentials,
+		headers:     joinHeaders(corsBaseHeaders, registered, cfg.CORSHeaders),
+		expose:      joinHeaders(corsBaseExpose, cfg.CORSExpose),
+		maxAge:      strconv.Itoa(cfg.CORSMaxAge),
+	}
+}
+
+func (p *corsPolicy) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// Unless every origin gets the same "*", the answer depends on the origin, even
+		// when it carries no CORS headers: a shared cache must not hand it to another one.
+		if !p.anyOrigin {
+			h.Add("Vary", "Origin")
+		}
 		origin := r.Header.Get("Origin")
-		if origin == "" || !allowed(origin) {
+		if origin == "" || !p.allowed(origin) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		h := w.Header()
-		h.Set("Access-Control-Allow-Origin", origin)
-		h.Add("Vary", "Origin")
-		h.Set("Access-Control-Allow-Credentials", "true")
-		h.Set("Access-Control-Expose-Headers", requestIDHeader)
+		if p.anyOrigin {
+			h.Set("Access-Control-Allow-Origin", "*")
+		} else {
+			h.Set("Access-Control-Allow-Origin", origin)
+		}
+		if p.credentials {
+			h.Set("Access-Control-Allow-Credentials", "true")
+		}
+		h.Set("Access-Control-Expose-Headers", p.expose)
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Request-ID, Idempotency-Key")
-			h.Set("Access-Control-Max-Age", "86400")
+			h.Set("Access-Control-Allow-Headers", p.headers)
+			h.Set("Access-Control-Max-Age", p.maxAge)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// joinHeaders lists header names once each, in the order given; header names do not
+// depend on case.
+func joinHeaders(lists ...[]string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, name := range list {
+			key := strings.ToLower(name)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// checkCORSHeaders refuses header names of a Config written in code, which Load did
+// not check.
+func checkCORSHeaders(cfg Config) error {
+	for _, name := range slices.Concat(cfg.CORSHeaders, cfg.CORSExpose) {
+		if !validHeaderName(name) {
+			return fmt.Errorf("api: CORS: %q is not a header name", name)
+		}
+	}
+	return nil
+}
+
+// validHeaderName reports whether name is an HTTP field name: a token of RFC 9110.
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range []byte(name) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func originMatcher(origins []string) func(string) bool {
@@ -442,10 +471,28 @@ func loggedPath(path, route string) string {
 	return route
 }
 
+// accessLog says what the access log writes: a line per request when on, the bodies of
+// failed requests with bodies, except on paths containing one of mask.
+type accessLog struct {
+	on, bodies bool
+	mask       []string
+}
+
+// masked reports whether the bodies of a request to path stay out of the log.
+func (a accessLog) masked(path string) bool {
+	for _, part := range a.mask {
+		if part != "" && strings.Contains(path, part) {
+			return true
+		}
+	}
+	return false
+}
+
 // observe records metrics and the access log. The route is the template, never the
 // concrete path: a path label per order id would grow without bound, and scanners
 // hitting random paths all count as unknown.
-func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next http.Handler) http.Handler {
+func (m *httpMetrics) observe(log *slog.Logger, access accessLog, next http.Handler) http.Handler {
+	logBodies := access.on && access.bodies
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		m.inFlight.Inc()
@@ -471,7 +518,7 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		m.duration.WithLabelValues(r.Method, route, status).Observe(took.Seconds())
 		m.size.WithLabelValues(r.Method, route).Observe(float64(sw.size))
 
-		if !accessLog {
+		if !access.on {
 			return
 		}
 		attrs := []any{
@@ -486,7 +533,14 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		if r.URL.RawQuery != "" {
 			attrs = append(attrs, "query", r.URL.RawQuery)
 		}
-		if logBodies && sw.status >= 400 {
+		if logBodies && sw.status >= 400 && access.masked(r.URL.Path) {
+			if len(reqBody) > 0 {
+				attrs = append(attrs, "req_body", redacted)
+			}
+			if len(sw.body) > 0 {
+				attrs = append(attrs, "res_body", redacted)
+			}
+		} else if logBodies && sw.status >= 400 {
 			if len(reqBody) > 0 {
 				attrs = append(attrs, "req_body", bodyForLog(r.Header.Get("Content-Type"), reqBody, r.ContentLength))
 			}
@@ -504,6 +558,9 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		}
 	})
 }
+
+// redacted stands in the access log for a body that must not be there.
+const redacted = "[REDACTED]"
 
 // captureBody keeps the start of the request body for the log of a failed request.
 type captureBody struct {

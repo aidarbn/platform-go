@@ -7,13 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
+	"sync"
 	"time"
 
 	"buf.build/go/protovalidate"
 	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,11 +33,30 @@ type metrics struct {
 	stream grpc.StreamServerInterceptor
 }
 
-func newMetrics(reg *prometheus.Registry) (*metrics, error) {
+// tenantLabel is the label the call metrics get with API_METRICS_TENANT_HEADER, named as
+// taply names it, and unknownTenant its value for a call without the header.
+const (
+	tenantLabel   = "tenant_name"
+	unknownTenant = "unknown"
+)
+
+// newMetrics builds the call metrics. With a tenant header they carry tenant_name from
+// that request header, as taply's do; with exemplars a sampled call leaves its trace id
+// next to the counters and the histogram.
+func newMetrics(reg *prometheus.Registry, tenantHeader string, exemplars bool) (*metrics, error) {
+	opts := []grpcprom.ServerMetricsOption{grpcprom.WithServerHandlingTimeHistogram(
+		grpcprom.WithHistogramBuckets([]float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120}),
+	)}
+	var callOpts []grpcprom.Option
+	if tenantHeader != "" {
+		opts = append(opts, grpcprom.WithContextLabels(tenantLabel))
+		callOpts = append(callOpts, grpcprom.WithLabelsFromContext(tenantFrom(strings.ToLower(tenantHeader))))
+	}
+	if exemplars {
+		callOpts = append(callOpts, grpcprom.WithExemplarFromContext(traceExemplar))
+	}
 	m := &metrics{
-		server: grpcprom.NewServerMetrics(grpcprom.WithServerHandlingTimeHistogram(
-			grpcprom.WithHistogramBuckets([]float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120}),
-		)),
+		server: grpcprom.NewServerMetrics(opts...),
 		panics: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "grpc_req_panics_recovered_total",
 			Help: "panics recovered while handling a call",
@@ -44,9 +67,73 @@ func newMetrics(reg *prometheus.Registry) (*metrics, error) {
 			return nil, fmt.Errorf("api metrics: %w", err)
 		}
 	}
-	m.unary = m.server.UnaryServerInterceptor()
-	m.stream = m.server.StreamServerInterceptor()
+	m.unary = m.server.UnaryServerInterceptor(callOpts...)
+	m.stream = m.server.StreamServerInterceptor(callOpts...)
 	return m, nil
+}
+
+// Bounds of the tenant label. The header comes from the client, before
+// authentication, so every distinct value would be a new series of every call metric:
+// a value that is too long or has other characters is counted as invalidTenant, and
+// past maxTenants distinct values a new one is counted as otherTenant.
+const (
+	maxTenantLen  = 64
+	maxTenants    = 256
+	invalidTenant = "invalid"
+	otherTenant   = "other"
+)
+
+// tenantFrom reads the tenant of a call from a request header; the gateway forwards
+// REST headers as metadata, so REST and gRPC calls are labelled alike.
+func tenantFrom(header string) func(context.Context) prometheus.Labels {
+	var (
+		mu   sync.Mutex
+		seen = map[string]struct{}{}
+	)
+	return func(ctx context.Context) prometheus.Labels {
+		tenant := unknownTenant
+		if values := metadata.ValueFromIncomingContext(ctx, header); len(values) > 0 && values[0] != "" {
+			tenant = values[0]
+			switch {
+			case !validTenant(tenant):
+				tenant = invalidTenant
+			default:
+				mu.Lock()
+				if _, ok := seen[tenant]; !ok {
+					if len(seen) < maxTenants {
+						seen[tenant] = struct{}{}
+					} else {
+						tenant = otherTenant
+					}
+				}
+				mu.Unlock()
+			}
+		}
+		return prometheus.Labels{tenantLabel: tenant}
+	}
+}
+
+// validTenant accepts a short name of letters, digits, dots, dashes and underscores.
+func validTenant(v string) bool {
+	if len(v) > maxTenantLen {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// traceExemplar links a metric sample to the trace of a sampled call, under the label
+// name taply and its Grafana data sources use.
+func traceExemplar(ctx context.Context) prometheus.Labels {
+	if span := trace.SpanContextFromContext(ctx); span.IsSampled() {
+		return prometheus.Labels{"traceID": span.TraceID().String()}
+	}
+	return nil
 }
 
 // recoverUnary turns a panic in a handler into an Internal error: one broken request
@@ -169,6 +256,18 @@ func validateUnary(v protovalidate.Validator) grpc.UnaryServerInterceptor {
 				st = detailed
 			}
 			return nil, st.Err()
+		}
+		return handler(ctx, req)
+	}
+}
+
+// normalizeUnary runs the project's normalizers on the request message.
+func normalizeUnary(fns []func(proto.Message)) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if msg, ok := req.(proto.Message); ok {
+			for _, fn := range fns {
+				fn(msg)
+			}
 		}
 		return handler(ctx, req)
 	}

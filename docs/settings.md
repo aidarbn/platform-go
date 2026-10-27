@@ -75,6 +75,47 @@ store := settingsx.NewTestStore(appsettings.Schema, map[string]string{
 s := appsettings.New(store)
 ```
 
+## Moving existing settings
+
+A project that kept its settings elsewhere — taply's `app_configs`, a file, an older configuration service — moves them with `settings.Import` (the settings module must be initialised, so it runs from `wireDomain` or a command built on the platform). Only overrides are stored, and that matters: taply's `EnsureDefaults` writes a row for every key, defaults included, and copying the table as is would freeze every default at today's value.
+
+```go
+report, err := settings.Import(ctx, app, values, "import:app_configs") // values map[string]string
+```
+
+For a table there is `settings.ImportQuery`: the query returns the key and the value, and a NULL value means "use the default", the way `app_configs` stores it since taply's migration `20260127120000_add_app_configs`.
+
+```go
+// a one-off command of the project, or wireDomain of a single release
+report, err := settings.ImportQuery(ctx, app, postgres.Pool(app),
+	"SELECT key, value FROM app_configs", "import:app_configs")
+if err != nil {
+	return err
+}
+app.Logger().Info(report.String())
+```
+
+What happens to each key, and the list of the report it lands in:
+
+| Key | List | Stored |
+|---|---|---|
+| a value that differs from the default | `Imported` | yes |
+| equal to the default in any spelling (`60s` = `1m`, `t` = `true`, `05` = `5`, `1.50` = `1.5`, extra spaces in a schedule), or NULL | `Defaults` | no |
+| an equal override is already stored | `Unchanged` | no |
+| a different override is already stored (NULL included) | `Kept` | no: the stored value wins |
+| the schema refuses the value: does not parse, out of bounds, not an option | `Rejected`, with the reason, and a warning in the log | no |
+| the schema does not describe the key | `Unknown` | no |
+
+Import never overwrites a stored override, and the check and the insert are one statement (`ON CONFLICT DO NOTHING`), so an administrator's change or another instance importing at the same moment is not lost. Values are stored one by one; after a failure a repeated run carries on. The actor (`by`) is recorded in `updated_by` of every imported value — the authors of the old table are not carried over.
+
+**Run it once.** A repeated run stores nothing twice and keeps every value set since, so starting several instances with the import is safe. But a setting an administrator resets to its default has no override any more, and the next run would bring the old value back: remove the import after the first successful run.
+
+**Read the rejected keys before dropping the source.** A value that does not parse was ignored by taply too, so nothing changes for it. A value out of bounds, outside the options or a schedule the platform refuses did take effect in taply, and after the import the default applies instead, until someone sets a valid value.
+
+The comparison is `settingsx.Equal(def, a, b)`, built on `settingsx.Normalize(def, v)`, which gives the canonical text of a value for each of the seven types; both are there for project code that compares values too. Schedules are compared after removing extra spaces and the case of a shorthand (`@DAILY`); `MON` and `mon` still differ, which at worst stores one more override.
+
+For taply the order is: deploy the import, check the report in the log and `platform_settings` on production, remove the import and drop `app_configs` in the next release.
+
 ## Declarations in code
 
 Jobs, queues and their link to business settings live in project code, not in the platform config:
@@ -92,7 +133,7 @@ func wireDomain(app *platform.App) error {
 }
 ```
 
-Worker counts per queue are an environment parameter (`RIVER_QUEUES=default=5,notify=3`): production and staging differ in capacity while the meaning of the jobs stays the same.
+Worker counts per queue are an environment parameter (`RIVER_QUEUES=default=5,notify=3`): production and staging differ in capacity while the meaning of the jobs stays the same. A project that wants an administrator to size the queues, as taply does with its `*.queue_workers` settings, reads them from business settings with `riverx.QueuesFrom`; mark those settings `requires_restart`, since the queues are sized once at start, and `RIVER_QUEUES`, when set, still wins. The attempts of a job kind can come from business settings the same way, with `riverx.MaxAttemptsFrom`, read on every insert. See the [`river` module](modules.md#the-river-module).
 
 ## Why this split
 

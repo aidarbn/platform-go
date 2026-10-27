@@ -68,3 +68,27 @@ func TestReadBrokenGoMod(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestLocalReplace(t *testing.T) {
+	dir := project(t, "module example.com/app\n\ngo 1.27\n\nreplace (\n\texample.com/lib => ../lib\n\texample.com/old v1.0.0 => ./old\n\texample.com/fork => example.com/fork2 v1.2.0\n)\n")
+	f, err := gomod.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Replaced) != 3 || len(f.Local) != 2 || f.Local[0] != (gomod.LocalReplace{Path: "example.com/lib", Dir: "../lib"}) ||
+		f.Local[1] != (gomod.LocalReplace{Path: "example.com/old", Version: "v1.0.0", Dir: "./old"}) {
+		t.Fatalf("replaced = %v, local = %+v", f.Replaced, f.Local)
+	}
+	for _, r := range f.Local {
+		r.Dir = "/abs/" + r.Path
+		if err := gomod.SetLocalReplace(dir, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	for _, want := range []string{"example.com/lib => /abs/example.com/lib", "example.com/old v1.0.0 => /abs/example.com/old"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("go.mod lacks %q:\n%s", want, raw)
+		}
+	}
+}

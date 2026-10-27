@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"time"
 
+	pgxdecimal "github.com/jackc/pgx-shopspring-decimal"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,6 +24,23 @@ type Config struct {
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
 	ConnectTimeout  time.Duration
+
+	// Hooks are what a project adds to every connection and to the pool settings; nil adds
+	// nothing. They sit behind a pointer, so Config stays comparable with ==.
+	Hooks *Hooks
+}
+
+// Hooks extend the pool Open makes.
+type Hooks struct {
+	// AfterConnect runs on every new connection, after the platform has registered its
+	// types (numeric as decimal.Decimal). Projects register their own types here, such as
+	// enums or composite types. An error discards the connection.
+	AfterConnect func(ctx context.Context, conn *pgx.Conn) error
+
+	// ConfigurePool adjusts the pgx pool settings once the fields of Config are applied,
+	// for what Config does not cover: BeforeAcquire, a tracer, runtime parameters. An
+	// AfterConnect set here runs after the platform types and before Hooks.AfterConnect.
+	ConfigurePool func(*pgxpool.Config)
 }
 
 func (c *Config) setDefaults() {
@@ -57,6 +76,14 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
 	poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 	poolCfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
+	var hooks Hooks
+	if cfg.Hooks != nil {
+		hooks = *cfg.Hooks
+	}
+	if hooks.ConfigurePool != nil {
+		hooks.ConfigurePool(poolCfg)
+	}
+	poolCfg.AfterConnect = afterConnect(poolCfg.AfterConnect, hooks.AfterConnect)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -70,6 +97,41 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("pgdb: database is unreachable: %w", err)
 	}
 	return pool, nil
+}
+
+// RegisterTypes registers the types the platform maps for every project on a connection:
+// numeric as decimal.Decimal, the type the generated sqlc config uses for it. The codec
+// sends numeric in the binary format, also inside arrays, instead of the text fallback
+// through sql.Scanner. Open calls
+// it on every connection; call it yourself on a connection made without Open.
+func RegisterTypes(conn *pgx.Conn) {
+	m := conn.TypeMap()
+	pgxdecimal.Register(m)
+	// Scanning into decimal.Decimal goes through the scan plans Register adds; its codec
+	// would also turn numeric scanned into any — rows.Values, pgx.RowToMap — into
+	// decimal.Decimal, which JSON writes as a string and which has no NaN or Infinity.
+	// The codec of pgx keeps those as pgtype.Numeric, as without the platform types.
+	// This rests on the library's codec changing only DecodeValue, with the decimal
+	// plans added to the map apart from it; TestNumericAsWithoutPlatformTypes and
+	// TestDecimalTargets fail when an upgrade of either library breaks that.
+	m.RegisterType(&pgtype.Type{Name: "numeric", OID: pgtype.NumericOID, Codec: pgtype.NumericCodec{}})
+}
+
+// afterConnect chains the platform types with the hooks of the project, in order. A
+// failing hook stops the chain, and pgx discards the connection.
+func afterConnect(hooks ...func(context.Context, *pgx.Conn) error) func(context.Context, *pgx.Conn) error {
+	return func(ctx context.Context, conn *pgx.Conn) error {
+		RegisterTypes(conn)
+		for _, hook := range hooks {
+			if hook == nil {
+				continue
+			}
+			if err := hook(ctx, conn); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // InTx runs fn inside a transaction: it rolls back on error or panic and commits otherwise.

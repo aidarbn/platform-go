@@ -37,13 +37,15 @@ func TestMigrateWithRealDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer admin.Close()
 	name := fmt.Sprintf("migrate_test_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatalf("create database: %v", err)
 	}
+	// The pool is closed in the cleanup, not deferred: a deferred Close runs before
+	// t.Cleanup and the DROP would then fail silently, leaving the database behind.
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+		admin.Close()
 	})
 
 	cfg, err := pgxConfigFor(url, name)

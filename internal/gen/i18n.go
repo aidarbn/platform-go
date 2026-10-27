@@ -4,10 +4,10 @@ import "github.com/aidarbn/platform-go/internal/spec"
 
 // Files of the i18n module.
 const (
-	MessagesPath     = "i18n/messages.yaml"
-	MessagesGoPath   = "i18n/messages.gen.go"
-	I18nProtoPath    = "proto/platform/i18n/v1/i18n.proto"
-	platformProtoDir = "proto/platform"
+	MessagesPath   = "i18n/messages.yaml"
+	MessagesGoPath = "i18n/messages.gen.go"
+	I18nProtoPath  = "proto/platform/i18n/v1/i18n.proto" // under proto_dir of the api module
+	i18nProtoRel   = "platform/i18n/v1/i18n.proto"
 )
 
 const messagesGo = header + `
@@ -89,10 +89,10 @@ message LocaleMap {
 }
 `
 
-func i18nFiles(f *spec.File) map[string][]byte {
+func i18nFiles(f *spec.File, api APISettings) map[string][]byte {
 	files := map[string][]byte{MessagesGoPath: []byte(messagesGo)}
 	if _, ok := f.Modules["api"]; ok {
-		files[I18nProtoPath] = []byte(I18nProto)
+		files[api.ProtoPath(i18nProtoRel)] = []byte(I18nProto)
 	}
 	return files
 }

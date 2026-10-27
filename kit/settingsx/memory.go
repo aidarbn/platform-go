@@ -39,6 +39,20 @@ func (r *MemoryRepo) Save(_ context.Context, key, value, _ string) error {
 	return nil
 }
 
+// SaveIfAbsent stores an override unless the key has one, and reports whether it did.
+func (r *MemoryRepo) SaveIfAbsent(_ context.Context, key, value, _ string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.values[key]; ok {
+		return false, nil
+	}
+	if r.values == nil {
+		r.values = make(map[string]string)
+	}
+	r.values[key] = value
+	return true, nil
+}
+
 // Delete removes an override.
 func (r *MemoryRepo) Delete(_ context.Context, key string) error {
 	r.mu.Lock()

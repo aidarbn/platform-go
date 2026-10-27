@@ -149,7 +149,7 @@ groups:
 
 ## The `postgres` module
 
-A PostgreSQL pool with a health check and pool metrics, the local database in `docker-compose.yml`, and migrations.
+A PostgreSQL pool with a health check and pool metrics, `numeric` as `decimal.Decimal`, connection hooks for the types of the project, the local database in `docker-compose.yml`, and migrations.
 
 Migrations are goose SQL files in `db/migrations`:
 
@@ -160,6 +160,56 @@ created db/migrations/20260914073005_create_orders.sql
 
 The directory is embedded into the binary by the generated `db/migrations/migrations.gen.go`, and the module applies pending migrations during startup, before any other module touches the database. A session advisory lock makes several instances starting at once apply each migration exactly once. Set `DATABASE_MIGRATE=false` when migrations run as a separate deploy step.
 
+### Pool, types and connection hooks
+
+The pool is configured by environment variables:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `DATABASE_URL` | required | database address |
+| `DATABASE_MAX_CONNS` | 10 | connection limit |
+| `DATABASE_MIN_CONNS` | 0 | connections kept open |
+| `DATABASE_MAX_CONN_LIFETIME` | 1h | a connection is replaced after this time |
+| `DATABASE_MAX_CONN_IDLE_TIME` | 30m | an idle connection is closed after this time |
+| `DATABASE_CONNECT_TIMEOUT` | 5s | timeout of a new connection and of the start check |
+| `DATABASE_MIGRATE` | true | apply migrations on start |
+
+Every connection gets the types of the platform first: `numeric` is read and written as `decimal.Decimal` (`github.com/shopspring/decimal`, the type `db/sqlc.yaml` maps it to) with the binary codec of `pgx-shopspring-decimal`, as in taply. Money and percentages never pass through `float64`.
+
+The module is built by the generated `modules.gen.go`, so a project passes its own options in `main.go` with `postgres.Apply`, before `platform.Run`:
+
+```go
+modules := platformModules(cfg)
+if err := postgres.Apply(modules,
+	// sizes of the application: they replace the defaults of the platform,
+	// while a DATABASE_* variable that is set still wins
+	postgres.WithDefaults(postgres.PoolSizes{MaxConns: 25, MinConns: 5, MaxConnIdleTime: 10 * time.Minute}),
+	// runs on every new connection, after the platform types: enums, composite types
+	postgres.WithAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+		t, err := conn.LoadType(ctx, "order_status")
+		if err != nil {
+			return err
+		}
+		conn.TypeMap().RegisterType(t)
+		return nil
+	}),
+	// anything else of pgxpool.Config: a tracer, BeforeAcquire, runtime parameters
+	postgres.WithPoolConfig(func(c *pgxpool.Config) {
+		c.ConnConfig.RuntimeParams["application_name"] = serviceName
+	}),
+); err != nil {
+	log.Fatal(err)
+}
+if err := platform.Run(platform.Config{Service: serviceName}, modules, wireDomain); err != nil {
+	log.Fatal(err)
+}
+```
+
+- For each pool size the first of these wins: the `DATABASE_*` variable, if it is set (even to `0`), or a value the project put into `cfg.Postgres` after `LoadConfig`; the value of `WithDefaults`; the default of the platform. A zero field of `PoolSizes` keeps the platform default.
+- Hooks of `WithAfterConnect` and functions of `WithPoolConfig` run in the order they were added. A failing hook discards the connection; on start that fails the database check.
+- `Apply` fails when the modules have no `postgres` module, so hooks the project relies on are never dropped silently.
+- Without the module, `pgdb.Open` takes the same through `pgdb.Config`: the sizes, and `Hooks` with `AfterConnect` and `ConfigurePool`. `pgdb.RegisterTypes` registers the platform types on a connection opened by other means.
+
 Queries come in two kinds, as in taply:
 
 | Kind | Tool | Where | How to regenerate |
@@ -168,6 +218,29 @@ Queries come in two kinds, as in taply:
 | dynamic — filters, sorting, pagination built at run time | jet | the migrated schema → `internal/db/jetgen/{model,table}` | `make db-generate`: migrates the local database and reads its schema |
 
 Both generators are pinned as `tool` in `go.mod` by `platformgo apply` (sqlc v1.31.1, jet v2.16.0) and removed with the module. `db/sqlc.yaml` is generated: schema from the migrations, `pgx/v5`, `numeric` as `decimal.Decimal`, `uuid` as `uuid.UUID`, `jsonb` as `json.RawMessage`, `timestamptz` and `date` as `time.Time`, nullable columns as pointers. `verify` fails when the sqlc output is stale or left from a removed query file.
+
+The layout and the type mapping are options of the module in `platformgo.yaml`; every key is optional and the defaults are the layout above:
+
+```yaml
+modules:
+  postgres:
+    sqlc:
+      dir: db/sqlc                   # where sqlc.yaml is generated; default db
+      queries: queries               # relative to dir; default queries
+      out: internal/adapters/out/db/sqlcgen   # default internal/db/sqlcgen
+      package: sqlcgen
+      emit_interface: false          # default true
+      overrides:                     # before the platform's; sqlc takes the first match
+        - {db_type: int4, go_type: int64}
+        - {db_type: int4, nullable: true, go_type: {type: int64, pointer: true}}
+        - {column: orders.meta, go_type: {import: example.com/shop/internal/domain, type: Meta}}
+      renames: {url: URL}
+```
+
+- The schema is always `db/migrations`: `migrations.gen.go` embeds it, so the generated `sqlc.yaml` points there from wherever `dir` is.
+- An override takes `db_type` or `column`, `nullable`, and `go_type` as a name (`int64`) or an object (`import`, `package`, `type`, `pointer`, `slice`), as in sqlc. Overrides of the project come first, so one for `uuid` or `pg_catalog.numeric` replaces the platform's.
+- Moving `dir` moves the generated file: `apply` writes the new one and deletes the old. `queries` is relative to `dir`, so move the query files along; until then `generate` finds no queries and removes the code generated from them. Moving `out` does not move code already generated: delete the old folder after `make generate`.
+- `out` must not hold or sit in the queries, the migrations or `internal/db/jetgen`, nor hold `dir`: sqlc output is cleaned before every run.
 
 ```go
 // static: sqlc on the pool
@@ -214,6 +287,25 @@ message CreateOrderRequest {
 
 `make generate` runs buf with the plugins pinned in `go.mod` by `apply` (buf, protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway, protoc-gen-connect-openapi): Go code into `internal/api/gen`, an OpenAPI 3.1 description with the protovalidate rules into `api/openapi/openapi.yaml`. The human part of that description — title, intro, tags, security scheme — lives in `api/openapi/base.yaml`, created once on `apply` and owned by the project from then on: only the project knows what to tell the reader of its API, and the proto files cannot say it. Tags and operation ids use the short service name. `verify` generates into a scratch directory and fails when the committed code is stale.
 
+`buf.yaml` and `buf.gen.yaml` are generated. Options of the module in `platformgo.yaml` adjust them; every key is optional and the defaults give the files above:
+
+```yaml
+modules:
+  api:
+    proto_dir: api                   # the buf module; default proto
+    buf:
+      deps: [buf.build/grpc-ecosystem/grpc-gateway]   # added to googleapis, protovalidate, gnostic
+      breaking_except: [FILE_NO_DELETE, RPC_NO_DELETE, MESSAGE_NO_DELETE, FIELD_NO_DELETE]
+    openapi:
+      generator: connect             # connect | none; platform is reserved for the platform's own generator
+```
+
+- `proto_dir` is the buf module: imports are relative to it, `make generate` and `lint proto` read it, and the i18n option of the platform is generated under it (`<proto_dir>/platform/i18n/v1/i18n.proto`). Moving it leaves the old copy of that file, which has no generated mark: `apply` lists it as kept, delete it.
+- `buf.deps` are added after the platform's; a platform dependency listed again is left out, with a label of its own it is an error. A label (`buf.build/grpc-ecosystem/grpc-gateway:v2.27.0`) is written as it is; `buf.lock` pins the commit, so after changing a label run `go tool buf dep update`. The Go code of a dependency must come from a module in `go.mod`, so its `go_package` is left out of managed mode, as for the platform's.
+- `proto_dir` holds only proto files for buf; it must not be inside `internal/api/gen` or `api/openapi`, where buf writes.
+- `buf.breaking_except` goes into `breaking.except` next to `use: [FILE]`; `lint --against` uses it.
+- `openapi.generator: none` takes the OpenAPI plugin out of `buf.gen.yaml`. The project then keeps `api/openapi/openapi.yaml` itself; the module serves it as before, `generate` never removes it and `verify` does not compare it. `platform` is reserved for the platform's own generator and fails until a release ships it. `api/openapi/base.yaml` is still created: with `none` nothing reads it, and it keeps the embed of `api/openapi` compiling before the project adds its description.
+
 The handler is registered from `wire.go`:
 
 ```go
@@ -225,22 +317,46 @@ api.AddUnaryInterceptor(app, auth.Interceptor(tokens))           // authenticati
 api.HandleHTTP(app, "POST /webhooks/kaspi", kaspi.WebhookHandler) // routes that are not gRPC
 ```
 
-What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: metrics (taply's `grpc_server_handled_total`, `grpc_server_handling_seconds` and `grpc_req_panics_recovered_total`, which the go-grpc dashboard and alerts of the monitoring agent read), logging of failed calls, panic recovery, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
+What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: panic recovery, metrics (taply's `grpc_server_handled_total`, `grpc_server_handling_seconds` and `grpc_req_panics_recovered_total`, which the go-grpc dashboard and alerts of the monitoring agent read), logging of failed calls, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
+
+**The interceptor chain** is ordered by phase, as taply orders its interceptors; the order is the application's, not the order the modules start in. From the outside in:
+
+1. `PhaseRecover` — the outer recovery: a panic in any interceptor answers `Internal`;
+2. `PhaseObserve` — the client address, metrics, logging, errors without details;
+3. `PhaseLimit` — the rate limit by address, deprecated methods;
+4. `PhaseErrorsI18n` — the translation of error messages (`i18n`), outside authentication so its refusals are translated too;
+5. `PhaseAuthenticate` — the project's authentication; `api.AddUnaryInterceptor` and `api.AddStreamInterceptor` add here;
+6. `PhaseAuthorize` — the access check (`rbac`, `api.Authorize`);
+7. `PhaseGuard` — checks that need the caller, such as a tenant guard; the rate limit per principal;
+8. `PhaseTransform` — changes to the request and the response with the caller known: the translation of response fields and the base fields of editor requests taken from their translations (`i18n`), then, at `PhaseTransform+50`, the project's normalisation of requests (`api.Normalize`);
+9. `PhaseValidate` — protovalidate;
+10. `PhaseAfterValidate` — what must see a valid request: the copy of base fields into the default translation (`i18n`);
+11. `PhaseIdempotency` — idempotency;
+12. `PhaseHandlerRecover` — the inner recovery: a panic of the handler becomes `Internal` before idempotency, so the key is not left in progress and the metrics see the `Internal` the client gets.
+
+`api.AddUnaryInterceptorAt(app, api.PhaseGuard, "restaurant", guard)` and `api.AddStreamInterceptorAt` place a project interceptor in a phase; the phases are a hundred apart, so `api.PhaseGuard+10` runs after every guard. Within a phase the platform's interceptors come first and the project's keep the order they were added in. `api.Chain(app)` and `api.StreamChain(app)` list the chain as `phase/name` once the module has started — a project test can pin it — and the start logs it. Streams have the same phases without the rate limit, normalisation, validation and idempotency.
+
+`api.Normalize(app, func(proto.Message))` changes every request message after the guards and before validation — trimming strings, Unicode normalisation, as taply's `strutil` does — so a normalised value passes the same checks as one sent clean. The functions run in the order they were added.
 
 The HTTP side, following taply's gateway:
 
 - **File uploads**: a `multipart/form-data` request fills the request message. A part named after a field of a message with `filename`, `content_type` and `content` becomes a file; a repeated field takes several parts in order (`images`, `images`) or by index (`images[0]`, `images[3]`, with empty entries for skipped ones); a JSON part fills a message field; other parts set scalar fields.
-- **Request id and client address**: `X-Request-ID` is taken from the request or generated, returned in the response and passed to gRPC handlers — `api.RequestID(ctx)`; the client address is the last `X-Forwarded-For` hop (the one the proxy saw) or the connection address — `api.ClientIP(ctx)`, which the client cannot forge through the gateway.
-- **Limits and headers**: a body over `API_MAX_RECV_MB` answers 413; taply's security headers (`nosniff`, `DENY`, `no-store`, HSTS); CORS origins accept `https://*.example.com` and `http://localhost:*`.
-- **Metrics and access log**: taply's `http_gateway_requests_total{method,path,status}`, `http_gateway_request_duration_seconds`, `http_gateway_response_size_bytes` and `http_gateway_requests_in_flight`, which the go-http dashboard and alerts read, labelled by the route template — `/v1/orders/{id}`, never the concrete path — with unmatched paths as `unknown`; an access log line per request with the route, status, duration, client address and request id — the concrete path is logged only when no route matched, because a path segment can be a secret (a link whose token is the credential) and the log is shipped off the box, plus the bodies of failed requests with binary and multipart bodies summarised instead of dumped.
+- **Request id and client address**: `X-Request-ID` is taken from the request or generated, returned in the response and passed to gRPC handlers — `api.RequestID(ctx)`. The client address — `api.ClientIP(ctx)` — is the connection address, or, when the connection comes from `API_TRUSTED_PROXIES`, the last `X-Forwarded-For` hop: the one the proxy itself saw, read from the last header line, since HAProxy adds a line of its own. Only that hop is taken, never one further left: the trusted proxies default to every private network, where a client may sit too. The gateway hands the address to the gRPC server under its own metadata key, `api.ClientIPMetadataKey` (`x-platform-client-ip`), and drops an incoming header of that name, so a client cannot choose it. The old `X-Client-IP` header is overwritten with the resolved address, so plain routes of `api.HandleHTTP` can still read it, and the gateway passes the address under the old `x-client-ip` metadata key as well, for handlers that read it themselves. The gRPC server believes the key only from loopback — where the gateway of the process connects from —, from its own listen address, or from networks set in `API_TRUSTED_PROXIES`, so a gRPC proxy listed there may set it; the default of every private network does not count here, so a gRPC port open to the private network does not let its hosts name themselves. A trusted peer that sends only the old `x-client-ip` key — a proxy or a client written for an older release — is still believed, with one warning in the log. Both keys of the incoming metadata are rewritten to the checked address before any interceptor of the project, so a handler that reads them itself never sees what an untrusted peer sent. A proxy on a trusted address that passes the gRPC metadata of its clients through, such as nginx with `grpc_pass`, must drop or set both keys itself. A direct gRPC client anywhere else is its peer address whatever metadata it sends. `x-forwarded-for` in gRPC metadata is not an address to trust: grpc-gateway appends the HTTP peer to whatever the client sent.
+- **Limits and headers**: a body over `API_MAX_RECV_MB` answers 413; taply's security headers (`nosniff`, `DENY`, `no-store`, HSTS).
+- **CORS** — off until `API_CORS_ORIGINS` lists origins: exact ones, `https://*.example.com` for any subdomain, `http://localhost:*` for any port, `*` for any. An allowed origin gets `Access-Control-Allow-Origin` on every response and `X-Request-ID` in `Access-Control-Expose-Headers`; a preflight answers 204 with the methods, the headers and `Access-Control-Max-Age`, while a foreign origin goes on to the API with no CORS headers. Every response but the literal `*` carries `Vary: Origin`, so a shared cache keeps the answers apart. A browser may send `Authorization`, `Content-Type`, `Accept`, `X-Request-ID` and `Idempotency-Key`; headers the API cannot work without are registered in code with `api.CORSHeaders(app, "X-Restaurant-Id")` in wireDomain, and a stand adds its own with `API_CORS_HEADERS`. The preflight answers this fixed list rather than echoing `Access-Control-Request-Headers`, so a header the browser refuses is one missing from it. By default the answer echoes the origin with `Access-Control-Allow-Credentials: true`, so the page may send cookies — with `*` too, which the module warns about on start. A public API, taply's mode, sets `API_CORS_ORIGINS=*` and `API_CORS_CREDENTIALS=false`: the answer is then a literal `*` without credentials. `API_CORS_CREDENTIALS=false` with listed origins echoes them without credentials.
+- **Metrics and access log**: taply's `http_gateway_requests_total{method,path,status}`, `http_gateway_request_duration_seconds`, `http_gateway_response_size_bytes` and `http_gateway_requests_in_flight`, which the go-http dashboard and alerts read, labelled by the route template — `/v1/orders/{id}`, never the concrete path — with unmatched paths as `unknown`; an access log line per request with the route, status, duration, client address and request id — the concrete path is logged only when no route matched, because a path segment can be a secret (a link whose token is the credential) and the log is shipped off the box, plus the bodies of failed requests with binary and multipart bodies summarised instead of dumped. Paths that take secrets keep their bodies out: `api.MaskLogBodies(app, "/certificate")` in code or `API_LOG_BODIES_MASK_PATHS` per stand log `[REDACTED]` for any path containing one of the parts, as taply does for certificate uploads.
+- **Call metrics per tenant** — `API_METRICS_TENANT_HEADER=tenant-name` labels `grpc_server_*` with `tenant_name` from that request header (gRPC metadata or a REST header), `unknown` without it, as taply's do. Off by default, and the metrics keep their labels. Every distinct value is a new series of every call metric, and the client sends the header before it is authenticated, so the value is bounded: up to 64 letters, digits, `.`, `-` and `_`, anything else is counted as `invalid`, and past 256 distinct tenants in a process a new one is counted as `other`. Use it where the tenants are a short, known list, such as taply's restaurants behind its own proxy.
+- **Trace exemplars** — with `METRICS_OPENMETRICS=true` a sampled call leaves its trace id as an exemplar (`traceID`, taply's label) of the call counters and the latency histogram, so a Grafana panel links a slow bucket to its trace. Prometheus stores them with `--enable-feature=exemplar-storage`.
 - **Routing errors** name the method and the path: `GET /v1/nothing: route not found`.
+- **Status codes** — the gateway maps gRPC codes to HTTP as grpc-gateway does: `InvalidArgument`, `FailedPrecondition` and `OutOfRange` 400, `Unauthenticated` 401, `PermissionDenied` 403, `NotFound` 404, `AlreadyExists` and `Aborted` 409, `ResourceExhausted` 429, `Canceled` 499, `Internal` and `Unknown` 500, `Unimplemented` 501, `Unavailable` 503, `DeadlineExceeded` 504. `401` is for the token itself — missing, malformed, expired, with a bad signature; a valid token that grants nothing here is `403` (see `rbac`). A request that fails validation answers `400` with the violations as details; an error without a status, from a handler that returned a plain `error`, answers `500` with `internal error`, and the error itself goes to the log.
+- **Failures of external providers** — one rule on top of the mapping, taken from taply: an `Unavailable` that an external provider caused is a 502, not the 503 that nginx takes for a dead replica. A handler returns `api.ExternalUnavailable("kaspi", "payment service unavailable")` — `Unavailable` with a `google.rpc.ErrorInfo` of reason `EXTERNAL_UNAVAILABLE` and the provider in its metadata — and `api.ExternalTimeout` for a provider that did not answer in time, a 504 with reason `EXTERNAL_TIMEOUT`. Any `Unavailable` with that reason counts, whatever the domain of its `ErrorInfo`, so a project that builds its own keeps it; another code with the reason is mapped as usual. The message goes to the client as `provider: message`: a short fixed text, never the provider's answer, which belongs in the log. The i18n module leaves these messages untranslated, and idempotency lets a repeat run again. With `api.HTTPErrorHandler` the 502 is the project's: `api.IsExternalUnavailable(err)` tells the failure.
 - **Error contract** — an API with its own error body replaces the gateway's writer: `api.HTTPErrorHandler(app, handler)` receives every REST error — handler statuses, decoding, routing, and a body over `API_MAX_RECV_MB` as a `*runtime.HTTPStatusError` with 413 — and writes the status and the body the contract wants. A middleware that reads the body itself, such as a request signature check, asks `api.BodyTooLarge(r)`. Plain routes answer 413 on their own.
 
 And on every call, following taply's interceptors:
 
-- **Rate limit** — a token bucket per client address, 50 calls a second with a burst of 100, and a separate 30/60 for public methods (the ones `rbac` marks public, or `api.PublicMethods`). A refused call answers `ResourceExhausted`, 429 over REST, and is counted in `api_rate_limited_total`. It runs before project interceptors, so a flood never reaches token validation.
-- **Deprecated methods** — `option deprecated = true` in the proto file is enough: calls are counted in `api_deprecated_calls_total{method}` and logged with the caller's address and user agent, so the method can go once nobody calls it. taply keeps this list in code.
-- **Idempotency** — a call with an `Idempotency-Key` header is remembered in the database of the `postgres` module, with taply's semantics: a repeat gets the saved answer without running the handler again, the same key with a different payload answers `AlreadyExists`, a repeat while the first call runs answers `Aborted`, a final failure is remembered and a failure that says try again (a `RetryableError`, or `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`) lets the next repeat run. `api.RequireIdempotency(app, methods...)` makes a key mandatory, as taply does for every create method; `api.IdempotencyUser` scopes keys to the caller. Unlike taply, taking over a retry is an atomic compare and set, and a call that died while holding its key can be repeated once its lock expires. Without the `postgres` module keys are ignored, and a required key stops the start.
+- **Rate limit** — a token bucket per client address, 50 calls a second with a burst of 100, and a separate 30/60 for public methods (the ones `rbac` marks public, or `api.PublicMethods`). An IPv6 client is limited by its /64, the block one subscriber gets, so it cannot take a new bucket with every address of the block; `API_RATE_IPV6_PREFIX` changes the length, `128` limits every address on its own. A refused call answers `ResourceExhausted`, 429 over REST, and is counted in `api_rate_limited_total`. It runs before project interceptors, so a flood never reaches token validation. A second bucket limits each principal, 50/100 by default, once the project names it: `api.RateLimitKey(app, func(ctx) string)` returns the user, API client or device the authentication put into the context. It runs after the project interceptors, counts refusals in `api_principal_rate_limited_total`, and leaves a call with an empty key to the limit by address; the limit by address applies to every call. Streams are not limited.
+- **Deprecated methods** — `option deprecated = true` in the proto file is enough: calls are counted in `api_deprecated_calls_total{method}` and logged with the caller's address and user agent, so the method can go once nobody calls it. taply keeps this list in code. `api.DeprecatedReplacements(app, map[string]string{"/shop.v1.Orders/GetOld": "/shop.v1.Orders/Get"})` in wireDomain adds taply's `replacement` label to the metric and the log line, and counts a listed method as deprecated even without the proto option; without the call the metric has only `method`.
+- **Idempotency** — a call with an `Idempotency-Key` header is remembered in the database of the `postgres` module, with the semantics of taply after its fixes: a repeat gets the saved answer without running the handler again, the same key with a different payload answers `AlreadyExists`, a repeat while the first call runs answers `Aborted`. A key counts only for a caller `api.IdempotencyUser` names — without it, or for an anonymous caller, the header is ignored, since anonymous callers would share one space of keys — and only on the methods it is meant for: by default every method that changes something (its HTTP binding is not a GET and its `idempotency_level` is not `NO_SIDE_EFFECTS`); `api.IdempotencyMethods(app, methods...)` replaces that with a list, as taply keeps one. `api.RequireIdempotency(app, methods...)` makes a key mandatory, as taply does for every create method; a required method without a key answers `InvalidArgument` for anonymous callers too. Only final outcomes are remembered: a success and the client errors a repeat cannot fix (`InvalidArgument`, `NotFound`, `AlreadyExists`, `FailedPrecondition`, `PermissionDenied`, `Unauthenticated`, `OutOfRange`, `Unimplemented`), with the `google.rpc.Status` the client got, details included; anything else — `Internal`, `Unknown`, `Canceled`, `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, a panic — lets the next repeat run. A `RetryableError` decides either way. A running call holds its key with a lease (`API_IDEMPOTENCY_LEASE`, 2 minutes) that it extends every third of it, so a long handler keeps its key, and a call that died frees it when the lease runs out; one repeat takes it over with a compare and set. The outcome is written only while the call still holds its lease — a call whose key was taken over does not overwrite the new owner's — on a context cut loose from the call with a five second budget, so a client that hangs up does not leave the key in progress. A failed write is retried twice within that budget; a key that is not printable ASCII or is longer than 255 characters answers `InvalidArgument`. Calls are counted in `api_idempotency_total{method,result}` (`replay`, `aborted`, `mismatch`, `lease_lost`, `stored`, `retry`, `save_failed`); expired records are removed at start and hourly. The leases are written from the clock of the process and taken over by the clock of the database, so the two must agree within a lease less a third of it, as NTP keeps them; a handler whose success is not a proto message is not remembered. Without the `postgres` module keys are ignored, and a required key stops the start.
 
 The description marks messages with `additionalProperties: false`: that is the contract for clients, while the gateway is more forgiving and ignores unknown fields.
 
@@ -249,14 +365,23 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_HTTP_ADDR` | `:8080` | REST gateway |
 | `API_GRPC_ADDR` | `127.0.0.1:9091` | gRPC |
 | `API_CORS_ORIGINS` | none | allowed browser origins, `*` for any |
+| `API_CORS_HEADERS` | none | request headers a browser may send on top of the platform's and `api.CORSHeaders` |
+| `API_CORS_EXPOSE` | none | response headers a page may read on top of `X-Request-ID` |
+| `API_CORS_CREDENTIALS` | `true` | `Access-Control-Allow-Credentials`; `false` with `*` answers a literal `*` |
+| `API_CORS_MAX_AGE` | `86400` | seconds a browser may cache a preflight |
 | `API_DOCS` | `true` | `/openapi.yaml` and `/docs` |
 | `API_REFLECTION` | `false` | gRPC reflection |
 | `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits; the request limit also caps HTTP bodies |
 | `API_RATE_RPS`, `API_RATE_BURST` | 50, 100 | per client; `0` turns the limit off |
 | `API_PUBLIC_RATE_RPS`, `API_PUBLIC_RATE_BURST` | 30, 60 | per client, public methods |
-| `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LOCK` | `24h`, `1m` | |
+| `API_PRINCIPAL_RATE_RPS`, `API_PRINCIPAL_RATE_BURST` | 50, 100 | per principal named by `api.RateLimitKey`; without it, or with `0`, there is no such limit |
+| `API_RATE_IPV6_PREFIX` | 64 | leading bits of an IPv6 address that make one client of the rate limit; `128` limits every address on its own |
+| `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LEASE` | `24h`, `2m` | how long a final outcome is remembered; the lease of a running call, extended while it runs. `API_IDEMPOTENCY_LOCK`, the old name of the lease, is still read, with a warning |
 | `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
-| `API_TRUSTED_PROXIES` | loopback and private networks | whose `X-Forwarded-For` names the client; a request from elsewhere keeps its connection address, so an allowlist by address cannot be bypassed with a forged header. `none` ignores the header |
+| `API_HTTP_STOP_TIMEOUT`, `API_GRPC_STOP_TIMEOUT` | none | on shutdown, how long running REST calls, then running gRPC calls, may finish before they are cut off; none waits as long as `SHUTDOWN_TIMEOUT` allows |
+| `API_LOG_BODIES_MASK_PATHS` | none | path parts whose bodies are logged as `[REDACTED]`, on top of `api.MaskLogBodies` |
+| `API_METRICS_TENANT_HEADER` | none | request header for the `tenant_name` label of the call metrics |
+| `API_TRUSTED_PROXIES` | loopback and private networks | whose `X-Forwarded-For` names the client; networks set here, not the default, may also name it over gRPC with `api.ClientIPMetadataKey`; a request from elsewhere keeps its connection address, so an allowlist by address cannot be bypassed with a forged header. `none` ignores the header; the gRPC side still trusts loopback, for the gateway. Narrow it to the real proxies when clients can reach the service from a private network |
 
 ## The `river` module
 
@@ -295,12 +420,33 @@ riverx.AtStart(app, func(ctx context.Context, q *riverx.Queue) error {
 
 `Queue` has `Insert`, `InsertTx` (the job exists exactly when the domain change commits), `InsertAt` and `InsertMany`; `Client()` gives the River client for the rest. Periodic jobs run on the elected leader only, so several instances do not run them twice.
 
+**Queues and attempts from business settings**, as taply sizes its queues and attempts from `app_configs`. Both are opt-in; without them the module behaves as before.
+
+```go
+riverx.QueuesFrom(app, func(ctx context.Context) (map[string]int, error) {
+	return map[string]int{"sync": s.Sync().QueueWorkers(), "orders": s.Orders().QueueWorkers(), "payments": 3}, nil
+})
+riverx.MaxAttemptsFrom(app, func(_ context.Context, kind string) (int, bool) {
+	if kind == (jobs.CreateOrderArgs{}).Kind() {
+		return s.CreateOrder().MaxAttempts(), true
+	}
+	return 0, false // other kinds keep their own attempts
+})
+```
+
+- `QueuesFrom` is called once, when the module starts working jobs and the settings are loaded; a changed value applies after a restart, so mark such settings `requires_restart` in `settings.yaml`. Queues set in `RIVER_QUEUES` or in `Config.Queues` win over it, so an environment can still pin its capacity; with neither the module works `default=10`. An error, an empty map or a queue without workers stops the start. An instance that only inserts (`RIVER_WORK=false`, `APP_ROLE=api`) does not call it.
+- `MaxAttemptsFrom` is asked on every insert through `Queue` and for every periodic job, so a changed value applies to the jobs inserted after the change. Its value replaces the attempts the job carries in `InsertOpts()`; attempts passed explicitly to `Insert`/`InsertTx` or returned by `PeriodicJob.Opts` win over it. A kind it reports `false` or a non positive number for keeps its own attempts. Inserts made with `Client()` directly are River as it is and do not see it.
+
+**Shutdown.** The module stops River softly: no new jobs are fetched and running ones may finish. `RIVER_STOP_TIMEOUT` bounds that wait; when it runs out — or `SHUTDOWN_TIMEOUT` does — the running jobs get their context cancelled and `RIVER_CANCEL_TIMEOUT` to return, so none of them writes into a database pool that is already closed. With phased shutdown (`SHUTDOWN_PHASES`, see [Process roles](#process-roles)) the queue drains after the HTTP servers stop and before gRPC does.
+
 | Variable | Default | |
 |---|---|---|
 | `RIVER_QUEUES` | `default=10` | queues and their capacity: an environment parameter, staging and production differ in it |
 | `RIVER_WORK` | `true` | `false` makes an instance insert only, for splitting API and worker instances |
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
+| `RIVER_STOP_TIMEOUT` | none | on shutdown, how long running jobs may finish; none waits as long as `SHUTDOWN_TIMEOUT` allows. Taply uses `6s` |
+| `RIVER_CANCEL_TIMEOUT` | none | then how long cancelled jobs get to return; none waits without a limit. Taply uses `1s` |
 
 ## The `enums` module
 
@@ -337,7 +483,7 @@ message Product {
 }
 ```
 
-Translations live in taply's `i18n_translations` table (`entity`, `entity_id`, `field`, `locale`, `text`); for every response the module collects the annotated fields, loads their translations with one query per entity type and substitutes the language of `Accept-Language` — `kk-KZ` matches `kk`, an unsupported language gets `I18N_DEFAULT_LOCALE`. An entity without a translation keeps its base value. A message with a `field_translations` map belongs to an editor and is left alone; for its requests the base value is copied into the default locale, so the column and the translation never disagree. `i18n.From(app)` reads and writes translations (`Set`, `SetBatch`, `SetBatchIfMissing` for syncs that must not overwrite edits, `GetAll`, `GetBatchAll`, in a transaction with `WithTx`); `i18nx.TranslationsToProto`, `ProtoToTranslations` and `ValidateFields` serve editor APIs. `i18n.SkipTranslation(app, fn)` turns substitution off for chosen calls, as taply does for some tablets.
+Translations live in taply's `i18n_translations` table (`entity`, `entity_id`, `field`, `locale`, `text`); for every response the module collects the annotated fields, loads their translations with one query per entity type and substitutes the language of `Accept-Language` — `kk-KZ` matches `kk`, an unsupported language gets `I18N_DEFAULT_LOCALE`. An entity without a translation keeps its base value. A message with a `field_translations` map belongs to an editor and is left alone. For its requests, as taply does: when the request carries the translation into the default locale for a field — empty too, which clears the field — the base field takes it, trimmed, before normalisation and validation, so an editor that edits only the translations and sends the base field as it loaded it does not lose the edit; then, after validation, the base value is copied into the default locale, so the column and the translation never disagree. `i18n.From(app)` reads and writes translations (`Set`, `SetBatch`, `SetBatchIfMissing` for syncs that must not overwrite edits, `GetAll`, `GetBatchAll`, in a transaction with `WithTx`); `i18nx.TranslationsToProto`, `ProtoToTranslations` and `ValidateFields` serve editor APIs. `i18n.SkipTranslation(app, fn)` turns substitution off for chosen calls, as taply does for some tablets; the substitution runs in `PhaseTransform`, after the project's authentication, so `fn` sees the caller it put into the context. Error messages are translated in `PhaseErrorsI18n`, outside authentication, so its refusals are translated too.
 
 **Error messages** are translated the way taply does, in order: a whole sentence template, `{resource} {id}: {message}`, `missing {field}` and `{field} is required`, an exact message. The platform translates its own messages (rate limit, authentication, idempotency, routing) and taply's generic ones into Russian, Kazakh and English; the project adds its own in `i18n/messages.yaml`, created with the module and embedded into the binary:
 
@@ -424,7 +570,7 @@ api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.Unary
 })
 ```
 
-The access check runs after every project interceptor and before request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
+The access check runs in `PhaseAuthorize`, after the project's authentication and before its guards and request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. Only the token itself decides `Unauthenticated`: a valid token whose scope names no role the service knows is `rbac.WithRoles(ctx)` with no roles, an authenticated caller who may do nothing, and answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
 
 ## The `s3` module
 
@@ -458,7 +604,7 @@ modules:
     schema: settings.yaml
 ```
 
-The module owns its table (`SETTINGS_TABLE`, `platform_settings` by default) and keeps it at the current version with `pgdb.MigrateSchema`, loads the overrides during startup, refreshes them every `SETTINGS_REFRESH_INTERVAL` and reports through `/health` when it can no longer read them. The levels of settings and the generated API are described in [settings.md](settings.md).
+The module owns its table (`SETTINGS_TABLE`, `platform_settings` by default) and keeps it at the current version with `pgdb.MigrateSchema`, loads the overrides during startup, refreshes them every `SETTINGS_REFRESH_INTERVAL` and reports through `/health` when it can no longer read them. The levels of settings and the generated API are described in [settings.md](settings.md); `settings.Import` and `settings.ImportQuery` move settings from an older table, storing only the overrides ([settings.md](settings.md#moving-existing-settings)).
 
 ## Process roles
 
@@ -472,7 +618,17 @@ One binary, split by `APP_ROLE`, the way taply runs API and worker instances:
 
 Every role runs the same `wireDomain`: services, pages and workers are registered everywhere, and each module decides what to start. `/health` and `/metrics` are served in every role.
 
-**Tracing** follows taply: with `OTEL_EXPORTER_OTLP_ENDPOINT` set, spans go over OTLP gRPC to a collector — the one of the `monitoring` module or of an external agent; W3C `traceparent` and baggage carry the trace in and out. The gRPC server and the HTTP side are instrumented and the gateway passes the trace to gRPC, so a REST call is one trace; log lines written with a context carry `trace_id` and `span_id`. Without the variable nothing is exported, yet an incoming trace still continues. Sampling and the exporter follow the standard `OTEL_*` variables.
+**Tracing** follows taply: with `OTEL_EXPORTER_OTLP_ENDPOINT` set, spans go over OTLP gRPC to a collector — the one of the `monitoring` module or of an external agent; W3C `traceparent` and baggage carry the trace in and out. The gRPC server and the HTTP side are instrumented and the gateway passes the trace to gRPC, so a REST call is one trace; log lines written with a context carry `trace_id` and `span_id`. Without the variable nothing is exported, yet an incoming trace still continues. Sampling and the exporter follow the standard `OTEL_*` variables; `OTEL_SERVICE_NAME` names the service in the spans instead of `project.service`, so a service moving to the platform keeps the name its traces are searched by (taply: `be-maas-api`).
+
+**Profiling** follows taply too: with `PYROSCOPE_ADDR` set, say `http://pyroscope:4040`, the process sends continuous profiles — CPU, memory, goroutines, mutexes, blocking — to Pyroscope under the same name as its traces. Empty, the default, starts nothing. A profiler that does not start is logged, and the service runs without it.
+
+**Moving metrics** — a service moving to the platform has dashboards and alerts on its own metric names. `app.AliasMetric(name, alias)` in wireDomain serves a metric under the old name as well, with the same series and values, until they read the platform's name; then the call goes:
+
+```go
+app.AliasMetric("api_deprecated_calls_total", "maas_deprecated_rpc_calls_total")
+```
+
+The alias lives only at `/metrics`, and a real metric of the same name wins over it. `METRICS_OPENMETRICS=true` answers a scraper that asks for OpenMetrics — Prometheus does — in that format, which carries the exemplars of the `api` module; the default is the classic text format, as before.
 
 **Alerts** are ordinary log lines. A use case that needs someone's attention logs with the `alert` attribute (`logx.AlertKey`) set to the kind of the problem, and the platform counts the line in `app_alerts_total{kind}` — whichever logger derived from `app.Logger()` wrote it and whatever `LOG_LEVEL` is. `app.DeclareAlerts(kinds...)` in `wireDomain` starts the known kinds at zero, so `increase()` sees the first alert after a restart. The alert rules on the counter belong to the project: which kinds page someone is its decision.
 
@@ -481,7 +637,9 @@ app.DeclareAlerts("pool_empty", "code_send_failed")
 log.ErrorContext(ctx, "the card pool is empty", logx.AlertKey, "pool_empty")
 ```
 
-Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`). A bad value stops the start, listed together with every other bad variable.
+**Shutdown** stops the modules in reverse order of initialisation within `SHUTDOWN_TIMEOUT`, so the database outlives what uses it. `SHUTDOWN_PHASES=true` (`platform.Config.ShutdownPhases` in code) switches to taply's order: the HTTP servers — the REST gateway and the admin panel — stop taking requests first, the job queue drains next while gRPC clients are still served, gRPC goes last, and the modules without phases stop after them in reverse order. Each step can have a budget of its own (`API_HTTP_STOP_TIMEOUT`, `RIVER_STOP_TIMEOUT`, `RIVER_CANCEL_TIMEOUT`, `API_GRPC_STOP_TIMEOUT`) inside the shared `SHUTDOWN_TIMEOUT`; taply's are 5s, 6s + 1s and 1s. Set them when turning phases on: the steps share one deadline, so an unbounded HTTP step that takes the whole timeout leaves the queue no time for a soft stop, and its jobs are cancelled at once. A module of a project joins the order by implementing `platform.PhasedStopper`: its `StopPhases()` returns steps with `platform.PhaseHTTP`, `PhaseQueue`, `PhaseGRPC` or a number between them, and together they must do what its `Stop` does; one that returns no steps is stopped with `Stop`.
+
+Other platform variables, read when the code does not set them: `OPS_ADDR` (`:9090`), `SHUTDOWN_TIMEOUT` (`20s`), `SHUTDOWN_PHASES` (`false`), `LOG_LEVEL` (`info`), `LOG_FORMAT` (`json` or `text`), `METRICS_OPENMETRICS` (`false`). A bad value stops the start, listed together with every other bad variable.
 
 ## Dependencies between modules
 

@@ -42,6 +42,13 @@ func (l *Loader) lookup(name string) (string, bool) {
 	return v, true
 }
 
+// IsSet reports whether the variable has a value. Readers use it when a default of the
+// application must yield to the environment but override the default of the platform.
+func (l *Loader) IsSet(name string) bool {
+	_, ok := l.lookup(name)
+	return ok
+}
+
 // String returns the value or def when the variable is unset.
 func (l *Loader) String(name, def string) string {
 	if v, ok := l.lookup(name); ok {

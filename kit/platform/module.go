@@ -32,3 +32,31 @@ type Stopper interface {
 type HealthChecker interface {
 	Health(ctx context.Context) error
 }
+
+// Shutdown phases a module can place its steps in. With phased shutdown on
+// (SHUTDOWN_PHASES), steps run in this order across all modules, as in taply: the HTTP
+// servers stop taking requests first, the job queue drains next while gRPC clients are
+// still served, and gRPC goes last. Any number in between orders a step of its own.
+const (
+	PhaseHTTP  = 100
+	PhaseQueue = 200
+	PhaseGRPC  = 300
+)
+
+// StopPhase is one step of a module's shutdown.
+type StopPhase struct {
+	Name  string // shown in logs and errors: "http", "queue", "grpc"
+	Order int    // PhaseHTTP, PhaseQueue, PhaseGRPC or a number between them
+	Stop  func(ctx context.Context) error
+}
+
+// PhasedStopper splits a module's shutdown into steps that phased shutdown interleaves
+// with the steps of other modules. Its phases together must do what Stop does: without
+// phased shutdown the platform calls Stop, with it only the phases.
+//
+// Modules that are not PhasedStopper stop after every phase, in reverse order of
+// initialisation, so the database outlives the servers and the queue that use it.
+type PhasedStopper interface {
+	Stopper
+	StopPhases() []StopPhase
+}

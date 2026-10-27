@@ -129,7 +129,12 @@ func TestAccessThroughTheAPI(t *testing.T) {
 				return h(ctx, req)
 			}
 			md, _ := metadata.FromIncomingContext(ctx)
-			if roles := md.Get("x-role"); len(roles) > 0 {
+			switch roles := md.Get("x-role"); {
+			case len(roles) == 1 && roles[0] == "none":
+				// A valid token whose scope names no role the service knows: the caller
+				// is authenticated, with no roles.
+				ctx = rbac.WithRoles(ctx)
+			case len(roles) > 0:
 				ctx = rbac.WithRoles(ctx, roles...)
 			}
 			return h(ctx, req)
@@ -175,12 +180,13 @@ func TestAccessThroughTheAPI(t *testing.T) {
 		method, path, role string
 		want               int
 	}{
-		"no roles":          {"POST", "/v1/echo", "", http.StatusUnauthorized},
-		"unknown role":      {"POST", "/v1/echo", "guest", http.StatusForbidden},
-		"support may echo":  {"POST", "/v1/echo", "support", http.StatusOK},
-		"support may not":   {"GET", "/v1/fail/none", "support", http.StatusForbidden},
-		"admin may":         {"GET", "/v1/fail/none", "admin", http.StatusOK},
-		"public role claim": {"GET", "/v1/fail/none", "*", http.StatusForbidden},
+		"no roles":              {"POST", "/v1/echo", "", http.StatusUnauthorized},
+		"unknown role":          {"POST", "/v1/echo", "guest", http.StatusForbidden},
+		"support may echo":      {"POST", "/v1/echo", "support", http.StatusOK},
+		"support may not":       {"GET", "/v1/fail/none", "support", http.StatusForbidden},
+		"admin may":             {"GET", "/v1/fail/none", "admin", http.StatusOK},
+		"public role claim":     {"GET", "/v1/fail/none", "*", http.StatusForbidden},
+		"valid token, no roles": {"POST", "/v1/echo", "none", http.StatusForbidden},
 	} {
 		if got := rest(tc.method, tc.path, tc.role); got != tc.want {
 			t.Errorf("%s: %d, want %d", name, got, tc.want)

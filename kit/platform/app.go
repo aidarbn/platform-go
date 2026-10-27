@@ -25,9 +25,12 @@ type App struct {
 	metrics *prometheus.Registry
 	alerts  *prometheus.CounterVec
 
-	mu     sync.RWMutex
-	values map[reflect.Type]any
-	checks []healthCheck
+	openMetrics bool
+
+	mu      sync.RWMutex
+	values  map[reflect.Type]any
+	checks  []healthCheck
+	aliases map[string][]string // metric name → the other names it is served under
 }
 
 type healthCheck struct {
@@ -77,6 +80,11 @@ func (a *App) Serves(role string) bool { return a.role == RoleAll || a.role == r
 // Logger returns the application logger. Lines carrying logx.AlertKey are counted in
 // app_alerts_total, whichever module or use case writes them.
 func (a *App) Logger() *slog.Logger { return a.log }
+
+// OpenMetrics reports whether /metrics serves the OpenMetrics format (METRICS_OPENMETRICS),
+// the one that carries exemplars. Modules attach trace ids as exemplars only then, so
+// nothing changes for a service that has not asked for them.
+func (a *App) OpenMetrics() bool { return a.openMetrics }
 
 // Metrics returns the registry served at /metrics.
 func (a *App) Metrics() *prometheus.Registry { return a.metrics }
