@@ -74,13 +74,16 @@ func TestDeprecatedMethods(t *testing.T) {
 func TestIdempotency(t *testing.T) {
 	extraWire = func(app *platform.App) {
 		api.RequireIdempotency(app, "/platformtest.v1.EchoService/CreateThing")
+		// Fail is a GET, which keys do not count on by default.
+		api.IdempotencyMethods(app, "/platformtest.v1.EchoService/Fail")
+		withUser(app)
 	}
 	t.Cleanup(func() { extraWire = nil })
 	s := start(t, api.Config{}, api.WithIdempotencyStore(api.NewMemoryIdempotencyStore()))
 	thingCalls.Store(0)
 
 	key := func(k string, extra ...string) map[string]string {
-		h := map[string]string{"Idempotency-Key": k}
+		h := map[string]string{"Idempotency-Key": k, "X-User": "alice"}
 		for i := 0; i+1 < len(extra); i += 2 {
 			h[extra[i]] = extra[i+1]
 		}
@@ -88,7 +91,7 @@ func TestIdempotency(t *testing.T) {
 	}
 
 	// A method that requires a key refuses a call without one.
-	if code, body, _ := s.do("POST", "/v1/things", `{"name":"a"}`, nil); code != http.StatusBadRequest || !strings.Contains(body, "Idempotency-Key is required") {
+	if code, body, _ := s.do("POST", "/v1/things", `{"name":"a"}`, map[string]string{"X-User": "alice"}); code != http.StatusBadRequest || !strings.Contains(body, "Idempotency-Key is required") {
 		t.Fatalf("without a key: %d %s", code, body)
 	}
 
@@ -104,7 +107,7 @@ func TestIdempotency(t *testing.T) {
 		t.Errorf("another payload: %d %s", code, body)
 	}
 
-	// A final failure is remembered; a failure that says try again is not.
+	// A final failure is remembered; a passing one is not.
 	calls := func(kind, k string) int {
 		code, _, _ := s.do("GET", "/v1/fail/"+kind, "", key(k))
 		return code

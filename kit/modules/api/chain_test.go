@@ -128,26 +128,32 @@ func TestChainOrderByPhase(t *testing.T) {
 	}
 }
 
-// A panic of the handler with an Idempotency-Key is remembered as the Internal the
-// client got: before the inner recovery it passed through idempotency, the key stayed in
-// progress, and a repeat was told the call was still running.
+// A panic of the handler with an Idempotency-Key does not hold the key: the inner
+// recovery answers Internal before idempotency, which takes it for a passing failure, so
+// a repeat runs again instead of being told the call is still running.
 func TestHandlerPanicWithIdempotencyKey(t *testing.T) {
+	extraWire = func(a *platform.App) {
+		api.IdempotencyMethods(a, "/platformtest.v1.EchoService/Fail")
+		withUser(a)
+	}
+	t.Cleanup(func() { extraWire = nil })
 	s := start(t, api.Config{}, api.WithIdempotencyStore(api.NewMemoryIdempotencyStore()))
-	key := map[string]string{"Idempotency-Key": "panic-1"}
+	key := map[string]string{"Idempotency-Key": "panic-1", "X-User": "alice"}
 
 	first, body, _ := s.do("GET", "/v1/fail/panic", "", key)
 	if first != http.StatusInternalServerError || strings.Contains(body, "the handler broke") {
 		t.Fatalf("first: %d %s", first, body)
 	}
 	second, body, _ := s.do("GET", "/v1/fail/panic", "", key)
-	if second != http.StatusInternalServerError {
-		t.Errorf("repeat: %d %s, want the remembered 500", second, body)
+	if second != http.StatusInternalServerError || strings.Contains(body, "in progress") {
+		t.Errorf("repeat: %d %s, want the handler to run again", second, body)
 	}
-	if metrics := scrape(t, s.ops); !strings.Contains(metrics, "\ngrpc_req_panics_recovered_total 1\n") {
-		t.Error("the handler ran again, or its panic was not counted once")
+	metrics := scrape(t, s.ops)
+	if !strings.Contains(metrics, "\ngrpc_req_panics_recovered_total 2\n") {
+		t.Error("the repeat did not run the handler again")
 	}
-	if !strings.Contains(scrape(t, s.ops), `grpc_server_handled_total{grpc_code="Internal",grpc_method="Fail"`) {
-		t.Error("the metrics do not see the panic as Internal")
+	if !strings.Contains(metrics, `grpc_server_handled_total{grpc_code="Internal",grpc_method="Fail",grpc_service="platformtest.v1.EchoService",grpc_type="unary"} 2`) {
+		t.Error("the metrics do not see the panics as Internal")
 	}
 }
 
