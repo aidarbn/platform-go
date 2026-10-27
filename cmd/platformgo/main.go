@@ -338,11 +338,14 @@ func cmdApply(args []string, out io.Writer) error {
 	// The generated code may import other packages than before: a codemod that drops
 	// an import of a proto file, as openapi.gnostic does, drops the Go module of that
 	// import from the generated code, and go.mod would keep it.
-	return goModTidy(*dir, out)
+	if err := goModTidy(*dir, out); err != nil {
+		return fmt.Errorf("go mod tidy after the generators: %w", err)
+	}
+	return nil
 }
 
 // goModTidy and generators are what apply runs after it writes the files; tests replace
-// them.
+// them, so those tests can not run in parallel.
 var (
 	goModTidy = func(dir string, out io.Writer) error {
 		fmt.Fprintln(out, "go mod tidy")

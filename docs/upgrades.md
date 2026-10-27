@@ -85,7 +85,7 @@ A project created before this workflow adds the file by hand, together with `wor
 
 | Check | What it catches |
 |---|---|
-| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout by `platformgo upgrade` of the checkout, as a real upgrade: the checkout stands in for a version of its own through `replace`, with no `go mod tidy` beforehand, so a module the new version needs and the upgrade leaves out of `go.sum` fails it. Then `verify`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
+| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout by `platformgo upgrade` of the checkout, as a real upgrade: the checkout stands in for a version of its own through `replace`, with no `go mod tidy` beforehand, so a module the new version needs and the upgrade leaves out of `go.sum` fails it. Then `verify`, a tidy `go.mod`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
 | `kit` API compatibility | `apidiff` against the previous tag. Every run reports the changes; a release tag fails when an incompatible change ships without a new minor version (before v1) or major version (after v1) |
 | Reference projects | demo services in the repository, one per typical module set, always on the latest version |
 | Codemods | before and after tests: the result matches, keeps comments, compiles with the new `kit` and a second run changes nothing |
