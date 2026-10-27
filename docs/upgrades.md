@@ -123,7 +123,7 @@ Before v1 the platform is still finding its shape, so the policy is what it can 
 
 Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
 
-### v0.9.0 (unreleased)
+### v0.9.0
 
 - **API: a failure of an external provider is a 502.** The REST gateway answered 503 for every `Unavailable`; now it answers 502 for an `Unavailable` whose `google.rpc.ErrorInfo` has the reason `EXTERNAL_UNAVAILABLE`, whatever its domain, since nginx takes a 503 for a dead replica and stops sending to it. Another code with that reason keeps its usual answer. Affects a project that already returns such a status itself, as taply does, and has no `api.HTTPErrorHandler`: its clients get 502 instead of 503 for those failures. A project with its own `api.HTTPErrorHandler` gets the error as before and maps it itself with `api.IsExternalUnavailable`. To keep 503, drop the reason or write the errors with `api.HTTPErrorHandler`. `api.ExternalUnavailable` and `api.ExternalTimeout` build the statuses. The i18n module no longer translates the message of a status with the reason `EXTERNAL_UNAVAILABLE` or `EXTERNAL_TIMEOUT`: it names the provider.
 - **API: idempotency as taply has it after its fixes.** Announce to projects that use `Idempotency-Key`.
