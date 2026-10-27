@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package shop.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+option go_package = "example.com/shop/gen/shop/v1;shopv1";
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {host: "shop.example.com"};
+
+// Products of the shop.
+service ProductService {
+  option (platform.openapi.v1.service) = {tag: "Products"};
+
+  // Read a product
+  //
+  // Returns the product with its prices.
+  rpc GetProduct(GetProductRequest) returns (Product) {
+    option (google.api.http) = {get: "/v1/products/{id}"};
+    option (platform.openapi.v1.method) = {tag: "Products"};
+  }
+
+  // Changes a product.
+  //
+  // Takes multipart/form-data.
+  rpc UpdateProduct(UpdateProductRequest) returns (Product) {
+    option (google.api.http) = {
+      put: "/v1/products/{id}"
+      body: "*"
+    };
+    option (platform.openapi.v1.method) = {summary: "Update a product with its image", tag: "Products"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {tags: "Images"};
+  }
+
+  // Rebuild the cache of a product, a long summary that goes on and on past the length of a title
+  rpc Rebuild(GetProductRequest) returns (Product) {
+    option (google.api.http) = {post: "/v1/products/{id}:rebuild"};
+    option (platform.openapi.v1.method) = {hidden: true};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {operation_id: "rebuild"};
+  }
+}
+
+message GetProductRequest {
+  // The id of the product.
+  int64 id = 1;
+}
+
+// Product
+//
+// A product of the menu.
+message Product {
+  option (platform.openapi.v1.message) = {example: "{\"id\": \"1\"}"};
+
+  // The id.
+  int64 id = 1;
+  // The name as the menu shows it.
+  //
+  // Translated by Accept-Language.
+  string name = 2 [
+    (platform.openapi.v1.field) = {example: "\"Латте\""},
+    (buf.validate.field).string.min_len = 1
+  ];
+  // The code at the till.
+  string code = 3 [
+    (buf.validate.field).string.max_len = 8,
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {pattern: "^[A-Z]+$"}
+  ];
+  int32 weight = 4; // grams
+  int32 grams = 5; // grams
+  // Price,
+  // in tenge.
+  double price = 6 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {title: "Price"}];
+}
+
+message FileData {
+  string filename = 1;
+  string content_type = 2;
+  bytes content = 3;
+}
+
+message UpdateProductRequest {
+  int64 id = 1;
+  Product data = 2;
+  FileData image = 3;
+}

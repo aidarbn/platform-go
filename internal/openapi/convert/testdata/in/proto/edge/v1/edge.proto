@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package edge.v1;
+
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "example.com/shop/gen/edge/v1;edgev1";
+// Keep me: this documents the file, not the option below.
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "Edge"
+    version: "0"
+    contact: {name: "Team" email: "team@example.com"}
+    license: {name: "MIT"}
+    terms_of_service: "https://example.com/terms"
+  }
+  external_docs: {url: "https://example.com/docs" description: "Docs"}
+  security: {
+    security_requirement: {
+      key: "Key"
+      value: {}
+    }
+  }
+  tags: {
+    name: "Products"
+    description: "Another description of products."
+  }
+  extensions: {
+    key: "x-tagGroups"
+    value: {list_value: {values: {string_value: "late"}}}
+  }
+};
+
+service EdgeService {
+  // Gets it.
+  rpc Get(Pair) returns (Pair) {
+    option (google.api.http) = {get: "/v1/edge"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Get"
+      description: "Gets it."
+    };
+  }
+}
+
+message Pair {
+  string a = 1; string b = 2 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Bee"}];
+  // The provider id
+  string id = 3 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "id"}];
+  string c = 4 [
+    deprecated = true, // old
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "See."}
+  ];
+}
+
+message One { string x = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "X."}]; }

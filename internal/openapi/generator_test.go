@@ -161,6 +161,43 @@ func TestGoldenRules(t *testing.T) {
 	golden(t, "rules.yaml", got)
 }
 
+// The platform's options: sections and their groups, a summary, hidden methods and
+// services, examples.
+func TestGoldenOptions(t *testing.T) {
+	files := compile(t, "testdata/proto", "opts/v1/opts.proto")
+	resp := run(t, "layout=single,path=opts.yaml", []string{"opts/v1/opts.proto"}, files)
+	if resp.GetError() != "" {
+		t.Fatal(resp.GetError())
+	}
+	got := []byte(resp.GetFile()[0].GetContent())
+	if err := oascheck.Validate(got); err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "opts.yaml", got)
+	for _, hidden := range []string{"/v1/ping", "/debug", "InternalService"} {
+		if bytes.Contains(got, []byte(hidden)) {
+			t.Errorf("%s is described", hidden)
+		}
+	}
+	// Groups the base lists itself win over the generated ones.
+	base := filepath.Join(t.TempDir(), "base.yaml")
+	if err := os.WriteFile(base, []byte("openapi: 3.1.0\ninfo: {title: t, version: \"1\"}\nx-tagGroups: [{name: All, tags: [Menu]}]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp = run(t, "layout=single,base="+base, []string{"opts/v1/opts.proto"}, files)
+	if out := resp.GetFile()[0].GetContent(); !strings.Contains(out, "name: All") || strings.Contains(out, "Public API") {
+		t.Errorf("the groups of the base were replaced:\n%s", out)
+	}
+	// Without groups of its own, a tag only the base has gets a group of its name.
+	if err := os.WriteFile(base, []byte("openapi: 3.1.0\ninfo: {title: t, version: \"1\"}\ntags: [{name: Guides, description: How to}]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp = run(t, "layout=single,base="+base, []string{"opts/v1/opts.proto"}, files)
+	if out := resp.GetFile()[0].GetContent(); !strings.Contains(out, "  - name: Guides\n    tags:\n      - Guides\n") {
+		t.Errorf("the tag of the base is in no group:\n%s", out)
+	}
+}
+
 // A binding the generator cannot describe fails the generation with the method named.
 func TestBadBindings(t *testing.T) {
 	for name, want := range map[string]string{

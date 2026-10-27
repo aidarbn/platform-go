@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+// OpenAPI options of the platform's generator: what the contract itself cannot say —
+// sections, their groups, examples, a summary, a method left out. Everything else the
+// generator takes from the proto files: paths, types, protovalidate rules, comments.
+package platform.openapi.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/aidarbn/platform-go/kit/openapipb;openapipb";
+
+// ServiceOptions describe the section of a service.
+//
+//   service MenuService {
+//     option (platform.openapi.v1.service) = {tag: "Menu", tag_group: "Public API"};
+//   }
+message ServiceOptions {
+  // tag is the section of the methods of the service; the name of the service when
+  // empty. Its description comes from the comment of the service or from
+  // api/openapi/base.yaml.
+  string tag = 1;
+  // tag_group puts the section into a group of the sidebar (x-tagGroups, shown by
+  // Scalar and Redoc).
+  string tag_group = 2;
+  // hidden leaves the service out of the description.
+  bool hidden = 3;
+}
+
+// MethodOptions describe one method.
+//
+//   rpc GetMenu(GetMenuRequest) returns (Menu) {
+//     option (platform.openapi.v1.method) = {tag: "Menu", summary: "The menu of a branch"};
+//   }
+message MethodOptions {
+  // tag is the section of the method; the tag of the service when empty.
+  string tag = 1;
+  // tag_group is the group of that section.
+  string tag_group = 2;
+  // summary is the title of the method; the first paragraph of its comment when empty.
+  string summary = 3;
+  // hidden leaves the method out of the description.
+  bool hidden = 4;
+}
+
+// FieldOptions describe a field.
+//
+//   string name = 2 [(platform.openapi.v1.field) = {example: "\"Latte\""}];
+message FieldOptions {
+  // example is a value of the field as JSON: "\"Latte\"" for a string, 42, true.
+  string example = 1;
+}
+
+// MessageOptions describe a message.
+message MessageOptions {
+  // example is a value of the message as JSON.
+  string example = 1;
+}
+
+extend google.protobuf.ServiceOptions {
+  ServiceOptions service = 50100;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodOptions method = 50100;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldOptions field = 50100;
+}
+
+extend google.protobuf.MessageOptions {
+  MessageOptions message = 50100;
+}

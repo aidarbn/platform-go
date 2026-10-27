@@ -144,6 +144,7 @@ func (g *generator) message(md protoreflect.MessageDescriptor, dir direction, ex
 		}
 	}
 	s.Description = joinText(comment(md), notesText(notes))
+	s.Examples = messageExample(md)
 	if opts, ok := md.Options().(*descriptorpb.MessageOptions); ok && opts.GetDeprecated() {
 		s.Deprecated = true
 	}
@@ -208,6 +209,9 @@ func (g *generator) field(fd protoreflect.FieldDescriptor, dir direction) *Schem
 	}
 	s.Description = joinText(append([]string{s.Description}, desc...)...)
 	s.Deprecated = s.Deprecated || deprecated
+	if ex := fieldExample(fd); ex != nil {
+		s.Examples = ex
+	}
 	return s
 }
 
@@ -363,8 +367,10 @@ func translatable(fd protoreflect.FieldDescriptor) bool {
 	return ok && opts != nil && proto.HasExtension(opts, i18npb.E_I18NField)
 }
 
-// isFile reports whether a message is a file of a multipart request, the way the
+// IsFile reports whether a message is a file of a multipart request, the way the
 // gateway fills it: content bytes, with a filename or a content type next to them.
+func IsFile(md protoreflect.MessageDescriptor) bool { return isFile(md) }
+
 func isFile(md protoreflect.MessageDescriptor) bool {
 	if md == nil {
 		return false

@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package shop.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "example.com/shop/gen/shop/v1;shopv1";
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "Shop Admin API"
+    version: "1.0"
+  }
+  schemes: HTTPS
+  host: "shop.example.com"
+};
+
+// Products of the shop.
+service ProductService {
+  option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_tag) = {
+    name: "Products"
+    description: "Everything about products."
+  };
+
+  rpc GetProduct(GetProductRequest) returns (Product) {
+    option (google.api.http) = {get: "/v1/products/{id}"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Read a product"
+      description: "Returns the product with its prices."
+      tags: ["Products"]
+    };
+  }
+
+  // Changes a product.
+  rpc UpdateProduct(UpdateProductRequest) returns (Product) {
+    option (google.api.http) = {
+      put: "/v1/products/{id}"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Update a product with its image"
+      description: "Takes multipart/form-data."
+      tags: ["Products", "Images"]
+      consumes: "multipart/form-data"
+      produces: "application/json"
+      extensions: {
+        key: "x-multipart-request"
+        value: {string_value: "data:json:true:the product"}
+      }
+    };
+  }
+
+  rpc Rebuild(GetProductRequest) returns (Product) {
+    option (google.api.http) = {post: "/v1/products/{id}:rebuild"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Rebuild the cache of a product, a long summary that goes on and on past the length of a title"
+      consumes: "multipart/form-data"
+      operation_id: "rebuild"
+      extensions: {
+        key: "x-internal"
+        value: {bool_value: true}
+      }
+    };
+  }
+}
+
+message GetProductRequest {
+  int64 id = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "The id of the product."
+    type: INTEGER
+  }];
+}
+
+message Product {
+  option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_schema) = {
+    json_schema: {
+      title: "Product"
+      description: "A product of the menu."
+    }
+    example: "{\"id\": \"1\"}"
+  };
+
+  // The id.
+  int64 id = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "The id."}];
+  // The name as the menu shows it.
+  string name = 2 [
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+      description: "Translated by Accept-Language."
+      example: "\"Латте\""
+    },
+    (buf.validate.field).string.min_len = 1
+  ];
+  string code = 3 [
+    (buf.validate.field).string.max_len = 8,
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+      description: "The code at the till."
+      pattern: "^[A-Z]+$"
+      type: STRING
+    }
+  ];
+  int32 weight = 4; // grams
+  int32 grams = 5 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "grams"}]; // grams
+  double price = 6 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "Price,\nin tenge."
+    type: NUMBER
+    title: "Price"
+  }];
+}
+
+message FileData {
+  string filename = 1;
+  string content_type = 2;
+  bytes content = 3;
+}
+
+message UpdateProductRequest {
+  int64 id = 1;
+  Product data = 2;
+  FileData image = 3;
+}

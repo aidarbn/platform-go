@@ -64,6 +64,8 @@ func run(args []string, out io.Writer) error {
 		return cmdLint(args[1:], out)
 	case "upgrade":
 		return cmdUpgrade(args[1:], out)
+	case "openapi":
+		return cmdOpenAPI(args[1:], out)
 	case "schema":
 		raw, err := spec.JSONSchema()
 		if err != nil {
@@ -106,6 +108,8 @@ func usage(out io.Writer) {
   platformgo upgrade [version]    move the project to a platform version, latest by default, and
                                   check it: go build, verify, go test (--no-check skips them,
                                   --strict fails on them); --dry-run does it in a copy
+  platformgo openapi convert      move openapiv2 options of grpc-gateway in the proto files to the
+                                  options of the platform's OpenAPI generator (--dry-run reports only)
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor [--fix]       check the development environment and the project
   platformgo setup [--alias]      shell completion and the short pgo alias

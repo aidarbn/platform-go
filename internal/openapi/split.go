@@ -128,7 +128,7 @@ func (g *generator) split(base []byte, baseName string, doc *Document) (map[stri
 		out[file] = b
 	}
 
-	root, err := mergeNode(base, &Document{OpenAPI: doc.OpenAPI, Tags: doc.Tags, Paths: rootPaths})
+	root, err := mergeNode(base, &Document{OpenAPI: doc.OpenAPI, Tags: doc.Tags, Paths: rootPaths, Extensions: doc.Extensions})
 	if err != nil {
 		return nil, err
 	}

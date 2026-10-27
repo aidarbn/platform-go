@@ -261,3 +261,43 @@ func TestMigrateCreate(t *testing.T) {
 		t.Errorf("outside a project: %v", err)
 	}
 }
+
+// platformgo openapi convert on a project without platformgo.yaml: the proto folder by
+// flag, a report of what changes, nothing written with --dry-run.
+func TestOpenAPIConvert(t *testing.T) {
+	dir := t.TempDir()
+	proto := `syntax = "proto3";
+package shop.v1;
+import "protoc-gen-openapiv2/options/annotations.proto";
+message Product {
+  string name = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "The name." example: "\"Latte\""}];
+}
+`
+	if err := os.MkdirAll(filepath.Join(dir, "api", "shop", "v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "api", "shop", "v1", "shop.proto")
+	if err := os.WriteFile(path, []byte(proto), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"openapi", "convert", "--dir", dir, "--proto", "api", "--dry-run"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "would change api/shop/v1/shop.proto") || !strings.Contains(out.String(), "1 field examples") {
+		t.Errorf("output:\n%s", out.String())
+	}
+	if b, _ := os.ReadFile(path); string(b) != proto {
+		t.Error("--dry-run wrote the file")
+	}
+	out.Reset()
+	if err := run([]string{"openapi", "convert", "--dir", dir, "--proto", "api"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "// The name.") || !strings.Contains(string(b), "(platform.openapi.v1.field)") {
+		t.Errorf("converted:\n%s", b)
+	}
+	if err := run([]string{"openapi"}, &out); err == nil {
+		t.Error("openapi without convert is not an error")
+	}
+}

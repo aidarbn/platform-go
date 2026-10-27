@@ -277,3 +277,12 @@ func unquoteProto(s string) string {
 	}
 	return s
 }
+
+// ParseProto reads a .proto file for a rewrite outside of a codemod, such as the
+// converter of openapiv2 options: the same option finder, the same edits.
+func ParseProto(path string, src []byte) *ProtoFile {
+	return &ProtoFile{Path: path, src: src, toks: lexProto(src)}
+}
+
+// Result applies the edits made so far to the source.
+func (f *ProtoFile) Result() ([]byte, error) { return applyEdits(f.src, f.edits) }

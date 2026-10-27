@@ -42,7 +42,7 @@ awk -v module="$module/" -v total_min="$total_min" -v pkg_min="$pkg_min" -v exem
     split($1, loc, ":"); file = loc[1]
     if (index(file, module) == 1) file = substr(file, length(module) + 1)
     if (file ~ /\.pb\.go$/ || file ~ /^kit\/internal\/testapi\// ||
-        file ~ /^kit\/i18nx\/internal\/testpb\// || file ~ /^kit\/i18nx\/i18npb\//) next
+        file ~ /^kit\/i18nx\/internal\/testpb\// || file ~ /^kit\/i18nx\/i18npb\// || file ~ /^kit\/openapipb\//) next
     key = file ":" loc[2]
     if (!(key in stmts)) { stmts[key] = $2; pkgof[key] = file; sub(/\/[^\/]*$/, "", pkgof[key]) }
     if ($3 > 0) hit[key] = 1

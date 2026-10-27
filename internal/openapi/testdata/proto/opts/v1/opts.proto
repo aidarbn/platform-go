@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+// The platform's own options.
+package opts.v1;
+
+import "google/api/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+// Menus of the public API.
+service MenuService {
+  option (platform.openapi.v1.service) = {
+    tag: "Menu"
+    tag_group: "Public API"
+  };
+
+  // Read the menu.
+  rpc GetMenu(GetMenuRequest) returns (Menu) {
+    option (platform.openapi.v1.method) = {summary: "The menu of a branch"};
+    option (google.api.http) = {get: "/v1/menus/{id}"};
+  }
+
+  // Change the menu: a section of its own in another group.
+  rpc SetMenu(Menu) returns (Menu) {
+    option (platform.openapi.v1.method) = {
+      tag: "Menu editor"
+      tag_group: "Admin API"
+    };
+    option (google.api.http) = {
+      put: "/v1/menus/{id}"
+      body: "*"
+    };
+  }
+
+  // Not for the public.
+  rpc Debug(GetMenuRequest) returns (Menu) {
+    option (platform.openapi.v1.method) = {hidden: true};
+    option (google.api.http) = {get: "/v1/menus/{id}/debug"};
+  }
+}
+
+// Internal, left out of the description.
+service InternalService {
+  option (platform.openapi.v1.service) = {hidden: true};
+
+  rpc Ping(GetMenuRequest) returns (Menu) {
+    option (google.api.http) = {get: "/v1/ping"};
+  }
+}
+
+// Health has no group: it gets one of its own.
+service HealthService {
+  rpc Check(GetMenuRequest) returns (Menu) {
+    option (google.api.http) = {get: "/v1/health"};
+  }
+}
+
+message GetMenuRequest {
+  string id = 1 [(platform.openapi.v1.field) = {example: "\"m-1\""}];
+}
+
+message Menu {
+  option (platform.openapi.v1.message) = {example: "{\"id\": \"m-1\", \"items\": 3}"};
+
+  string id = 1 [(platform.openapi.v1.field) = {example: "\"m-1\""}];
+  int32 items = 2 [(platform.openapi.v1.field) = {example: "3"}];
+  string note = 3 [(platform.openapi.v1.field) = {example: "not json"}];
+}

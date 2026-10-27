@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+package apidoc.v1;
+
+option go_package = "example.com/shop/gen/apidoc/v1;apidocv1";
+// Shared options: tags and their groups.
