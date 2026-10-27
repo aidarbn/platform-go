@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -210,6 +211,26 @@ func TestBaseFromTranslation(t *testing.T) {
 	}
 	if got := req.GetVariants()[1].GetFieldTranslations()["name"].GetValues()["ru"]; got != "kept" {
 		t.Errorf("mirror after: %q", got)
+	}
+}
+
+// The failures of external providers keep their text and details: the text names the
+// provider, and the details tell the gateway and the client what happened.
+func TestTranslateErrorLeavesProviderFailures(t *testing.T) {
+	c := i18nx.New(nil, i18nx.LocaleRU, i18nx.LocaleEN)
+	if err := c.LoadMessages([]byte(i18nx.Builtin)); err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{"EXTERNAL_TIMEOUT", "EXTERNAL_UNAVAILABLE"} {
+		st, _ := status.New(codes.DeadlineExceeded, "not found").WithDetails(&errdetails.ErrorInfo{Reason: reason})
+		got := status.Convert(c.TranslateError(st.Err(), i18nx.LocaleRU))
+		if got.Message() != "not found" || len(got.Details()) != 1 {
+			t.Errorf("%s: %q %v", reason, got.Message(), got.Details())
+		}
+	}
+	// Without the reason the same message is translated.
+	if got := status.Convert(c.TranslateError(status.Error(codes.DeadlineExceeded, "not found"), i18nx.LocaleRU)); got.Message() == "not found" {
+		t.Error("an ordinary message is not translated")
 	}
 }
 

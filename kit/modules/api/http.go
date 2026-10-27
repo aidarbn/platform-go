@@ -213,7 +213,7 @@ func (m *Module) gatewayTooLarge(gateway *runtime.ServeMux) http.Handler {
 func (m *Module) gatewayErrors() runtime.ErrorHandlerFunc {
 	handler := m.registry.errorHandler
 	if handler == nil {
-		handler = runtime.DefaultHTTPErrorHandler
+		handler = defaultHTTPErrors
 	}
 	return func(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
 		var withStatus *runtime.HTTPStatusError
