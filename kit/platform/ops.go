@@ -25,10 +25,10 @@ type opsServer struct {
 	ln  net.Listener
 }
 
-func startOps(addr string, app *App) (*opsServer, error) {
+func startOps(addr string, openMetrics bool, app *App) (*opsServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", app.handleHealth)
-	mux.Handle("GET /metrics", promhttp.HandlerFor(app.Metrics(), promhttp.HandlerOpts{}))
+	mux.Handle("GET /metrics", promhttp.HandlerFor(app.gatherer(), promhttp.HandlerOpts{EnableOpenMetrics: openMetrics}))
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

@@ -28,6 +28,11 @@ type Config struct {
 	// module (see PhasedStopper). Off by default; SHUTDOWN_PHASES=true turns it on.
 	ShutdownPhases bool
 
+	// OpenMetrics serves /metrics in the OpenMetrics format to a scraper that asks for it,
+	// as Prometheus does; that format carries exemplars, the trace ids next to the call
+	// metrics of the api module. Off by default: the classic text format is served.
+	OpenMetrics bool
+
 	// OnStarted is called once every module and the ops server are up. Tests and local
 	// runs use it to learn the actual ops address.
 	OnStarted func(opsAddr string)
@@ -64,6 +69,9 @@ func (c *Config) setDefaults() error {
 	if !c.ShutdownPhases {
 		c.ShutdownPhases = l.Bool("SHUTDOWN_PHASES", false)
 	}
+	if !c.OpenMetrics {
+		c.OpenMetrics = l.Bool("METRICS_OPENMETRICS", false)
+	}
 	if c.Logger == nil {
 		c.Logger = logx.New(logx.Options{Level: l.String("LOG_LEVEL", "info"), Format: l.String("LOG_FORMAT", "json")})
 	}
@@ -88,6 +96,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 	}
 	app := newApp(cfg.Service, cfg.Logger.With("service", cfg.Service))
 	app.role = cfg.Role
+	app.openMetrics = cfg.OpenMetrics
 
 	stopTracing, err := startTracing(ctx, cfg.Service)
 	if err != nil {
@@ -98,6 +107,15 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 		defer cancel()
 		if err := stopTracing(stopCtx); err != nil {
 			app.log.Error("tracing shutdown failed", "err", err)
+		}
+	}()
+
+	stopProfiling := startProfiling(telemetryName(cfg.Service), app.log)
+	defer func() {
+		stopCtx, cancel := shutdownContext(ctx, cfg)
+		defer cancel()
+		if err := stopProfiling(stopCtx); err != nil {
+			app.log.Error("profiling shutdown failed", "err", err)
 		}
 	}()
 
@@ -124,7 +142,7 @@ func RunContext(ctx context.Context, cfg Config, modules []Module, wire Wire) er
 		return errors.Join(err, shutdown())
 	}
 
-	ops, err := startOps(cfg.OpsAddr, app)
+	ops, err := startOps(cfg.OpsAddr, cfg.OpenMetrics, app)
 	if err != nil {
 		return errors.Join(err, shutdown())
 	}

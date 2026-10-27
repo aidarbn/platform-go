@@ -71,6 +71,17 @@ type Config struct {
 	LogBodies       bool // put the bodies of failed requests into the access log
 	SecurityHeaders bool // taply's security response headers
 
+	// LogBodiesMaskPaths keep bodies out of the access log: a failed request whose path
+	// contains one of them is logged with [REDACTED] instead of its bodies, as taply does
+	// for certificate uploads. api.MaskLogBodies adds paths in code.
+	LogBodiesMaskPaths []string
+
+	// MetricsTenantHeader names the request header whose value labels the call metrics
+	// as tenant_name, "unknown" without it, as taply's do. Empty, the default, leaves the
+	// metrics without the label. Every distinct value is a new series, so the header must
+	// carry one of a bounded set of tenants.
+	MetricsTenantHeader string
+
 	// TrustedProxies are the networks whose X-Forwarded-For is believed. A request from
 	// anywhere else is identified by its connection address, so a client reaching the
 	// service directly cannot pose as another address. Empty means the private networks
@@ -135,6 +146,9 @@ func Load(l *confx.Loader) Config {
 
 		HTTPStopTimeout: nonNegative(l, "API_HTTP_STOP_TIMEOUT"),
 		GRPCStopTimeout: nonNegative(l, "API_GRPC_STOP_TIMEOUT"),
+
+		LogBodiesMaskPaths:  l.Strings("API_LOG_BODIES_MASK_PATHS", nil),
+		MetricsTenantHeader: tenantHeader(l),
 	}
 }
 
@@ -179,6 +193,15 @@ func trustedProxies(l *confx.Loader) []netip.Prefix {
 		out = append(out, prefix)
 	}
 	return out
+}
+
+// tenantHeader reads API_METRICS_TENANT_HEADER, the name of one request header.
+func tenantHeader(l *confx.Loader) string {
+	name := l.String("API_METRICS_TENANT_HEADER", "")
+	if name != "" && !validHeaderName(name) {
+		l.Fail(fmt.Errorf("%s: %q is not a header name", l.Key("API_METRICS_TENANT_HEADER"), name))
+	}
+	return name
 }
 
 // headerNames reads a comma separated list of HTTP header names.
@@ -261,6 +284,8 @@ type Registry struct {
 	idemUser     func(context.Context) string
 	corsHeaders  []string
 	rateKey      func(context.Context) string
+	replacements map[string]string
+	maskPaths    []string
 	routes       []route
 	middleware   []func(http.Handler) http.Handler
 	errorHandler runtime.ErrorHandlerFunc
@@ -365,6 +390,36 @@ func Methods(app *platform.App) []string {
 	return slices.Clone(r.methods)
 }
 
+// DeprecatedReplacements names what replaces each deprecated method, for the replacement
+// label of api_deprecated_calls_total and the log line of a call, as taply keeps them.
+// A method listed here counts as deprecated even without `option deprecated = true`; an
+// empty replacement means there is none. Without this call the metric keeps the method
+// label only.
+//
+//	api.DeprecatedReplacements(app, map[string]string{
+//		"/shop.v1.OrdersService/GetOrderOld": "/shop.v1.OrdersService/GetOrder",
+//	})
+func DeprecatedReplacements(app *platform.App, replacements map[string]string) {
+	r := registry(app)
+	r.add(func() {
+		if r.replacements == nil {
+			r.replacements = map[string]string{}
+		}
+		for method, replacement := range replacements {
+			r.replacements[method] = replacement
+		}
+	})
+}
+
+// MaskLogBodies keeps the bodies of requests whose path contains one of the given parts
+// out of the access log: a failed request there is logged with [REDACTED] instead. For
+// endpoints that take secrets, such as a certificate upload. API_LOG_BODIES_MASK_PATHS
+// adds more per stand.
+func MaskLogBodies(app *platform.App, pathParts ...string) {
+	r := registry(app)
+	r.add(func() { r.maskPaths = append(r.maskPaths, pathParts...) })
+}
+
 // HandleHTTP serves a plain HTTP route next to the gateway: webhooks, file downloads,
 // anything that is not a gRPC call.
 func HandleHTTP(app *platform.App, pattern string, h http.Handler) {
@@ -465,7 +520,7 @@ func (m *Module) Name() string { return "api" }
 // Init puts the registry into the container, so wireDomain can register services.
 func (m *Module) Init(_ context.Context, app *platform.App) error {
 	m.log = app.Logger().With("module", "api")
-	met, err := newMetrics(app.Metrics())
+	met, err := newMetrics(app.Metrics(), m.cfg.MetricsTenantHeader, app.OpenMetrics())
 	if err != nil {
 		return err
 	}
@@ -475,12 +530,6 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 	}
 	m.skipped = !app.Serves(platform.RoleAPI)
 	m.app = app
-	m.deprecated = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "api", Name: "deprecated_calls_total", Help: "calls to methods marked deprecated in the proto files",
-	}, []string{"method"})
-	if err := app.Metrics().Register(m.deprecated); err != nil {
-		return fmt.Errorf("api metrics: %w", err)
-	}
 	platform.Provide(app, m.registry)
 	return nil
 }
@@ -514,6 +563,18 @@ func (m *Module) Start(ctx context.Context) error {
 	// Build the server first: the deprecated methods are read from the registered
 	// services, and the chain below refers to them.
 	deprecated := map[string]bool{}
+	// The metric is built here, once wireDomain has said whether there are replacements:
+	// without them it keeps the single method label it always had.
+	labels := []string{"method"}
+	if m.registry.replacements != nil {
+		labels = append(labels, "replacement")
+	}
+	m.deprecated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "api", Name: "deprecated_calls_total", Help: "calls to methods marked deprecated in the proto files",
+	}, labels)
+	if err := m.app.Metrics().Register(m.deprecated); err != nil {
+		return fmt.Errorf("api metrics: %w", err)
+	}
 
 	// The client address is settled first, so everything after it sees the checked one.
 	// Metrics and logging are outermost after it, so they see a recovered panic and a
@@ -529,7 +590,7 @@ func (m *Module) Start(ctx context.Context) error {
 		}
 		platformUnary = append(platformUnary, m.limiter.unary)
 	}
-	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.log, m.deprecated))
+	platformUnary = append(platformUnary, deprecatedUnary(deprecated, m.registry.replacements, m.log, m.deprecated))
 	var tail []grpc.UnaryServerInterceptor
 	if m.cfg.RateLimit.PrincipalRPS > 0 && m.registry.rateKey != nil {
 		if m.principals, err = newPrincipalLimiter(m.cfg.RateLimit, m.registry.rateKey, m.app.Metrics()); err != nil {
@@ -568,6 +629,13 @@ func (m *Module) Start(ctx context.Context) error {
 	// defined before the first call.
 	m.metrics.server.InitializeMetrics(m.grpcSrv)
 	for method := range deprecatedMethods(m.grpcSrv) {
+		deprecated[method] = true
+	}
+	for method := range m.registry.replacements {
+		if !slices.Contains(m.registry.methods, method) {
+			m.log.Warn("api.DeprecatedReplacements names a method the API does not serve", "method", method)
+			continue
+		}
 		deprecated[method] = true
 	}
 
@@ -717,7 +785,10 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 	}
 	h = limitBody(int64(m.cfg.MaxRecvSize), h)
 	h = recoverHTTP(m.log, m.metrics, h)
-	h = m.http.observe(m.log, m.cfg.AccessLog, m.cfg.LogBodies, h)
+	h = m.http.observe(m.log, accessLog{
+		on: m.cfg.AccessLog, bodies: m.cfg.LogBodies,
+		mask: slices.Concat(m.cfg.LogBodiesMaskPaths, m.registry.maskPaths),
+	}, h)
 	if len(m.cfg.CORSOrigins) > 0 {
 		h = newCORS(m.cfg, m.registry.corsHeaders).wrap(h)
 	}

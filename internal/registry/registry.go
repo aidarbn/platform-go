@@ -136,6 +136,8 @@ var all = []Module{
 			{Key: "API_IDEMPOTENCY_LOCK", Example: "1m", Comment: "how long a running call holds its key"},
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
 			{Key: "API_LOG_BODIES", Example: "true", Comment: "bodies of failed requests in the access log"},
+			{Key: "API_LOG_BODIES_MASK_PATHS", Example: "", Comment: "path parts whose request bodies never reach the access log, comma separated"},
+			{Key: "API_METRICS_TENANT_HEADER", Example: "", Comment: "request header whose value labels the call metrics as tenant_name; empty leaves the label out"},
 			{Key: "API_SECURITY_HEADERS", Example: "true", Comment: "security response headers"},
 			{Key: "API_HTTP_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running REST calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
 			{Key: "API_GRPC_STOP_TIMEOUT", Example: "", Comment: "then how long running gRPC calls may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},

@@ -18,7 +18,8 @@ import (
 // collector of the monitoring agent, and trace context travels with W3C traceparent and
 // baggage. Without OTEL_EXPORTER_OTLP_ENDPOINT nothing is exported, yet an incoming trace
 // is still continued, so a service in the middle of a call chain does not break it.
-// The exporter and the sampler read the standard OTEL_* variables themselves.
+// The exporter and the sampler read the standard OTEL_* variables themselves; the service
+// name in the spans is OTEL_SERVICE_NAME when set, the service of the project otherwise.
 func startTracing(ctx context.Context, service string) (func(context.Context) error, error) {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
@@ -31,11 +32,21 @@ func startTracing(ctx context.Context, service string) (func(context.Context) er
 	if err != nil {
 		return nil, fmt.Errorf("tracing: exporter: %w", err)
 	}
-	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(semconv.ServiceName(service)))
+	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(semconv.ServiceName(telemetryName(service))))
 	if err != nil {
 		return nil, fmt.Errorf("tracing: resource: %w", err)
 	}
 	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
+}
+
+// telemetryName is the name the service reports in traces and profiles: OTEL_SERVICE_NAME
+// when set, so a service moving to the platform keeps the name its dashboards and
+// queries know, and the service of the project otherwise.
+func telemetryName(service string) string {
+	if name := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); name != "" {
+		return name
+	}
+	return service
 }

@@ -471,10 +471,28 @@ func loggedPath(path, route string) string {
 	return route
 }
 
+// accessLog says what the access log writes: a line per request when on, the bodies of
+// failed requests with bodies, except on paths containing one of mask.
+type accessLog struct {
+	on, bodies bool
+	mask       []string
+}
+
+// masked reports whether the bodies of a request to path stay out of the log.
+func (a accessLog) masked(path string) bool {
+	for _, part := range a.mask {
+		if part != "" && strings.Contains(path, part) {
+			return true
+		}
+	}
+	return false
+}
+
 // observe records metrics and the access log. The route is the template, never the
 // concrete path: a path label per order id would grow without bound, and scanners
 // hitting random paths all count as unknown.
-func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next http.Handler) http.Handler {
+func (m *httpMetrics) observe(log *slog.Logger, access accessLog, next http.Handler) http.Handler {
+	logBodies := access.on && access.bodies
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		m.inFlight.Inc()
@@ -500,7 +518,7 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		m.duration.WithLabelValues(r.Method, route, status).Observe(took.Seconds())
 		m.size.WithLabelValues(r.Method, route).Observe(float64(sw.size))
 
-		if !accessLog {
+		if !access.on {
 			return
 		}
 		attrs := []any{
@@ -515,7 +533,14 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		if r.URL.RawQuery != "" {
 			attrs = append(attrs, "query", r.URL.RawQuery)
 		}
-		if logBodies && sw.status >= 400 {
+		if logBodies && sw.status >= 400 && access.masked(r.URL.Path) {
+			if len(reqBody) > 0 {
+				attrs = append(attrs, "req_body", redacted)
+			}
+			if len(sw.body) > 0 {
+				attrs = append(attrs, "res_body", redacted)
+			}
+		} else if logBodies && sw.status >= 400 {
 			if len(reqBody) > 0 {
 				attrs = append(attrs, "req_body", bodyForLog(r.Header.Get("Content-Type"), reqBody, r.ContentLength))
 			}
@@ -533,6 +558,9 @@ func (m *httpMetrics) observe(log *slog.Logger, accessLog, logBodies bool, next 
 		}
 	})
 }
+
+// redacted stands in the access log for a body that must not be there.
+const redacted = "[REDACTED]"
 
 // captureBody keeps the start of the request body for the log of a failed request.
 type captureBody struct {

@@ -36,13 +36,22 @@ func deprecatedMethods(srv *grpc.Server) map[string]bool {
 }
 
 // deprecatedUnary counts and logs calls to deprecated methods, so a method can be removed
-// once nobody calls it.
-func deprecatedUnary(methods map[string]bool, log *slog.Logger, calls *prometheus.CounterVec) grpc.UnaryServerInterceptor {
+// once nobody calls it. With replacements the metric and the log name the method to
+// move to.
+func deprecatedUnary(methods map[string]bool, replacements map[string]string, log *slog.Logger, calls *prometheus.CounterVec) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if methods[info.FullMethod] {
-			calls.WithLabelValues(info.FullMethod).Inc()
-			log.WarnContext(ctx, "deprecated method called", "method", info.FullMethod,
-				"ip", ClientIP(ctx), "user_agent", userAgent(ctx))
+			attrs := []any{"method", info.FullMethod, "ip", ClientIP(ctx), "user_agent", userAgent(ctx)}
+			if replacements != nil {
+				replacement := replacements[info.FullMethod]
+				calls.WithLabelValues(info.FullMethod, replacement).Inc()
+				if replacement != "" {
+					attrs = append(attrs, "replacement", replacement)
+				}
+			} else {
+				calls.WithLabelValues(info.FullMethod).Inc()
+			}
+			log.WarnContext(ctx, "deprecated method called", attrs...)
 		}
 		return handler(ctx, req)
 	}
