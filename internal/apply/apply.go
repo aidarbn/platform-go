@@ -43,6 +43,8 @@ type Plan struct {
 	Codemods  []codemod.Change // project files rewritten for changes of kit
 	Notes     []codemod.Note   // places a person has to change: what codemods could not rewrite
 
+	Sqlc gen.SqlcSettings // where sqlc reads and writes, when postgres is enabled
+
 	dir     string
 	creates map[string][]byte
 	files   map[string][]byte
@@ -85,6 +87,11 @@ func Build(dir string) (*Plan, error) {
 		creates: creates,
 		files:   files,
 		Create:  slices.Sorted(maps.Keys(creates)),
+	}
+	if _, ok := f.Modules["postgres"]; ok {
+		if p.Sqlc, err = gen.Sqlc(f); err != nil {
+			return nil, err
+		}
 	}
 	var tools []registry.Tool
 	for _, m := range f.EnabledModules() {
