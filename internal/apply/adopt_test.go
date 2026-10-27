@@ -248,7 +248,8 @@ modules:
 		t.Fatal(err)
 	}
 	unmarked := []string{
-		gen.I18nProtoPath, // the very file kit/i18nx is generated from
+		gen.I18nProtoPath,                             // the very file kit/i18nx is generated from
+		"proto/" + gen.OpenAPIOptionsPath,             // the very file kit/openapipb is generated from
 		"monitoring/grafana/dashboards/platform.json", // JSON has no comments
 	}
 	for path, content := range files {

@@ -44,8 +44,9 @@ func TestI18nFiles(t *testing.T) {
 		t.Errorf("modules.gen.go:\n%s", files[gen.ModulesPath])
 	}
 
-	// Without i18n the API generates everything under proto.
-	plain, err := gen.Wiring(mustParse(t, withAPI))
+	// Without i18n and with the connect generator the API generates everything under
+	// proto; the platform's generator has its options there.
+	plain, err := gen.Wiring(mustParse(t, strings.Replace(withAPI, "api: {}", "api:\n    openapi: {generator: connect}", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}

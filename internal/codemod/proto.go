@@ -286,3 +286,119 @@ func ParseProto(path string, src []byte) *ProtoFile {
 
 // Result applies the edits made so far to the source.
 func (f *ProtoFile) Result() ([]byte, error) { return applyEdits(f.src, f.edits) }
+
+// Declaration is what an option belongs to.
+type Declaration struct {
+	Kind  string // field, or the keyword of a block: message, service, rpc, enum, oneof; file at the top level
+	Name  string
+	Start int // the first token of the declaration: the type of a field, the keyword of a block
+}
+
+// Owner returns the declaration of an option: the field a field option sits on, the
+// block an option statement sits in, the file for one at the top level.
+func (f *ProtoFile) Owner(o ProtoOption) Declaration {
+	i := 0
+	for i < len(f.toks) && f.toks[i].start < o.Start {
+		i++
+	}
+	if o.Field {
+		// Back to the [ of the field options, past the options before this one.
+		depth := 0
+		for i--; i >= 0; i-- {
+			switch f.toks[i].text {
+			case "]", ")", "}":
+				depth++
+			case "(", "{":
+				depth--
+			case "[":
+				if depth == 0 {
+					s := f.declStart(i)
+					name := ""
+					for j := s; j < i; j++ {
+						if f.toks[j].text == "=" && j > s {
+							name = f.toks[j-1].text
+						}
+					}
+					return Declaration{Kind: "field", Name: name, Start: f.toks[s].start}
+				}
+				depth--
+			}
+		}
+		return Declaration{Kind: "file"}
+	}
+	depth := 0
+	for i--; i >= 0; i-- {
+		switch f.toks[i].text {
+		case "}":
+			depth++
+		case "{":
+			if depth > 0 {
+				depth--
+				continue
+			}
+			s := f.declStart(i)
+			d := Declaration{Kind: f.toks[s].text, Start: f.toks[s].start}
+			if s+1 < len(f.toks) {
+				d.Name = f.toks[s+1].text
+			}
+			return d
+		}
+	}
+	return Declaration{Kind: "file"}
+}
+
+// declStart is the index of the first token of the statement that ends before token i.
+func (f *ProtoFile) declStart(i int) int {
+	for j := i - 1; j >= 0; j-- {
+		switch f.toks[j].text {
+		case ";", "{", "}":
+			return j + 1
+		}
+	}
+	return 0
+}
+
+// CommentAbove is the // comment on the lines right above an offset, without the
+// slashes and the space after them.
+func (f *ProtoFile) CommentAbove(off int) string {
+	start := bytes.LastIndexByte(f.src[:off], '\n') + 1
+	var lines []string
+	for start > 0 {
+		prev := bytes.LastIndexByte(f.src[:start-1], '\n') + 1
+		line := strings.TrimSpace(string(f.src[prev : start-1]))
+		if !strings.HasPrefix(line, "//") {
+			break
+		}
+		line = strings.TrimPrefix(strings.TrimPrefix(line, "//"), " ")
+		lines = append([]string{line}, lines...)
+		start = prev
+	}
+	return strings.Join(lines, "\n")
+}
+
+// BlockEnd is the offset after the } that closes the block whose declaration starts at
+// an offset, or -1 without one.
+func (f *ProtoFile) BlockEnd(start int) int {
+	i := 0
+	for i < len(f.toks) && f.toks[i].start < start {
+		i++
+	}
+	for ; i < len(f.toks) && f.toks[i].text != "{"; i++ {
+		if f.toks[i].text == ";" {
+			return -1
+		}
+	}
+	depth := 0
+	for ; i < len(f.toks); i++ {
+		switch f.toks[i].text {
+		case "{":
+			depth++
+		case "}":
+			depth--
+			if depth == 0 {
+				return f.toks[i].end
+			}
+		}
+	}
+	return -1
+}

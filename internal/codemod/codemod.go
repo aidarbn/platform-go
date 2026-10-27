@@ -42,6 +42,24 @@ type Codemod struct {
 	Fix   func(f *File)      // rewrites one Go file through File.Replace; runs while pending
 	Check func(f *File)      // reports code that cannot compile with Version; runs every time
 	Proto func(f *ProtoFile) // rewrites one .proto file; runs while pending
+	// Skip leaves the codemod out for a project it does not concern, by its settings.
+	Skip func(p Project) bool
+}
+
+// Project is what a codemod may ask about the settings of a project.
+type Project struct {
+	OpenAPIGenerator string // the openapi.generator of the api module, empty without it
+}
+
+// Applicable leaves out the codemods that skip a project.
+func Applicable(mods []Codemod, p Project) []Codemod {
+	var out []Codemod
+	for _, m := range mods {
+		if m.Skip == nil || !m.Skip(p) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Change is a file a run rewrote.

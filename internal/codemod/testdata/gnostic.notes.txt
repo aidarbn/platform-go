@@ -1,0 +1,8 @@
+proto/shop/v1/shop.proto:9: (gnostic.openapi.v3.document): info, servers, security and tags go into api/openapi/base.yaml by hand (openapi.gnostic)
+proto/shop/v1/shop.proto:27: List: a method has one tag, "Items"; the others stay: Catalog (openapi.gnostic)
+proto/shop/v1/shop.proto:27: (gnostic.openapi.v3.operation) {tags: ["Catalog"]} has no counterpart in the platform's options: make it a protovalidate rule or a comment, then remove it (openapi.gnostic)
+proto/shop/v1/shop.proto:37: (gnostic.openapi.v3.operation) set field by field: convert it to the options of platform/openapi/v1/options.proto by hand (openapi.gnostic)
+proto/shop/v1/shop.proto:47: Twice has an option of platform/openapi/v1/options.proto already: merge (gnostic.openapi.v3.operation) into it by hand (openapi.gnostic)
+proto/shop/v1/shop.proto:56: (gnostic.openapi.v3.property) {format: "int32"} has no counterpart in the platform's options: make it a protovalidate rule or a comment, then remove it (openapi.gnostic)
+proto/shop/v1/shop.proto:57: b does not start its line, so a comment cannot document it alone: convert it by hand (openapi.gnostic)
+proto/shop/v1/shop.proto:1: gnostic annotations stay in this file: until they are converted, add buf.build/gnostic/gnostic to api.buf.deps in platformgo.yaml, or buf cannot resolve their import (openapi.gnostic)

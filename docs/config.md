@@ -51,7 +51,7 @@ Modules document their variables in the generated `.env.example`. Variables of t
 | Module | Options |
 |---|---|
 | `admin`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
-| `api` | `proto_dir` — the proto folder, `proto` by default; `buf.deps` and `buf.breaking_except` on top of the platform's; `openapi.generator` — `connect` (default), `platform` or `none`, see [modules.md](modules.md#the-api-module) |
+| `api` | `proto_dir` — the proto folder, `proto` by default; `buf.deps` and `buf.breaking_except` on top of the platform's; `openapi.generator` — `platform` (default), `connect` or `none`, see [modules.md](modules.md#the-api-module) |
 | `postgres` | `sqlc` — where `sqlc.yaml`, the queries and the generated code live and Go types on top of the platform's; the defaults are `db/sqlc.yaml`, `db/queries`, `internal/db/sqlcgen`, see [modules.md](modules.md#the-postgres-module) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 | `enums` | `domain` — the Go package scanned for go-enum markers, `internal/domain` by default |
@@ -63,7 +63,7 @@ Every option of a module has a type, declared once in the module registry. `sett
 | Type | In YAML | Example |
 |---|---|---|
 | string | a scalar the YAML reads as a string; quote numbers and versions | `schema: settings.yaml`, `go_type: "1.5"` |
-| string with allowed values | one of the listed strings | `generator: connect` |
+| string with allowed values | one of the listed strings | `generator: platform` |
 | bool | `true` or `false`, unquoted | `emit_interface: false` |
 | integer | an unquoted whole number | `workers: 4` |
 | list | a sequence of values of one type | `deps: [buf.build/grpc-ecosystem/grpc-gateway]` |

@@ -28,16 +28,19 @@ func TestAPIFiles(t *testing.T) {
 		"value: github.com/aidarbn/shop-api/internal/api/gen", // go_package comes from managed mode
 		"local: [go, tool, protoc-gen-go]",
 		"local: [go, tool, protoc-gen-grpc-gateway]",
-		"features=google.api.http;protovalidate;gnostic",
-		"with-proto-names",
+		"local: [go, tool, protoc-gen-platform-openapi]",
+		"- base=api/openapi/base.yaml",
 		"out: api/openapi",
 	} {
 		if !strings.Contains(bufGen, want) {
 			t.Errorf("buf.gen.yaml lacks %q:\n%s", want, bufGen)
 		}
 	}
-	if !strings.Contains(string(files[gen.BufPath]), "buf.build/bufbuild/protovalidate") {
-		t.Errorf("buf.yaml:\n%s", files[gen.BufPath])
+	if buf := string(files[gen.BufPath]); !strings.Contains(buf, "buf.build/bufbuild/protovalidate") || strings.Contains(buf, "gnostic") {
+		t.Errorf("buf.yaml:\n%s", buf)
+	}
+	if _, ok := files["proto/"+gen.OpenAPIOptionsPath]; !ok {
+		t.Error("the options of the generator are not written")
 	}
 	if !strings.Contains(string(files[gen.OpenAPIPath]), "//go:embed *") {
 		t.Errorf("openapi.gen.go:\n%s", files[gen.OpenAPIPath])
@@ -64,10 +67,29 @@ func TestAPIFiles(t *testing.T) {
 
 const apiProject = "schema: 1\nproject:\n  module: github.com/aidarbn/shop-api\nmodules:\n  postgres: {}\n"
 
-// Without options buf.yaml and buf.gen.yaml are the files every project had before the
-// options existed, byte for byte, with and without i18n.
-func TestAPIDefaultsAreTheFilesBefore(t *testing.T) {
-	for _, api := range []string{"  api: {}\n", "  api:\n    proto_dir: proto\n    buf: {deps: [], breaking_except: []}\n    openapi: {generator: connect}\n"} {
+// The default is the platform's generator: no gnostic, its plugin and options, the
+// platform folder out of generation.
+func TestAPIDefaults(t *testing.T) {
+	for _, api := range []string{"  api: {}\n", "  api:\n    proto_dir: proto\n    buf: {deps: [], breaking_except: []}\n    openapi: {generator: platform}\n"} {
+		files, err := gen.Wiring(mustParse(t, apiProject+api))
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden(t, "buf.platform.yaml", files[gen.BufPath])
+		golden(t, "buf.gen.platform.yaml", files[gen.BufGenPath])
+		files, err = gen.Wiring(mustParse(t, apiProject+api+"  i18n: {}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden(t, "buf.platform.yaml", files[gen.BufPath])
+		golden(t, "buf.gen.platform.yaml", files[gen.BufGenPath])
+	}
+}
+
+// openapi.generator: connect gives buf.yaml and buf.gen.yaml every project had before
+// v0.10.0, byte for byte, with and without i18n.
+func TestAPIConnectIsTheFilesBefore(t *testing.T) {
+	for _, api := range []string{"  api:\n    openapi: {generator: connect}\n", "  api:\n    proto_dir: proto\n    buf: {deps: [], breaking_except: []}\n    openapi: {generator: connect}\n"} {
 		files, err := gen.Wiring(mustParse(t, apiProject+api))
 		if err != nil {
 			t.Fatal(err)
@@ -132,16 +154,19 @@ func TestAPIWithoutOpenAPIGenerator(t *testing.T) {
 	if _, ok := files[gen.OpenAPIPath]; !ok {
 		t.Error("openapi.gen.go is gone: the project's own description would not be served")
 	}
+	if !strings.Contains(string(files[gen.BufPath]), "buf.build/gnostic/gnostic") || !strings.Contains(bufGen, "module: buf.build/gnostic/gnostic") {
+		t.Errorf("none lost gnostic, which the project's annotations may need:\n%s", files[gen.BufPath])
+	}
 	if s, _ := gen.API(f); s.GeneratesOpenAPI() {
 		t.Error("GeneratesOpenAPI with generator none")
 	}
-	// Everything but the OpenAPI plugin is the file of the connect generator.
-	connect, err := gen.Wiring(mustParse(t, apiProject+"  api: {}\n  i18n: {}\n"))
+	// Everything but the OpenAPI plugin is the file of the connect generator, as before.
+	connect, err := gen.Wiring(mustParse(t, apiProject+"  api:\n    openapi: {generator: connect}\n  i18n: {}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	head, _, _ := strings.Cut(string(connect[gen.BufGenPath]), "  - local: [go, tool, protoc-gen-connect-openapi]")
-	if !strings.HasPrefix(bufGen, head) || strings.Count(bufGen, "- local:") != 3 {
+	if !strings.HasPrefix(bufGen, head) || strings.Count(bufGen, "- local:") != 3 || strings.Contains(bufGen, "platform-openapi") {
 		t.Errorf("buf.gen.yaml with none:\n%s", bufGen)
 	}
 }
@@ -168,11 +193,13 @@ func TestAPIPlatformOpenAPIGenerator(t *testing.T) {
 	if len(got) != 2 || got[0].Package != "github.com/bufbuild/buf/cmd/buf" || got[1] != (registry.Tool{Module: gen.PlatformModule, Package: gen.PlatformOpenAPITool, Version: "v1.2.3"}) {
 		t.Errorf("tools = %+v", got)
 	}
-	for _, other := range []string{"connect", "none"} {
-		s, _ := gen.API(mustParse(t, apiProject+"  api:\n    openapi: {generator: "+other+"}\n"))
-		if got := s.Tools(tools, "v1.2.3"); len(got) != 2 || got[1].Package != gen.ConnectOpenAPITool {
-			t.Errorf("%s: tools = %+v", other, got)
-		}
+	s, _ = gen.API(mustParse(t, apiProject+"  api:\n    openapi: {generator: connect}\n"))
+	if got := s.Tools(tools, "v1.2.3"); len(got) != 2 || got[1].Package != gen.ConnectOpenAPITool {
+		t.Errorf("connect: tools = %+v", got)
+	}
+	s, _ = gen.API(mustParse(t, apiProject+"  api:\n    openapi: {generator: none}\n"))
+	if got := s.Tools(tools, "v1.2.3"); len(got) != 1 {
+		t.Errorf("none: tools = %+v", got)
 	}
 }
 
@@ -190,7 +217,8 @@ func TestAPIRejectsBadSettings(t *testing.T) {
 		{"buf: {deps: [\"buf.build/a/b\\nx\"]}", `is not a buf module`},
 		{"buf: {deps: [buf.build/a/b, buf.build/a/b:v1]}", "buf.deps: buf.build/a/b is listed twice"},
 		{"buf: {breaking_except: [field_no_delete]}", `"field_no_delete" is not a buf rule`},
-		{"openapi: {generator: v2}", "must be one of connect, platform, none"},
+		{"openapi: {generator: v2}", "must be one of platform, connect, none"},
+		{"buf: {deps: [buf.build/gnostic/gnostic:v1]}\n    openapi: {generator: connect}", "is a dependency of the platform"},
 	} {
 		f, err := spec.Parse([]byte(apiProject + "  api:\n    " + tc.section + "\n"))
 		if err == nil {

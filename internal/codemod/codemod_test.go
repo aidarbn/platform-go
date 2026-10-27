@@ -147,7 +147,9 @@ func TestBrokenFilesAreLeftAlone(t *testing.T) {
 func TestAllAreOrderedAndNamed(t *testing.T) {
 	seen := map[string]bool{}
 	for _, m := range codemod.All() {
-		if m.Name == "" || (m.Fix == nil && m.Proto == nil) || len(m.Covers) == 0 || seen[m.Name] {
+		// Covers names the changes of kit a Go codemod answers for; a proto codemod
+		// follows a change of the generated files, which apicheck does not see.
+		if m.Name == "" || (m.Fix == nil && m.Proto == nil) || (m.Fix != nil && len(m.Covers) == 0) || seen[m.Name] {
 			t.Errorf("codemod %+v is incomplete or repeated", m)
 		}
 		seen[m.Name] = true

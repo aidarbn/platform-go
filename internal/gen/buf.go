@@ -38,7 +38,12 @@ modules:
 deps:
   - buf.build/googleapis/googleapis
   - buf.build/bufbuild/protovalidate
-  # OpenAPI annotations: a method or a message uses them for the things the contract
+`
+
+// gnosticDep is the dependency of the connect generator: it reads gnostic annotations
+// for the things the contract itself cannot say — sections, titles, examples. The
+// platform's generator has options of its own instead.
+const gnosticDep = `  # OpenAPI annotations: a method or a message uses them for the things the contract
   # itself cannot say — sections, titles, examples. The generator reads them already
   # (features=...;gnostic), so the dependency is here from the start.
   - buf.build/gnostic/gnostic
@@ -50,8 +55,18 @@ breaking:
   use: [FILE]
 `
 
-// platformDeps are the proto dependencies buf.yaml always has.
-var platformDeps = []string{"buf.build/googleapis/googleapis", "buf.build/bufbuild/protovalidate", "buf.build/gnostic/gnostic"}
+// platformDeps are the proto dependencies buf.yaml has. gnostic stays for connect,
+// which reads its annotations, and for none, whose description is the project's and
+// may come from them; the platform's generator has options of its own.
+func (s APISettings) platformDeps() []string {
+	deps := []string{"buf.build/googleapis/googleapis", "buf.build/bufbuild/protovalidate"}
+	if s.keepsGnostic() {
+		deps = append(deps, "buf.build/gnostic/gnostic")
+	}
+	return deps
+}
+
+func (s APISettings) keepsGnostic() bool { return s.OpenAPI.Generator != OpenAPIPlatform }
 
 // bufGenYAML runs every plugin through go tool, at the versions pinned in go.mod.
 // Managed mode sets go_package, so proto files do not repeat the Go import path.
@@ -67,9 +82,7 @@ managed:
       module: buf.build/googleapis/googleapis
     - file_option: go_package
       module: buf.build/bufbuild/protovalidate
-    - file_option: go_package
-      module: buf.build/gnostic/gnostic
-{{deps}}  override:
+{{gnostic}}{{deps}}  override:
     - file_option: go_package_prefix
       value: {{module}}/internal/api/gen
 plugins:
@@ -190,6 +203,9 @@ func apiFiles(f *spec.File, s APISettings) map[string][]byte {
 func bufConfig(s APISettings) []byte {
 	var b strings.Builder
 	b.WriteString(strings.ReplaceAll(bufYAMLHead, "{{dir}}", s.ProtoDir))
+	if s.keepsGnostic() {
+		b.WriteString(gnosticDep)
+	}
 	if deps := s.extraDeps(); len(deps) > 0 {
 		b.WriteString("  # From platformgo.yaml.\n")
 		for _, d := range deps {
@@ -214,12 +230,16 @@ func bufGenConfig(f *spec.File, s APISettings) []byte {
 	}
 	bufGen := strings.ReplaceAll(bufGenYAML, "{{module}}", f.Project.Module)
 	bufGen = strings.Replace(bufGen, "{{deps}}", deps.String(), 1)
+	gnostic := ""
+	if s.keepsGnostic() {
+		gnostic = "    - file_option: go_package\n      module: buf.build/gnostic/gnostic\n"
+	}
+	bufGen = strings.Replace(bufGen, "{{gnostic}}", gnostic, 1)
 	switch s.OpenAPI.Generator {
+	case OpenAPIConnect:
+		bufGen += connectOpenAPIPlugin
 	case OpenAPIPlatform:
 		bufGen += platformOpenAPIPlugin
-	case OpenAPINone:
-	default:
-		bufGen += connectOpenAPIPlugin
 	}
 	// The proto files of the platform — the i18n option, the OpenAPI options — are
 	// imported, not generated: their Go code is the platform's.
@@ -260,7 +280,7 @@ func (s APISettings) extraDeps() []string {
 	var out []string
 	for _, d := range s.Buf.Deps {
 		name, _, _ := strings.Cut(d, ":")
-		if slices.Contains(platformDeps, name) {
+		if slices.Contains(s.platformDeps(), name) {
 			continue
 		}
 		out = append(out, d)
@@ -297,7 +317,7 @@ func API(f *spec.File) (APISettings, error) {
 			errs = append(errs, fmt.Errorf("buf.deps: %q is not a buf module such as buf.build/grpc-ecosystem/grpc-gateway", d))
 		case seen[name]:
 			errs = append(errs, fmt.Errorf("buf.deps: %s is listed twice", name))
-		case name != d && slices.Contains(platformDeps, name):
+		case name != d && slices.Contains(s.platformDeps(), name):
 			errs = append(errs, fmt.Errorf("buf.deps: %s is a dependency of the platform, its label is the platform's", name))
 		}
 		seen[name] = true
@@ -314,10 +334,9 @@ func API(f *spec.File) (APISettings, error) {
 }
 
 // Tools are the buf plugins the api module pins in go.mod, by the OpenAPI generator: the
-// connect plugin for connect, the platform's plugin for platform, neither for none
-// keeps the connect plugin a project had, as before the option existed.
+// connect plugin for connect, the platform's plugin for platform, neither for none.
 func (s APISettings) Tools(tools []registry.Tool, platformVersion string) []registry.Tool {
-	if s.OpenAPI.Generator != OpenAPIPlatform {
+	if s.OpenAPI.Generator == OpenAPIConnect {
 		return tools
 	}
 	out := make([]registry.Tool, 0, len(tools))
@@ -326,7 +345,10 @@ func (s APISettings) Tools(tools []registry.Tool, platformVersion string) []regi
 			out = append(out, t)
 		}
 	}
-	return append(out, registry.Tool{Module: PlatformModule, Package: PlatformOpenAPITool, Version: platformVersion})
+	if s.OpenAPI.Generator == OpenAPIPlatform {
+		out = append(out, registry.Tool{Module: PlatformModule, Package: PlatformOpenAPITool, Version: platformVersion})
+	}
+	return out
 }
 
 // The OpenAPI plugins as go tool packages.

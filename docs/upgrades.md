@@ -125,7 +125,12 @@ Changes that keep the API but change what a project or its clients see, by the v
 
 ### v0.10.0 (unreleased)
 
-- **The platform's own OpenAPI generator, opt-in.** `openapi.generator: platform` in the `api` section of `platformgo.yaml` writes the description with `protoc-gen-platform-openapi`, a plugin of the platform, instead of protoc-gen-connect-openapi, split by proto file: `api/openapi/openapi.yaml` becomes the root with references, next to a yaml per proto file, `common.yaml` and `openapi.bundle.yaml` with everything, which the service serves at `/openapi.yaml`. A tool that read `api/openapi/openapi.yaml` from the repository as one file reads the bundle instead; `apply` pins it in `go.mod` in place of the connect plugin, whose module leaves the project's graph with the next `go mod tidy`. The description changes for the project's clients: every field of a response is required, request schemas of messages a response also uses are named `<message>Input`, int64 fields of a request take a number or a string, tags are per service, every operation has the shared `Error` answer, uploads are `multipart/form-data`. `gnostic` annotations are not read by it; sections, their groups, summaries, examples and hidden methods are options of the platform, `platform/openapi/v1/options.proto`, which `apply` writes under the proto folder with this generator (`buf.gen.yaml` then keeps the `platform` folder out of generation, as with the i18n module). `platformgo openapi convert` moves the `openapiv2_*` options of grpc-gateway to them. Without the option nothing changes: `buf.gen.yaml`, the pinned tools and the description are the same byte for byte (checked on sendkz and modelwatch). Set it back to `connect` to return.
+- **The platform's own OpenAPI generator, the default.** Without `openapi.generator` in the `api` section of `platformgo.yaml`, the description is written by `protoc-gen-platform-openapi`, a plugin of the platform, instead of protoc-gen-connect-openapi; `apply` pins it in `go.mod` in place of the connect plugin, whose module and its dependencies leave the project's graph with `go mod tidy`, and `buf.yaml` loses the gnostic dependency, so `buf.lock` is resolved again on `generate`. Who is affected: every project with the `api` module and proto files, and the clients of its description.
+  - *The layout.* `api/openapi/openapi.yaml` becomes the root with references, next to a yaml per proto file, `common.yaml` and `openapi.bundle.yaml` with everything. The service serves the bundle at `/openapi.yaml`, so `/docs` and clients keep their URL; a tool that read `api/openapi/openapi.yaml` from the repository as one file reads the bundle instead.
+  - *The description.* It follows the gateway: every field of a response is required, a message, wrapper or proto2 field is nullable, request schemas of messages a response also uses are named `<message>Input`, 64-bit integers of a request take a number or a string, tags are per service, every operation has the shared `Error` answer, uploads are `multipart/form-data`, protovalidate rules are JSON Schema keywords. Clients generated from it change accordingly.
+  - *Annotations.* gnostic annotations are not read; the codemod `openapi.gnostic` moves summaries, tags, descriptions, titles and examples to the platform's options (`platform/openapi/v1/options.proto`, which `apply` writes under the proto folder; `buf.gen.yaml` keeps the `platform` folder out of generation) and to proto comments, and reports the rest — see the manual steps of v0.10.0. `platformgo openapi convert` does the same for the `openapiv2_*` options of grpc-gateway.
+  - *`none`.* A project with `openapi.generator: none` loses the pinned connect plugin it did not use; `buf.yaml` keeps gnostic, which its own annotations may need, and the codemod leaves them alone.
+  - To keep the old description, set `openapi: {generator: connect}`: `buf.yaml`, `buf.gen.yaml`, the tools and the description are then the same byte for byte as before (checked on sendkz), and the codemod leaves the annotations alone.
 
 ### v0.9.1
 
@@ -168,6 +173,15 @@ Changes that keep the API but change what a project or its clients see, by the v
 ## Manual steps
 
 What a codemod cannot do, by the version that brings it. Names in backticks are the ones `scripts/apicheck.sh` matches with incompatible changes.
+
+### v0.10.0
+
+The platform's OpenAPI generator is the default; the codemod `openapi.gnostic` moves gnostic annotations to the platform's options and reports what it cannot move:
+
+- `(gnostic.openapi.v3.document)` — info, servers, security and tags go into `api/openapi/base.yaml`, then the option and, with no annotation left, the gnostic import go.
+- An annotation set field by field, `(gnostic.openapi.v3.operation).summary = "…"`, a second tag of an operation, formats, patterns, bounds, responses, parameters — a protovalidate rule, a comment or a platform option instead.
+- While a gnostic annotation is left, buf needs the dependency: add `buf.build/gnostic/gnostic` to `api.buf.deps`, or set `openapi.generator: connect` for the time being.
+- A project that stays on `connect` now and moves later converts its annotations by hand: the codemod runs once, with the upgrade.
 
 ### v0.6.0
 
