@@ -135,7 +135,7 @@ var all = []Module{
 			{Key: "API_PRINCIPAL_RATE_BURST", Example: "100", Comment: "burst per principal"},
 			{Key: "API_RATE_IPV6_PREFIX", Example: "64", Comment: "leading bits of an IPv6 address that make one client of the rate limit; 128 limits every address on its own"},
 			{Key: "API_IDEMPOTENCY_RETENTION", Example: "24h", Comment: "how long an Idempotency-Key call is remembered"},
-			{Key: "API_IDEMPOTENCY_LOCK", Example: "1m", Comment: "how long a running call holds its key"},
+			{Key: "API_IDEMPOTENCY_LEASE", Example: "2m", Comment: "lease of a running Idempotency-Key call, extended while it runs; API_IDEMPOTENCY_LOCK is its old name"},
 			{Key: "API_ACCESS_LOG", Example: "true", Comment: "log every HTTP request"},
 			{Key: "API_LOG_BODIES", Example: "true", Comment: "bodies of failed requests in the access log"},
 			{Key: "API_LOG_BODIES_MASK_PATHS", Example: "", Comment: "path parts whose request bodies never reach the access log, comma separated"},

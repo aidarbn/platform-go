@@ -63,10 +63,14 @@ type Config struct {
 	// RateLimit per client address, and per principal; zero rates turn it off.
 	RateLimit RateLimit
 
-	// Idempotency: how long a finished call is remembered, and how long a running one
-	// holds its key before a repeat may take over.
+	// Idempotency: how long a finished call is remembered, and the lease a running one
+	// holds its key with. The lease is extended while the handler runs, so it only
+	// decides how soon a repeat may take over the key of a call that died.
 	IdempotencyRetention time.Duration
-	IdempotencyLock      time.Duration
+	IdempotencyLease     time.Duration
+	// Deprecated: IdempotencyLock is the old name of IdempotencyLease, used when the
+	// lease is not set.
+	IdempotencyLock time.Duration
 
 	AccessLog       bool // log every HTTP request, as taply does
 	LogBodies       bool // put the bodies of failed requests into the access log
@@ -112,7 +116,11 @@ var DefaultTrustedProxies = []netip.Prefix{
 
 // Load reads the module settings from environment variables.
 func Load(l *confx.Loader) Config {
+	lease, lock := idempotencyLease(l)
 	return Config{
+		IdempotencyLease: lease,
+		IdempotencyLock:  lock,
+
 		GRPCAddr:    l.String("API_GRPC_ADDR", "127.0.0.1:9091"),
 		HTTPAddr:    l.String("API_HTTP_ADDR", ":8080"),
 		MaxRecvSize: l.Int("API_MAX_RECV_MB", 16) << 20,
@@ -133,7 +141,6 @@ func Load(l *confx.Loader) Config {
 			IPv6Prefix: ipv6Prefix(l),
 		},
 		IdempotencyRetention: l.Duration("API_IDEMPOTENCY_RETENTION", 24*time.Hour),
-		IdempotencyLock:      l.Duration("API_IDEMPOTENCY_LOCK", time.Minute),
 
 		CORSHeaders:       headerNames(l, "API_CORS_HEADERS"),
 		CORSExpose:        headerNames(l, "API_CORS_EXPOSE"),
@@ -162,6 +169,18 @@ func ipv6Prefix(l *confx.Loader) int {
 	}
 	return bits
 }
+
+// idempotencyLease reads API_IDEMPOTENCY_LEASE and its old name API_IDEMPOTENCY_LOCK:
+// the old one goes to the deprecated field, so the module warns about it on start.
+func idempotencyLease(l *confx.Loader) (lease, lock time.Duration) {
+	if !l.IsSet("API_IDEMPOTENCY_LEASE") && l.IsSet("API_IDEMPOTENCY_LOCK") {
+		return 0, l.Duration("API_IDEMPOTENCY_LOCK", defaultIdempotencyLease)
+	}
+	return l.Duration("API_IDEMPOTENCY_LEASE", defaultIdempotencyLease), 0
+}
+
+// defaultIdempotencyLease is taply's lease of a running call.
+const defaultIdempotencyLease = 2 * time.Minute
 
 // nonNegative reads a duration that defaults to zero and may not be negative.
 func nonNegative(l *confx.Loader, name string) time.Duration {
@@ -247,8 +266,11 @@ func (c *Config) setDefaults() {
 	if c.IdempotencyRetention <= 0 {
 		c.IdempotencyRetention = 24 * time.Hour
 	}
-	if c.IdempotencyLock <= 0 {
-		c.IdempotencyLock = time.Minute
+	if c.IdempotencyLease <= 0 {
+		c.IdempotencyLease = c.IdempotencyLock
+	}
+	if c.IdempotencyLease <= 0 {
+		c.IdempotencyLease = defaultIdempotencyLease
 	}
 	if c.RateLimit.IPv6Prefix <= 0 || c.RateLimit.IPv6Prefix > 128 {
 		c.RateLimit.IPv6Prefix = defaultIPv6Prefix
@@ -282,6 +304,8 @@ type Registry struct {
 	public       func(method string) bool
 	normalizers  []func(proto.Message)
 	idemRequired []string
+	idemMethods  []string
+	idemListed   bool
 	idemUser     func(context.Context) string
 	corsHeaders  []string
 	rateKey      func(context.Context) string
@@ -380,6 +404,19 @@ func RequireIdempotency(app *platform.App, methods ...string) {
 	r.add(func() { r.idemRequired = append(r.idemRequired, methods...) })
 }
 
+// IdempotencyMethods lists the methods whose Idempotency-Key counts, on top of those of
+// RequireIdempotency; a key on any other method is ignored. Without the call the keys
+// count on every method that changes something: one whose HTTP binding is not a GET
+// and whose idempotency_level is not NO_SIDE_EFFECTS. The list wins over that default,
+// as taply keeps its own.
+func IdempotencyMethods(app *platform.App, methods ...string) {
+	r := registry(app)
+	r.add(func() {
+		r.idemListed = true
+		r.idemMethods = append(r.idemMethods, methods...)
+	})
+}
+
 // RateLimitKey names the principal of a call — a user, an API client, a device — for the
 // second rate limit, API_PRINCIPAL_RATE_RPS per principal. It runs after the project's
 // interceptors, so the authentication has put the principal into the context; an empty
@@ -391,7 +428,10 @@ func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
 }
 
 // IdempotencyUser scopes idempotency keys to the caller: two users may use the same key.
-// The project's authentication supplies the user.
+// The project's authentication supplies the user. A key counts only for a caller this
+// names: without the call, or for an empty user — an anonymous caller — the key is
+// ignored, since anonymous callers would share one space of keys and could get each
+// other's answers.
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
 	r := registry(app)
 	r.add(func() { r.idemUser = user })
@@ -493,9 +533,11 @@ type Module struct {
 	cfg Config
 	// grpcTrusted are the networks given in TrustedProxies, without the default.
 	grpcTrusted []netip.Prefix
-	skipped     bool
-	http        *httpMetrics
-	app         *platform.App
+	// oldLock is set when the lease came from the deprecated IdempotencyLock.
+	oldLock bool
+	skipped bool
+	http    *httpMetrics
+	app     *platform.App
 
 	idemStore  IdempotencyStore
 	limiter    *rateLimiter
@@ -523,8 +565,9 @@ func New(cfg Config, opts ...Option) *Module {
 	// client over gRPC: a gRPC port open to the private network would let any host
 	// there pick its own bucket. Only networks the operator listed are.
 	grpcTrusted := cfg.TrustedProxies
+	oldLock := cfg.IdempotencyLease <= 0 && cfg.IdempotencyLock > 0
 	cfg.setDefaults()
-	m := &Module{cfg: cfg, registry: &Registry{}, grpcTrusted: grpcTrusted}
+	m := &Module{cfg: cfg, registry: &Registry{}, grpcTrusted: grpcTrusted, oldLock: oldLock}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -651,6 +694,9 @@ func (m *Module) Start(ctx context.Context) error {
 		s.GRPC(m.grpcSrv)
 	}
 	m.recordMethods()
+	if idem != nil {
+		idem.accept = m.idempotentMethods()
+	}
 	// Every method shows up in the metrics from the start, with zero counts, so a rate is
 	// defined before the first call.
 	m.metrics.server.InitializeMetrics(m.grpcSrv)
@@ -748,29 +794,72 @@ func (m *Module) idempotency(ctx context.Context) (*idempotency, error) {
 	for _, method := range m.registry.idemRequired {
 		required[method] = true
 	}
+	if m.oldLock {
+		m.log.Warn("API_IDEMPOTENCY_LOCK (Config.IdempotencyLock) is deprecated: set API_IDEMPOTENCY_LEASE (Config.IdempotencyLease)")
+	}
+	if m.registry.idemUser == nil {
+		level := slog.LevelInfo
+		if len(required) > 0 {
+			level = slog.LevelWarn
+		}
+		m.log.Log(ctx, level, "Idempotency-Key is ignored: no api.IdempotencyUser names the caller")
+	}
+	calls := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "api", Name: "idempotency_total",
+		Help: "calls with an Idempotency-Key by outcome: replay, aborted, mismatch, lease_lost, stored, retry, save_failed",
+	}, []string{"method", "result"})
+	if err := m.app.Metrics().Register(calls); err != nil {
+		return nil, fmt.Errorf("api metrics: %w", err)
+	}
+
 	m.cleanup = make(chan struct{})
 	done := m.cleanup // the goroutine keeps its own reference: Stop clears the field
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
+		clean := func(now time.Time) {
+			if n, err := store.DeleteExpired(context.Background(), now); err != nil {
+				m.log.Error("idempotency cleanup failed", "err", err)
+			} else if n > 0 {
+				m.log.Info("expired idempotency records removed", "count", n)
+			}
+		}
+		clean(time.Now())
 		for {
 			select {
 			case <-done:
 				return
 			case now := <-ticker.C:
-				if n, err := store.DeleteExpired(context.Background(), now); err != nil {
-					m.log.Error("idempotency cleanup failed", "err", err)
-				} else if n > 0 {
-					m.log.Info("expired idempotency records removed", "count", n)
-				}
+				clean(now)
 			}
 		}
 	}()
 	return &idempotency{
 		store: store, required: required, user: m.registry.idemUser,
-		retention: m.cfg.IdempotencyRetention, lock: m.cfg.IdempotencyLock,
-		log: m.log, now: time.Now,
+		retention: m.cfg.IdempotencyRetention, lease: m.cfg.IdempotencyLease,
+		log: m.log, now: time.Now, calls: calls,
 	}, nil
+}
+
+// idempotentMethods are the served methods whose keys count: the listed ones, or every
+// method that changes something.
+func (m *Module) idempotentMethods() map[string]bool {
+	accept := map[string]bool{}
+	if m.registry.idemListed {
+		for _, method := range m.registry.idemMethods {
+			if !slices.Contains(m.registry.methods, method) {
+				m.log.Warn("api.IdempotencyMethods names a method the API does not serve", "method", method)
+			}
+			accept[method] = true
+		}
+		return accept
+	}
+	for _, method := range m.registry.methods {
+		if mutating(method) {
+			accept[method] = true
+		}
+	}
+	return accept
 }
 
 func (m *Module) recordMethods() {

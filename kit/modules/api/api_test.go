@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -41,8 +43,21 @@ func (echo) Echo(ctx context.Context, req *testv1.EchoRequest) (*testv1.EchoResp
 	}, nil
 }
 
+// failCalls counts how often Fail really ran.
+var failCalls atomic.Int32
+
 func (echo) Fail(ctx context.Context, req *testv1.FailRequest) (*testv1.FailResponse, error) {
+	failCalls.Add(1)
 	switch req.GetKind() {
+	case "details":
+		st, _ := status.New(codes.InvalidArgument, "the order is invalid").WithDetails(&errdetails.BadRequest{
+			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "items", Description: "empty"}},
+		})
+		return nil, st.Err()
+	case "slow_ok":
+		// Finishes even when the client hangs up.
+		time.Sleep(300 * time.Millisecond)
+		return &testv1.FailResponse{}, nil
 	case "panic":
 		panic("the handler broke")
 	case "internal":

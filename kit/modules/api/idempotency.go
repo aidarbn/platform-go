@@ -11,9 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/api/annotations"
+	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -21,6 +23,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+
+	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
 // IdempotencyKeyHeader is the header a client sends to make a call safe to repeat.
@@ -33,6 +38,17 @@ const (
 	idemRetry      = "retry"
 )
 
+// maxIdempotencyKey is the longest key: clients send UUIDs, and a longer one would not
+// fit the unique index.
+const maxIdempotencyKey = 255
+
+// idempotencySaveTimeout bounds the write of an outcome. The write runs on a context
+// cut loose from the call, so a client that hangs up does not leave the key in progress.
+const idempotencySaveTimeout = 5 * time.Second
+
+// leaseExtendTimeout bounds one extension of a lease.
+const leaseExtendTimeout = 5 * time.Second
+
 // IdempotencyRecord is one remembered call.
 type IdempotencyRecord struct {
 	ID          int64
@@ -43,8 +59,16 @@ type IdempotencyRecord struct {
 	Status      string
 	Code        int32
 	Message     string
-	Response    []byte
-	ExpiresAt   time.Time
+	// Response is the response message for a success and the google.rpc.Status the
+	// client got for a failure, both in the binary proto format. Records written before
+	// the status was kept have none for a failure, and are replayed from Code and
+	// Message.
+	Response  []byte
+	ExpiresAt time.Time
+	// Lease is the expires_at of the in_progress record the running call holds: the
+	// token Finish checks, so a call whose key was taken over does not overwrite the
+	// outcome of the one that took it. Zero means no check.
+	Lease time.Time
 }
 
 // IdempotencyStore keeps the records. The postgres store is used when the postgres
@@ -53,26 +77,82 @@ type IdempotencyStore interface {
 	// Begin inserts an in_progress record, or returns the existing one with created false.
 	Begin(ctx context.Context, rec IdempotencyRecord) (IdempotencyRecord, bool, error)
 	// Retake moves a retry record, or an in_progress one whose lock expired, back to
-	// in_progress. It reports false when another call took it first.
+	// in_progress until lockUntil. It reports false when another call took it first.
 	Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error)
-	// Finish stores the outcome.
+	// Finish stores the outcome. With rec.Lease set it writes only while the record is
+	// still in_progress with that expiry, and returns ErrIdempotencyLeaseLost otherwise.
 	Finish(ctx context.Context, rec IdempotencyRecord) error
 	// DeleteExpired removes records past their expiry.
 	DeleteExpired(ctx context.Context, now time.Time) (int, error)
 }
 
+// IdempotencyLeaseExtender is a store that extends the lease of a running call, so a
+// handler that runs longer than the lease keeps its key. The memory and postgres stores
+// implement it; with a store that does not, the lease is not extended.
+type IdempotencyLeaseExtender interface {
+	// ExtendLease moves the expiry of an in_progress record from lease to until, and
+	// reports false when the record no longer has that lease: it was taken over.
+	ExtendLease(ctx context.Context, id int64, lease, until time.Time) (bool, error)
+}
+
+// ErrIdempotencyLeaseLost is returned by Finish when the record was taken over by a
+// repeat after the lease expired: the late outcome is not written.
+var ErrIdempotencyLeaseLost = errors.New("idempotency lease lost")
+
 // RetryableError marks an error after which a repeated call must run again instead of
-// getting the cached failure: a timeout of an external system, a lost connection.
+// getting the cached failure — or, returning false, a failure to remember although its
+// code would let a repeat run.
 type RetryableError interface{ IsRetryable() bool }
+
+// cachedCodes are the outcomes a repeat gets back: a success and the client errors a
+// repeat with the same body cannot fix. Everything else — Internal, Unknown, Canceled,
+// Unavailable, DeadlineExceeded, ResourceExhausted, Aborted, DataLoss, a panic — is a
+// passing failure, and a repeat with the key runs again. As in taply.
+var cachedCodes = map[codes.Code]bool{
+	codes.OK:                 true,
+	codes.InvalidArgument:    true,
+	codes.NotFound:           true,
+	codes.AlreadyExists:      true,
+	codes.FailedPrecondition: true,
+	codes.PermissionDenied:   true,
+	codes.Unauthenticated:    true,
+	codes.OutOfRange:         true,
+	codes.Unimplemented:      true,
+}
+
+// Results of api_idempotency_total.
+const (
+	idemReplay     = "replay"   // a repeat got the remembered outcome
+	idemAborted    = "aborted"  // a repeat while the call still runs
+	idemMismatch   = "mismatch" // the same key with another body
+	idemLost       = "lease_lost"
+	idemStored     = "stored" // a final outcome remembered
+	idemRetried    = "retry"  // a passing failure: the next repeat runs again
+	idemSaveFailed = "save_failed"
+)
 
 type idempotency struct {
 	store     IdempotencyStore
 	required  map[string]bool
+	accept    map[string]bool // the methods whose keys count; filled once the services are known
 	user      func(context.Context) string
 	retention time.Duration
-	lock      time.Duration
+	lease     time.Duration
 	log       *slog.Logger
 	now       func() time.Time
+	calls     *prometheus.CounterVec
+}
+
+func (i *idempotency) count(method, result string) {
+	if i.calls != nil {
+		i.calls.WithLabelValues(method, result).Inc()
+	}
+}
+
+// leaseUntil is the expiry of a lease taken now, at the precision the database keeps,
+// so the token read back is the one written.
+func (i *idempotency) leaseUntil() time.Time {
+	return i.now().Add(i.lease).Truncate(time.Microsecond)
 }
 
 func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -83,8 +163,23 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 		}
 		return handler(ctx, req)
 	}
-	if len(key) > 255 {
-		return nil, status.Errorf(codes.InvalidArgument, "%s is longer than 255 characters", IdempotencyKeyHeader)
+	// A key counts only on the methods it is meant for and only for a known caller:
+	// anonymous callers would share one space of keys and get each other's answers.
+	if !i.required[info.FullMethod] && !i.accept[info.FullMethod] {
+		return handler(ctx, req)
+	}
+	user := ""
+	if i.user != nil {
+		user = i.user(ctx)
+	}
+	if user == "" {
+		return handler(ctx, req)
+	}
+	if len(key) > maxIdempotencyKey {
+		return nil, status.Errorf(codes.InvalidArgument, "%s is longer than %d characters", IdempotencyKeyHeader, maxIdempotencyKey)
+	}
+	if !printableASCII(key) {
+		return nil, status.Errorf(codes.InvalidArgument, "%s must be printable ASCII", IdempotencyKeyHeader)
 	}
 
 	msg, ok := req.(proto.Message)
@@ -96,78 +191,239 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
-	user := ""
-	if i.user != nil {
-		user = i.user(ctx)
-	}
-	now := i.now()
+	lease := i.leaseUntil()
 	rec, created, err := i.store.Begin(ctx, IdempotencyRecord{
 		User: user, Method: info.FullMethod, Key: key, Fingerprint: fingerprint,
-		Status: idemInProgress, ExpiresAt: now.Add(i.lock),
+		Status: idemInProgress, ExpiresAt: lease,
 	})
 	if err != nil {
 		i.log.ErrorContext(ctx, "idempotency check failed", "method", info.FullMethod, "err", err)
 		return nil, status.Error(codes.Internal, "internal error")
 	}
-
-	if !created {
+	if created {
+		lease = rec.ExpiresAt
+	} else {
 		// The same key with another request is a client bug, not a repeat.
 		if rec.Fingerprint != fingerprint {
+			i.count(info.FullMethod, idemMismatch)
 			return nil, status.Error(codes.AlreadyExists, "duplicate request with different payload")
 		}
-		switch {
-		case rec.Status == idemCompleted:
-			return i.cached(info.FullMethod, rec)
-		case rec.Status == idemRetry || (rec.Status == idemInProgress && now.After(rec.ExpiresAt)):
-			took, err := i.store.Retake(ctx, rec.ID, now.Add(i.lock))
-			if err != nil {
-				i.log.ErrorContext(ctx, "idempotency retake failed", "method", info.FullMethod, "err", err)
-				return nil, status.Error(codes.Internal, "internal error")
-			}
-			if !took {
-				return nil, status.Error(codes.Aborted, "request is already in progress")
-			}
-		default:
+		if rec.Status == idemCompleted {
+			i.count(info.FullMethod, idemReplay)
+			return i.cached(ctx, info.FullMethod, rec)
+		}
+		// A retry, or a call whose lease expired: one repeat takes it over, the store
+		// decides which.
+		took, err := i.store.Retake(ctx, rec.ID, lease)
+		if err != nil {
+			i.log.ErrorContext(ctx, "idempotency retake failed", "method", info.FullMethod, "err", err)
+			return nil, status.Error(codes.Internal, "internal error")
+		}
+		if !took {
+			i.count(info.FullMethod, idemAborted)
 			return nil, status.Error(codes.Aborted, "request is already in progress")
 		}
+		rec.Status, rec.ExpiresAt = idemInProgress, lease
 	}
+	rec.Lease = lease
 
+	// The lease is extended while the handler runs: a repeat after it expired would
+	// take the key over and run the call a second time.
+	held := i.hold(ctx, rec)
+	defer func() {
+		// A panic that got past the handler's recovery, from an interceptor placed after
+		// it: the key is released for a repeat instead of being held until the lease
+		// runs out.
+		if p := recover(); p != nil {
+			i.finish(ctx, rec, held, nil, status.Error(codes.Internal, "internal error"))
+			panic(p)
+		}
+	}()
 	resp, handlerErr := handler(ctx, req)
-	i.finish(ctx, rec, resp, handlerErr)
+	i.finish(ctx, rec, held, resp, handlerErr)
 	return resp, handlerErr
 }
 
-func (i *idempotency) finish(ctx context.Context, rec IdempotencyRecord, resp any, handlerErr error) {
-	now := i.now()
-	rec.Status, rec.ExpiresAt = idemCompleted, now.Add(i.retention)
-	rec.Code, rec.Message, rec.Response = 0, "", nil
-
-	if handlerErr == nil {
-		if m, ok := resp.(proto.Message); ok {
-			rec.Response, _ = proto.Marshal(m)
-		}
-	} else {
-		// The client got the public form of the error, and a repeat must get the same.
-		st := publicStatus(handlerErr)
-		rec.Code, rec.Message = int32(st.Code()), st.Message() // #nosec G115 -- gRPC codes are small
-		if retryable(handlerErr) {
-			rec.Status, rec.ExpiresAt = idemRetry, now.Add(i.lock)
+// printableASCII accepts what a client puts into a header: UUIDs and the like.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
 		}
 	}
-	if err := i.store.Finish(context.WithoutCancel(ctx), rec); err != nil {
-		i.log.ErrorContext(ctx, "idempotency result was not saved", "method", rec.Method, "err", err)
+	return true
+}
+
+// heldLease extends the lease of a running call every lease/3 until released.
+type heldLease struct {
+	mu    sync.Mutex
+	lease time.Time
+	// pending is the token of an extension whose outcome is unknown: it failed with
+	// an error, a timeout say, and may still have reached the database. The holder
+	// tries it when the current token no longer matches.
+	pending time.Time
+	stop    context.CancelFunc
+	done    chan struct{}
+	once    sync.Once
+}
+
+func (i *idempotency) hold(ctx context.Context, rec IdempotencyRecord) *heldLease {
+	h := &heldLease{lease: rec.Lease, done: make(chan struct{})}
+	ext, ok := i.store.(IdempotencyLeaseExtender)
+	if !ok || i.lease/3 <= 0 {
+		h.stop = func() {}
+		close(h.done)
+		return h
+	}
+	// The extension itself runs on a context the release does not cancel: an
+	// extension that reached the database while being cancelled would leave the new
+	// token unknown here, and Finish would take the lease for lost.
+	base := context.WithoutCancel(ctx)
+	stopCtx, stop := context.WithCancel(base)
+	h.stop = stop
+	go func() {
+		defer close(h.done)
+		ticker := time.NewTicker(i.lease / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			h.mu.Lock()
+			cur, pending := h.lease, h.pending
+			h.mu.Unlock()
+			next := i.leaseUntil()
+			kept, err := extend(ext, base, i.lease, rec.ID, cur, next)
+			if err == nil && !kept && !pending.IsZero() {
+				kept, err = extend(ext, base, i.lease, rec.ID, pending, next)
+			}
+			switch {
+			case err != nil:
+				// A passing database failure: the lease is still alive, try on the next
+				// tick, with next as a candidate in case the write went through.
+				h.mu.Lock()
+				h.pending = next
+				h.mu.Unlock()
+				i.log.WarnContext(ctx, "idempotency lease was not extended", "method", rec.Method, "err", err)
+			case !kept:
+				i.log.WarnContext(ctx, "idempotency lease was taken over while the call ran", "method", rec.Method)
+				return
+			default:
+				h.mu.Lock()
+				h.lease, h.pending = next, time.Time{}
+				h.mu.Unlock()
+			}
+		}
+	}()
+	return h
+}
+
+func extend(ext IdempotencyLeaseExtender, base context.Context, lease time.Duration, id int64, from, to time.Time) (bool, error) {
+	ctx, cancel := context.WithTimeout(base, min(lease/3, leaseExtendTimeout))
+	defer cancel()
+	return ext.ExtendLease(ctx, id, from, to)
+}
+
+// release stops the extension, waits for one in flight and returns the current lease
+// and the token of an extension whose outcome is unknown.
+func (h *heldLease) release() (lease, pending time.Time) {
+	h.once.Do(h.stop)
+	<-h.done
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lease, h.pending
+}
+
+// finishAttempts is how many times a store failure of the final write is retried within
+// idempotencySaveTimeout: a lost write leaves the key in progress, and a repeat after the
+// lease would run the call again.
+const finishAttempts = 3
+
+func (i *idempotency) finish(ctx context.Context, rec IdempotencyRecord, held *heldLease, resp any, handlerErr error) {
+	lease, pending := held.release()
+	rec.Lease = lease
+	now := i.now()
+	rec.Code, rec.Message, rec.Response = 0, "", nil
+	keep := true
+	if handlerErr == nil {
+		m, ok := resp.(proto.Message)
+		var err error
+		if ok {
+			rec.Response, err = proto.Marshal(m)
+		}
+		// A success that cannot be kept must not be remembered as an empty answer.
+		keep = ok && err == nil
+	} else {
+		// The client got the public form of the error, and a repeat must get the same,
+		// details included.
+		st := publicStatus(handlerErr)
+		rec.Code, rec.Message = int32(st.Code()), st.Message() // #nosec G115 -- gRPC codes are small
+		body, err := proto.Marshal(st.Proto())
+		if err != nil {
+			body, _ = proto.Marshal(&spb.Status{Code: rec.Code, Message: rec.Message})
+		}
+		rec.Response = body
+		keep = cachedCodes[st.Code()]
+		var marked RetryableError
+		if errors.As(handlerErr, &marked) {
+			keep = !marked.IsRetryable()
+		}
+	}
+	result := idemStored
+	rec.Status, rec.ExpiresAt = idemCompleted, now.Add(i.retention)
+	if !keep {
+		result = idemRetried
+		rec.Status, rec.ExpiresAt = idemRetry, now.Add(i.lease)
+	}
+
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), idempotencySaveTimeout)
+	defer cancel()
+	var err error
+	for attempt := 1; ; attempt++ {
+		err = i.store.Finish(saveCtx, rec)
+		if errors.Is(err, ErrIdempotencyLeaseLost) && !pending.IsZero() {
+			// The last extension may have gone through after all.
+			rec.Lease, pending = pending, time.Time{}
+			err = i.store.Finish(saveCtx, rec)
+		}
+		if err == nil || errors.Is(err, ErrIdempotencyLeaseLost) || attempt == finishAttempts || saveCtx.Err() != nil {
+			break
+		}
+		select {
+		case <-saveCtx.Done():
+		case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
+		}
+	}
+	switch {
+	case errors.Is(err, ErrIdempotencyLeaseLost):
+		i.count(rec.Method, idemLost)
+		i.log.WarnContext(ctx, "idempotency key was taken over, the outcome is not saved", "method", rec.Method)
+	case err != nil:
+		i.count(rec.Method, idemSaveFailed)
+		i.log.ErrorContext(ctx, "idempotency outcome was not saved", "method", rec.Method, "err", err)
+	default:
+		i.count(rec.Method, result)
 	}
 }
 
-func (i *idempotency) cached(method string, rec IdempotencyRecord) (any, error) {
+func (i *idempotency) cached(ctx context.Context, method string, rec IdempotencyRecord) (any, error) {
 	if code := codes.Code(rec.Code); code != codes.OK {
+		if len(rec.Response) > 0 {
+			var st spb.Status
+			if err := proto.Unmarshal(rec.Response, &st); err == nil && st.GetCode() == rec.Code {
+				return nil, status.FromProto(&st).Err()
+			}
+		}
 		return nil, status.Error(code, rec.Message)
 	}
 	msg, err := responseType(method)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "internal error")
+	if err == nil {
+		err = proto.Unmarshal(rec.Response, msg)
 	}
-	if err := proto.Unmarshal(rec.Response, msg); err != nil {
+	if err != nil {
+		i.log.ErrorContext(ctx, "a remembered idempotency outcome cannot be read", "method", method, "err", err)
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 	return msg, nil
@@ -187,18 +443,25 @@ func publicStatus(err error) *status.Status {
 	return status.New(codes.Internal, "internal error")
 }
 
-// retryable decides whether a failed call may run again. As in taply a failure is final
-// unless marked; transport level failures that say "try again" count as marked.
-func retryable(err error) bool {
-	var marked RetryableError
-	if errors.As(err, &marked) {
-		return marked.IsRetryable()
-	}
-	switch publicStatus(err).Code() {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
+// mutating tells whether a method changes something, for the default list of methods
+// whose keys count: its HTTP binding is not a GET and its idempotency_level is not
+// NO_SIDE_EFFECTS. A method the proto registry does not know counts as mutating.
+func mutating(fullMethod string) bool {
+	md, err := methodDescriptor(fullMethod)
+	if err != nil {
 		return true
 	}
-	return false
+	opts, ok := md.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return true
+	}
+	if opts.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS {
+		return false
+	}
+	if rule, ok := proto.GetExtension(opts, annotations.E_Http).(*annotations.HttpRule); ok && rule != nil && rule.GetGet() != "" {
+		return false
+	}
+	return true
 }
 
 func idempotencyKey(ctx context.Context) string {
@@ -221,8 +484,8 @@ func fingerprintOf(msg proto.Message) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// responseType finds the response message of a method in the proto registry.
-func responseType(fullMethod string) (proto.Message, error) {
+// methodDescriptor finds a method in the proto registry.
+func methodDescriptor(fullMethod string) (protoreflect.MethodDescriptor, error) {
 	service, method, ok := strings.Cut(strings.TrimPrefix(fullMethod, "/"), "/")
 	if !ok {
 		return nil, fmt.Errorf("bad method %q", fullMethod)
@@ -238,6 +501,15 @@ func responseType(fullMethod string) (proto.Message, error) {
 	md := sd.Methods().ByName(protoreflect.Name(method))
 	if md == nil {
 		return nil, fmt.Errorf("no method %s", fullMethod)
+	}
+	return md, nil
+}
+
+// responseType finds the response message of a method in the proto registry.
+func responseType(fullMethod string) (proto.Message, error) {
+	md, err := methodDescriptor(fullMethod)
+	if err != nil {
+		return nil, err
 	}
 	mt, err := protoregistry.GlobalTypes.FindMessageByName(md.Output().FullName())
 	if err != nil {
@@ -276,24 +548,52 @@ func (s *MemoryIdempotencyStore) Begin(_ context.Context, rec IdempotencyRecord)
 func (s *MemoryIdempotencyStore) Retake(_ context.Context, id int64, lockUntil time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range s.records {
-		if r.ID != id {
-			continue
-		}
-		if r.Status == idemRetry || (r.Status == idemInProgress && time.Now().After(r.ExpiresAt)) {
-			r.Status, r.ExpiresAt = idemInProgress, lockUntil
-			return true, nil
-		}
+	r := s.byID(id)
+	if r == nil {
 		return false, nil
 	}
+	if r.Status == idemRetry || (r.Status == idemInProgress && time.Now().After(r.ExpiresAt)) {
+		r.Status, r.ExpiresAt = idemInProgress, lockUntil
+		return true, nil
+	}
 	return false, nil
+}
+
+// ExtendLease implements IdempotencyLeaseExtender.
+func (s *MemoryIdempotencyStore) ExtendLease(_ context.Context, id int64, lease, until time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.byID(id)
+	if r == nil || r.Status != idemInProgress || !r.ExpiresAt.Equal(lease) {
+		return false, nil
+	}
+	r.ExpiresAt = until
+	return true, nil
 }
 
 func (s *MemoryIdempotencyStore) Finish(_ context.Context, rec IdempotencyRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r, ok := s.records[memKey(rec)]; ok {
-		*r = rec
+	r := s.byID(rec.ID)
+	if r == nil {
+		if rec.Lease.IsZero() {
+			return nil
+		}
+		return ErrIdempotencyLeaseLost
+	}
+	if !rec.Lease.IsZero() && (r.Status != idemInProgress || !r.ExpiresAt.Equal(rec.Lease)) {
+		return ErrIdempotencyLeaseLost
+	}
+	rec.Lease = time.Time{}
+	*r = rec
+	return nil
+}
+
+func (s *MemoryIdempotencyStore) byID(id int64) *IdempotencyRecord {
+	for _, r := range s.records {
+		if r.ID == id {
+			return r
+		}
 	}
 	return nil
 }
@@ -375,7 +675,8 @@ func (s *pgIdempotencyStore) Begin(ctx context.Context, rec IdempotencyRecord) (
 	return existing, false, err
 }
 
-// Retake is a compare and set: of two repeats racing for a retry, one wins.
+// Retake is a compare and set: of two repeats racing for a retry or an expired lease,
+// one wins.
 func (s *pgIdempotencyStore) Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		"UPDATE "+idempotencyTable+" SET status = 'in_progress', expires_at = $2, updated_at = now() "+
@@ -387,15 +688,41 @@ func (s *pgIdempotencyStore) Retake(ctx context.Context, id int64, lockUntil tim
 	return tag.RowsAffected() == 1, nil
 }
 
+// ExtendLease implements IdempotencyLeaseExtender: the expiry moves only while it is
+// still the lease the call holds.
+func (s *pgIdempotencyStore) ExtendLease(ctx context.Context, id int64, lease, until time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		"UPDATE "+idempotencyTable+" SET expires_at = $3, updated_at = now() "+
+			"WHERE id = $1 AND status = 'in_progress' AND expires_at = $2",
+		id, lease, until)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Finish writes the outcome; with a lease, only while the record still holds it, so a
+// call whose key was taken over does not overwrite the outcome of the one that took it.
 func (s *pgIdempotencyStore) Finish(ctx context.Context, rec IdempotencyRecord) error {
-	_, err := s.pool.Exec(ctx,
-		"UPDATE "+idempotencyTable+" SET status = $2, code = $3, message = $4, response = $5, expires_at = $6, updated_at = now() WHERE id = $1",
-		rec.ID, rec.Status, rec.Code, rec.Message, rec.Response, rec.ExpiresAt)
-	return err
+	query := "UPDATE " + idempotencyTable + " SET status = $2, code = $3, message = $4, response = $5, expires_at = $6, updated_at = now() WHERE id = $1"
+	args := []any{rec.ID, rec.Status, rec.Code, rec.Message, rec.Response, rec.ExpiresAt}
+	if !rec.Lease.IsZero() {
+		query += " AND status = 'in_progress' AND expires_at = $7"
+		args = append(args, rec.Lease)
+	}
+	tag, err := s.pool.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if !rec.Lease.IsZero() && tag.RowsAffected() == 0 {
+		return ErrIdempotencyLeaseLost
+	}
+	return nil
 }
 
 func (s *pgIdempotencyStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
-	// An in_progress record past its lock belongs to a call that died; it goes too.
+	// An in_progress record past its lease belongs to a call that died — a running one
+	// keeps extending it — so it goes too.
 	tag, err := s.pool.Exec(ctx, "DELETE FROM "+idempotencyTable+" WHERE expires_at < $1", now)
 	if err != nil {
 		return 0, err
