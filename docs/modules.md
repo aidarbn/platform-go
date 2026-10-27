@@ -297,14 +297,29 @@ modules:
       deps: [buf.build/grpc-ecosystem/grpc-gateway]   # added to googleapis, protovalidate, gnostic
       breaking_except: [FILE_NO_DELETE, RPC_NO_DELETE, MESSAGE_NO_DELETE, FIELD_NO_DELETE]
     openapi:
-      generator: connect             # connect | none; platform is reserved for the platform's own generator
+      generator: connect             # connect | platform | none
 ```
 
 - `proto_dir` is the buf module: imports are relative to it, `make generate` and `lint proto` read it, and the i18n option of the platform is generated under it (`<proto_dir>/platform/i18n/v1/i18n.proto`). Moving it leaves the old copy of that file, which has no generated mark: `apply` lists it as kept, delete it.
 - `buf.deps` are added after the platform's; a platform dependency listed again is left out, with a label of its own it is an error. A label (`buf.build/grpc-ecosystem/grpc-gateway:v2.27.0`) is written as it is; `buf.lock` pins the commit, so after changing a label run `go tool buf dep update`. The Go code of a dependency must come from a module in `go.mod`, so its `go_package` is left out of managed mode, as for the platform's.
 - `proto_dir` holds only proto files for buf; it must not be inside `internal/api/gen` or `api/openapi`, where buf writes.
 - `buf.breaking_except` goes into `breaking.except` next to `use: [FILE]`; `lint --against` uses it.
-- `openapi.generator: none` takes the OpenAPI plugin out of `buf.gen.yaml`. The project then keeps `api/openapi/openapi.yaml` itself; the module serves it as before, `generate` never removes it and `verify` does not compare it. `platform` is reserved for the platform's own generator and fails until a release ships it. `api/openapi/base.yaml` is still created: with `none` nothing reads it, and it keeps the embed of `api/openapi` compiling before the project adds its description.
+- `openapi.generator: platform` writes the description with the platform's own plugin, `protoc-gen-platform-openapi`, instead of protoc-gen-connect-openapi: the same `api/openapi/openapi.yaml` merged into `base.yaml`, but derived from what the gateway serves. `apply` pins the plugin in `go.mod` in place of the connect one; it is a package of the platform module, so its version is the platform's. See [The platform's OpenAPI generator](#the-platforms-openapi-generator).
+- `openapi.generator: none` takes the OpenAPI plugin out of `buf.gen.yaml`. The project then keeps `api/openapi/openapi.yaml` itself; the module serves it as before, `generate` never removes it and `verify` does not compare it. `api/openapi/base.yaml` is still created: with `none` nothing reads it, and it keeps the embed of `api/openapi` compiling before the project adds its description.
+
+### The platform's OpenAPI generator
+
+`openapi.generator: platform` describes the REST API the way the gateway of the module serves it, and a test of the platform starts the gateway and checks its real answers against the description, so the two cannot drift apart:
+
+- paths and methods from `google.api.http` with `additional_bindings`, `body: "*"`, `body: "<field>"` and `response_body`; path variables, `{name=shelves/*}` as `{name}` with a pattern; every field that is neither in the path nor in the body is a query parameter, nested ones as `a.b`, a map of scalars as `m[key]=value`; lists and maps of messages have no query form. Two bindings of one method that differ only in the segments a variable matches are one operation whose pattern takes both. Methods without `google.api.http` are not served over REST and are left out; a stream is one JSON object a line;
+- JSON as the gateway writes it: proto field names, enums by name, 64-bit integers as strings (a request takes a number too), bytes in base64, maps as objects, well-known types in their JSON form (Timestamp, Duration, FieldMask, Struct, Value, ListValue, Any, Empty, the wrappers), `google.api.HttpBody` as the raw body;
+- a response and a request differ. In a response every field is present and required, since the gateway writes unpopulated fields, except members of a `oneof` and proto3 `optional` fields, which it writes only when set; a message field, a wrapper or a proto2 field is `null` when unset; no other field may appear. In a request a field is required only when protovalidate says so, and translatable fields of the i18n module never are. A message used on both sides has a schema per side, the request one named `<message>Input`;
+- protovalidate rules as JSON Schema keywords — lengths, patterns, prefixes, bounds, `in` and `not_in` (a 64-bit integer in both its forms), formats such as `uuid`, `email`, `uri`, item and pair counts, unique items, examples — and the rest, CEL among it, as a list under the description; `ignore: IGNORE_IF_ZERO_VALUE` lets the zero value through; a `oneof` as at most one member set, exactly one when it is required;
+- a request with a field of a file message — one with `content` bytes and a `filename` or `content_type` — takes `multipart/form-data` as well as JSON: a file part per file field, several parts or `images[0]`, `images[2]` for a list, JSON parts for message fields, well-known types too (a time is a quoted string), text parts for the rest, as the decoder of the module accepts them;
+- one error body, `Error` (`google.rpc.Status` with the protovalidate violations and `google.rpc.ErrorInfo` among the details), as the `default` answer of every operation, with the HTTP statuses the gateway answers for the gRPC codes;
+- documentation from the leading comments of services, methods, messages, fields and enum values, the trailing one when there is none; a short first paragraph of a method is its summary. `deprecated` options become `deprecated: true`. A tag per service, named by the short name unless two services share it.
+
+`base.yaml` keeps what it says: info, servers, security, its tags and their descriptions, its own components; the generator adds tags it found, the paths and the schemas, and a schema of the same name replaces the one in the base. The output is deterministic, so `verify` compares bytes.
 
 The handler is registered from `wire.go`:
 

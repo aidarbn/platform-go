@@ -51,7 +51,7 @@ Modules document their variables in the generated `.env.example`. Variables of t
 | Module | Options |
 |---|---|
 | `admin`, `i18n`, `rbac`, `river`, `s3` | none: everything else is environment variables or project files, see [modules.md](modules.md) |
-| `api` | `proto_dir` — the proto folder, `proto` by default; `buf.deps` and `buf.breaking_except` on top of the platform's; `openapi.generator` — `connect` (default) or `none`, see [modules.md](modules.md#the-api-module) |
+| `api` | `proto_dir` — the proto folder, `proto` by default; `buf.deps` and `buf.breaking_except` on top of the platform's; `openapi.generator` — `connect` (default), `platform` or `none`, see [modules.md](modules.md#the-api-module) |
 | `postgres` | `sqlc` — where `sqlc.yaml`, the queries and the generated code live and Go types on top of the platform's; the defaults are `db/sqlc.yaml`, `db/queries`, `internal/db/sqlcgen`, see [modules.md](modules.md#the-postgres-module) |
 | `settings` | `schema` — the business settings schema file, `settings.yaml` by default |
 | `enums` | `domain` — the Go package scanned for go-enum markers, `internal/domain` by default |

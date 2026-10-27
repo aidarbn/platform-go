@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/aidarbn/platform-go/internal/gen"
+	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
 
@@ -145,6 +146,36 @@ func TestAPIWithoutOpenAPIGenerator(t *testing.T) {
 	}
 }
 
+// generator: platform runs the platform's own plugin instead of connect, with the same
+// output and base, and pins it in go.mod in place of the connect plugin.
+func TestAPIPlatformOpenAPIGenerator(t *testing.T) {
+	f := mustParse(t, apiProject+"  api:\n    openapi: {generator: platform}\n")
+	files, err := gen.Wiring(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufGen := string(files[gen.BufGenPath])
+	want := "  - local: [go, tool, protoc-gen-platform-openapi]\n    out: api/openapi\n    strategy: all\n"
+	if strings.Contains(bufGen, "connect-openapi") || !strings.Contains(bufGen, want) || !strings.Contains(bufGen, "- base=api/openapi/base.yaml") {
+		t.Errorf("buf.gen.yaml:\n%s", bufGen)
+	}
+	s, err := gen.API(f)
+	if err != nil || !s.GeneratesOpenAPI() {
+		t.Fatalf("settings = %+v, %v", s, err)
+	}
+	tools := []registry.Tool{{Package: "github.com/bufbuild/buf/cmd/buf"}, {Package: gen.ConnectOpenAPITool}}
+	got := s.Tools(tools, "v1.2.3")
+	if len(got) != 2 || got[0].Package != "github.com/bufbuild/buf/cmd/buf" || got[1] != (registry.Tool{Module: gen.PlatformModule, Package: gen.PlatformOpenAPITool, Version: "v1.2.3"}) {
+		t.Errorf("tools = %+v", got)
+	}
+	for _, other := range []string{"connect", "none"} {
+		s, _ := gen.API(mustParse(t, apiProject+"  api:\n    openapi: {generator: "+other+"}\n"))
+		if got := s.Tools(tools, "v1.2.3"); len(got) != 2 || got[1].Package != gen.ConnectOpenAPITool {
+			t.Errorf("%s: tools = %+v", other, got)
+		}
+	}
+}
+
 func TestAPIRejectsBadSettings(t *testing.T) {
 	for _, tc := range []struct{ section, want string }{
 		{"proto_dir: /abs", `proto_dir "/abs" must be a folder inside the project`},
@@ -159,7 +190,6 @@ func TestAPIRejectsBadSettings(t *testing.T) {
 		{"buf: {deps: [\"buf.build/a/b\\nx\"]}", `is not a buf module`},
 		{"buf: {deps: [buf.build/a/b, buf.build/a/b:v1]}", "buf.deps: buf.build/a/b is listed twice"},
 		{"buf: {breaking_except: [field_no_delete]}", `"field_no_delete" is not a buf rule`},
-		{"openapi: {generator: platform}", "openapi.generator: platform is not available in this version yet"},
 		{"openapi: {generator: v2}", "must be one of connect, platform, none"},
 	} {
 		f, err := spec.Parse([]byte(apiProject + "  api:\n    " + tc.section + "\n"))

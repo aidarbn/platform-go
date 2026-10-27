@@ -1,0 +1,23 @@
+# The human part: the generator merges paths and schemas into it.
+openapi: 3.1.0
+info:
+  title: Shop API
+  version: "2.0"
+  description: |
+    The shop.
+
+    Two paragraphs.
+servers:
+  - url: https://shop.example.com
+security:
+  - bearerAuth: []
+tags:
+  - name: ProductService
+    description: Products, as the base file describes them.
+  - name: Guides
+    description: A tag of the base only.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

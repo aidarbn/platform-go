@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+// The shop test API: every kind of binding the gateway serves.
+package shop.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "shop/v1/types.proto";
+
+// Products of the menu: list, read, change.
+service ProductService {
+  // List products.
+  //
+  // Filters combine with AND. The list is ordered by name.
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse) {
+    option (google.api.http) = {
+      get: "/v1/products"
+      additional_bindings {get: "/v1/categories/{category_id}/products"}
+    };
+  }
+
+  // Read a product.
+  rpc GetProduct(GetProductRequest) returns (Product) {
+    option (google.api.http) = {
+      get: "/v1/{name=shops/*/products/*}"
+      additional_bindings {get: "/v1/{name=orgs/*/products/*}"}
+    };
+  }
+
+  // Create a product from the body.
+  rpc CreateProduct(CreateProductRequest) returns (Product) {
+    option (google.api.http) = {
+      post: "/v1/shops/{shop_id}/products"
+      body: "product"
+    };
+  }
+
+  // Change a product: the fields named by the mask.
+  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse) {
+    option (google.api.http) = {
+      patch: "/v1/products/{product.id}"
+      body: "*"
+      response_body: "product"
+    };
+  }
+
+  // Upload the images of a product.
+  rpc UploadImages(UploadImagesRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      put: "/v1/products/{id}/images"
+      body: "*"
+    };
+  }
+
+  // Archive a product.
+  rpc ArchiveProduct(ArchiveProductRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
+    option (google.api.http) = {post: "/v1/products/{id}:archive"};
+  }
+
+  // Export the menu as CSV.
+  rpc Export(ExportRequest) returns (google.api.HttpBody) {
+    option (google.api.http) = {get: "/v1/export"};
+  }
+
+  // Changes of products as they happen.
+  rpc Watch(WatchRequest) returns (stream Product) {
+    option (google.api.http) = {get: "/v1/products:watch"};
+  }
+
+  // Not served over REST: no google.api.http.
+  rpc Internal(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+message ListProductsRequest {
+  int64 category_id = 1;
+  Status status = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  int32 page_size = 3 [(buf.validate.field).int32 = {gte: 1, lte: 100}];
+  repeated string labels = 4;
+  Filter filter = 5;
+  google.protobuf.Duration fresh_within = 6;
+  map<string, string> attrs = 7;
+  map<string, Image> images = 9;
+  string query = 8 [(buf.validate.field).required = true];
+}
+
+message Filter {
+  string text = 1 [(buf.validate.field).string.max_len = 50];
+  Range price = 2;
+}
+
+message Range {
+  uint64 from = 1;
+  uint64 to = 2;
+}
+
+message ListProductsResponse {
+  repeated Product products = 1;
+  string next_page_token = 2;
+}
+
+message GetProductRequest {
+  // shops/{shop}/products/{product}
+  string name = 1;
+}
+
+message CreateProductRequest {
+  string shop_id = 1 [(buf.validate.field).string.uuid = true];
+  Product product = 2 [(buf.validate.field).required = true];
+}
+
+message UpdateProductRequest {
+  option (buf.validate.message).cel = {
+    id: "mask"
+    message: "the mask names fields of the product"
+    expression: "this.update_mask.paths.all(p, p != 'id')"
+  };
+  Product product = 1 [(buf.validate.field).required = true];
+  google.protobuf.FieldMask update_mask = 2;
+  oneof reason {
+    option (buf.validate.oneof).required = true;
+    string comment = 3;
+    int32 ticket = 4;
+  }
+}
+
+message UpdateProductResponse {
+  Product product = 1;
+}
+
+message UploadImagesRequest {
+  int64 id = 1;
+  repeated FileData images = 2;
+  FileData cover = 3 [(buf.validate.field).required = true];
+  Image meta = 4;
+  string caption = 5;
+  google.protobuf.Timestamp taken_at = 6;
+}
+
+message ArchiveProductRequest {
+  int64 id = 1;
+}
+
+message ExportRequest {
+  string format = 1 [(buf.validate.field).string = {in: ["csv", "xlsx"]}];
+}
+
+message WatchRequest {}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aidarbn/platform-go/internal/lock"
+	"github.com/aidarbn/platform-go/internal/registry"
 	"github.com/aidarbn/platform-go/internal/spec"
 )
 
@@ -102,6 +103,19 @@ const connectOpenAPIPlugin = `  - local: [go, tool, protoc-gen-connect-openapi]
       - short-operation-ids
 `
 
+// platformOpenAPIPlugin writes the OpenAPI description, the generator platform: the
+// platform's own plugin, which describes what the gateway of the api module really
+// serves. It is a package of the platform module itself, so the version the project
+// requires is the version that writes its description.
+const platformOpenAPIPlugin = `  - local: [go, tool, protoc-gen-platform-openapi]
+    out: api/openapi
+    strategy: all
+    opt:
+      # The human part of the description: title, intro, tags, security scheme.
+      - base=api/openapi/base.yaml
+      - path=openapi.yaml
+`
+
 // OpenAPIBaseExample is the starting point of the description: the generator never
 // touches it again, so the project can say what its API is for.
 const OpenAPIBaseExample = `# The human part of the API description: the generator fills paths and schemas from the
@@ -190,7 +204,11 @@ func bufGenConfig(f *spec.File, s APISettings) []byte {
 	}
 	bufGen := strings.ReplaceAll(bufGenYAML, "{{module}}", f.Project.Module)
 	bufGen = strings.Replace(bufGen, "{{deps}}", deps.String(), 1)
-	if s.GeneratesOpenAPI() {
+	switch s.OpenAPI.Generator {
+	case OpenAPIPlatform:
+		bufGen += platformOpenAPIPlugin
+	case OpenAPINone:
+	default:
 		bufGen += connectOpenAPIPlugin
 	}
 	if _, ok := f.Modules["i18n"]; ok {
@@ -203,7 +221,7 @@ func bufGenConfig(f *spec.File, s APISettings) []byte {
 // The generators of the OpenAPI description, the openapi.generator option of api.
 const (
 	OpenAPIConnect  = "connect"  // protoc-gen-connect-openapi, one api/openapi/openapi.yaml
-	OpenAPIPlatform = "platform" // the platform's own generator, not available yet
+	OpenAPIPlatform = "platform" // protoc-gen-platform-openapi, the platform's own generator
 	OpenAPINone     = "none"     // none: the project keeps api/openapi/openapi.yaml itself
 )
 
@@ -277,14 +295,34 @@ func API(f *spec.File) (APISettings, error) {
 			errs = append(errs, fmt.Errorf("buf.breaking_except: %q is not a buf rule or category such as FIELD_NO_DELETE", rule))
 		}
 	}
-	if s.OpenAPI.Generator == OpenAPIPlatform {
-		errs = append(errs, errors.New("openapi.generator: platform is not available in this version yet; use connect or none"))
-	}
 	if err := errors.Join(errs...); err != nil {
 		return APISettings{}, fmt.Errorf("module api: %w", err)
 	}
 	return s, nil
 }
+
+// Tools are the buf plugins the api module pins in go.mod, by the OpenAPI generator: the
+// connect plugin for connect, the platform's plugin for platform, neither for none
+// keeps the connect plugin a project had, as before the option existed.
+func (s APISettings) Tools(tools []registry.Tool, platformVersion string) []registry.Tool {
+	if s.OpenAPI.Generator != OpenAPIPlatform {
+		return tools
+	}
+	out := make([]registry.Tool, 0, len(tools))
+	for _, t := range tools {
+		if t.Package != ConnectOpenAPITool {
+			out = append(out, t)
+		}
+	}
+	return append(out, registry.Tool{Module: PlatformModule, Package: PlatformOpenAPITool, Version: platformVersion})
+}
+
+// The OpenAPI plugins as go tool packages.
+const (
+	ConnectOpenAPITool  = "github.com/sudorandom/protoc-gen-connect-openapi"
+	PlatformModule      = "github.com/aidarbn/platform-go"
+	PlatformOpenAPITool = PlatformModule + "/cmd/protoc-gen-platform-openapi"
+)
 
 // ProtoPath is a file under the proto folder.
 func (s APISettings) ProtoPath(rel string) string { return path.Join(s.ProtoDir, rel) }

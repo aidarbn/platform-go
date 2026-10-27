@@ -1,0 +1,7 @@
+syntax = "proto3";
+package bad.v1;
+import "google/api/annotations.proto";
+message M { string id = 1; }
+service S {
+  rpc A(M) returns (M) { option (google.api.http) = {get: "/v1/{id"}; }
+}

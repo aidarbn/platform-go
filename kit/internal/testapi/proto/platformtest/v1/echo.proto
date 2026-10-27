@@ -6,6 +6,13 @@ package platformtest.v1;
 
 import "buf/validate/validate.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 
 option go_package = "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1;platformtestv1";
 
@@ -36,6 +43,12 @@ service EchoService {
       post: "/v1/old-echo"
       body: "*"
     };
+  }
+
+  // Every form of JSON the gateway writes, for the test of the OpenAPI description:
+  // full=true sets every field, without it every field keeps its zero value.
+  rpc Kinds(KindsRequest) returns (KindsResponse) {
+    option (google.api.http) = {get: "/v1/kinds/{id}"};
   }
 
   // A method that creates something, for idempotency.
@@ -101,3 +114,48 @@ message FailRequest {
 }
 
 message FailResponse {}
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  COLOR_RED = 1;
+  COLOR_GREEN = 2;
+}
+
+message KindsRequest {
+  int64 id = 1;
+  bool full = 2;
+  Color color = 3;
+  repeated string tags = 4;
+}
+
+message KindsResponse {
+  int64 id = 1;
+  uint64 big = 2;
+  int32 small = 3;
+  double ratio = 4;
+  float part = 5;
+  bool flag = 6;
+  string text = 7;
+  bytes data = 8;
+  Color color = 9;
+  repeated string tags = 10;
+  map<string, int64> counts = 11;
+  Meta meta = 12;
+  optional string note = 13;
+  oneof choice {
+    string word = 14;
+    int32 number = 15;
+  }
+  google.protobuf.Timestamp at = 16;
+  google.protobuf.Duration took = 17;
+  google.protobuf.StringValue maybe = 18;
+  google.protobuf.Struct extra = 19;
+  google.protobuf.Value anything = 20;
+  repeated Meta metas = 21;
+  google.protobuf.FieldMask mask = 22;
+  google.protobuf.Any packed = 23;
+  google.protobuf.Empty nothing = 24;
+  map<int32, Meta> by_number = 25;
+  sint64 negative = 26;
+  fixed32 unsigned = 27;
+}

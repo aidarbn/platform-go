@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+// Every protovalidate rule the generator maps, on one request.
+package rules.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+service RulesService {
+  rpc Check(CheckRequest) returns (CheckResponse) {
+    option (google.api.http) = {
+      post: "/v1/check"
+      body: "*"
+      additional_bindings {
+        custom: {kind: "HEAD", path: "/v1/check"}
+      }
+      additional_bindings {
+        custom: {kind: "OPTIONS", path: "/v1/check"}
+      }
+      additional_bindings {
+        custom: {kind: "TRACE", path: "/v1/check"}
+      }
+      additional_bindings {
+        custom: {kind: "LIST", path: "/v1/check"}
+      }
+    };
+  }
+
+  rpc Put(CheckResponse) returns (google.protobuf.Struct) {
+    option (google.api.http) = {
+      put: "/v1/values"
+      body: "*"
+    };
+  }
+
+  rpc Del(google.protobuf.StringValue) returns (CheckResponse) {
+    option (google.api.http) = {
+      delete: "/v1/values/{value}"
+    };
+  }
+
+  rpc Upload(stream CheckResponse) returns (CheckResponse) {
+    option (google.api.http) = {
+      post: "/v1/stream"
+      body: "*"
+    };
+  }
+}
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_LOW = 1;
+  LEVEL_HIGH = 2;
+}
+
+message CheckRequest {
+  string email = 1 [(buf.validate.field).string.email = true];
+  string host = 2 [(buf.validate.field).string.hostname = true];
+  string v4 = 3 [(buf.validate.field).string.ipv4 = true];
+  string v6 = 4 [(buf.validate.field).string.ipv6 = true];
+  string ref = 5 [(buf.validate.field).string.uri_ref = true];
+  string tuuid = 6 [(buf.validate.field).string.tuuid = true];
+  string ulid = 7 [(buf.validate.field).string.ulid = true];
+  string ip = 8 [(buf.validate.field).string.ip = true];
+  string address = 9 [(buf.validate.field).string.address = true];
+  string host_port = 10 [(buf.validate.field).string.host_and_port = true];
+  string cidr = 11 [(buf.validate.field).string.ip_with_prefixlen = true];
+  string prefix = 12 [(buf.validate.field).string.ip_prefix = true];
+  string fqn = 13 [(buf.validate.field).string.protobuf_fqn = true];
+  string header_name = 14 [(buf.validate.field).string.well_known_regex = KNOWN_REGEX_HTTP_HEADER_NAME];
+  string header_value = 15 [(buf.validate.field).string.well_known_regex = KNOWN_REGEX_HTTP_HEADER_VALUE];
+  string fixed = 16 [(buf.validate.field).string = {
+    const: "x"
+    len: 1
+    len_bytes: 1
+    min_bytes: 1
+  }];
+  string many = 17 [(buf.validate.field).string = {
+    pattern: "^[a-z]+$"
+    suffix: ".go"
+    contains: "_"
+    not_contains: "--"
+  }];
+  string not_these = 18 [(buf.validate.field).string = {not_in: ["a", "b"]}];
+  bytes blob = 19 [(buf.validate.field).bytes = {
+    len: 4
+    min_len: 1
+    max_len: 8
+    pattern: "^.+$"
+  }];
+  bytes addr = 20 [(buf.validate.field).bytes.ipv4 = true];
+  bytes addr6 = 21 [(buf.validate.field).bytes.ipv6 = true];
+  bytes addr_any = 22 [(buf.validate.field).bytes.ip = true];
+  bytes id = 23 [(buf.validate.field).bytes.uuid = true];
+  float ratio = 24 [(buf.validate.field).float = {
+    finite: true
+    in: [0.1, 0.5]
+    example: 0.1
+  }];
+  int64 outside = 25 [(buf.validate.field).int64 = {gt: 10, lt: 5}];
+  int32 picked = 26 [(buf.validate.field).int32 = {
+    not_in: [3]
+    const: 4
+  }];
+  sint64 small = 27 [(buf.validate.field).sint64 = {lte: 0, gte: -9}];
+  Level level = 28 [(buf.validate.field).enum.const = 2];
+  Level levels = 29 [(buf.validate.field).enum = {in: [1, 2]}];
+  bool yes = 30 [(buf.validate.field).bool.const = true];
+  google.protobuf.Timestamp past = 31 [(buf.validate.field).timestamp = {lt_now: true}];
+  google.protobuf.Duration short = 32 [(buf.validate.field).duration = {lt: {seconds: 60}}];
+  google.protobuf.Any packed = 33 [(buf.validate.field).any = {in: ["type.googleapis.com/rules.v1.CheckRequest"]}];
+  map<bool, string> flags = 34 [(buf.validate.field).map = {
+    min_pairs: 1
+    values: {string: {min_len: 2}}
+  }];
+  repeated int64 ids = 35 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {
+      int64: {gt: 0}
+      cel: {id: "even", expression: "this % 2 == 0"}
+    }
+  }];
+  string skipped = 36 [(buf.validate.field).ignore = IGNORE_ALWAYS, (buf.validate.field).string.min_len = 5];
+  string checked = 37 [(buf.validate.field).cel = {id: "c", expression: "this != 'x'"}];
+  google.protobuf.ListValue list = 38;
+  google.protobuf.NullValue nothing = 39;
+  repeated google.protobuf.Timestamp times = 40;
+  google.protobuf.Int64Value wrapped = 41;
+  string maybe_email = 42 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.email = true
+  ];
+  repeated string few = 43 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).repeated.min_items = 2
+  ];
+  int64 chosen = 44 [(buf.validate.field).int64 = {in: [1, 2]}];
+  uint64 seven = 45 [(buf.validate.field).uint64.const = 7];
+  int64 not_five = 46 [(buf.validate.field).int64 = {not_in: [5], gte: 0}];
+  string both = 47 [(buf.validate.field).string = {pattern: "^a", tuuid: true, not_contains: "b", not_in: ["c"]}];
+  map<int32, string> by_id = 48 [(buf.validate.field).map.keys.int32.gt = 0];
+  Level lvl = 49 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).enum.in = 1
+  ];
+  int64 big_zero = 50 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).int64.gt = 10
+  ];
+  map<string, string> named = 51 [(buf.validate.field).map.keys.string.min_len = 1];
+  optional string opt_email = 52 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.email = true
+  ];
+}
+
+message CheckResponse {
+  option (buf.validate.message).oneof = {fields: ["a", "b"], required: true};
+  option (buf.validate.message).oneof = {fields: ["a", "c"]};
+  string a = 1;
+  string b = 2;
+  string c = 3;
+  google.protobuf.Value any = 4;
+  CheckResponse self = 5;
+}
