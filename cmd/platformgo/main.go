@@ -202,7 +202,7 @@ func sqlcLayout(plan *apply.Plan) codegen.SqlcLayout {
 
 // apiLayout is where buf works in the project, from the options of api.
 func apiLayout(plan *apply.Plan) codegen.APILayout {
-	return codegen.APILayout{ProtoDir: plan.API.ProtoDir, OpenAPI: plan.API.GeneratesOpenAPI()}
+	return codegen.APILayout{ProtoDir: plan.API.ProtoDir, OpenAPI: plan.API.GeneratesOpenAPI(), Split: plan.API.OpenAPI.Generator == gen.OpenAPIPlatform}
 }
 
 func cmdVerify(args []string, out io.Writer) error {

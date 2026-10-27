@@ -111,9 +111,10 @@ const platformOpenAPIPlugin = `  - local: [go, tool, protoc-gen-platform-openapi
     out: api/openapi
     strategy: all
     opt:
-      # The human part of the description: title, intro, tags, security scheme.
+      # The human part of the description: title, intro, tags, security scheme. The
+      # plugin writes openapi.yaml with the paths of every proto file in a yaml of its
+      # own next to it, common.yaml, and openapi.bundle.yaml, which the service serves.
       - base=api/openapi/base.yaml
-      - path=openapi.yaml
 `
 
 // OpenAPIBaseExample is the starting point of the description: the generator never

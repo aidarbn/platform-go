@@ -53,7 +53,17 @@ func (g *generator) drain() {
 		q := g.queue[0]
 		g.queue = g.queue[1:]
 		g.schemas[q.name] = g.message(q.md, q.dir, nil)
+		g.homes[q.name] = g.home(q.md.ParentFile())
 	}
+}
+
+// home is the proto file whose yaml holds the schemas of a file: the file itself when
+// it is described, common.yaml ("") for a dependency such as googleapis.
+func (g *generator) home(f protoreflect.FileDescriptor) string {
+	if g.targets[f.Path()] {
+		return f.Path()
+	}
+	return ""
 }
 
 // markOutputs records every message a response can hold.
@@ -282,6 +292,7 @@ func (g *generator) enum(ed protoreflect.EnumDescriptor) *Schema {
 			s.Deprecated = true
 		}
 		g.schemas[name] = s
+		g.homes[name] = g.home(ed.ParentFile())
 	}
 	return &Schema{Ref: schemaRef + name}
 }

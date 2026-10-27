@@ -221,7 +221,7 @@ func removeGenerated(project, rel, mark string) error {
 			dirs = append(dirs, path)
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") {
+		if !strings.HasSuffix(path, extOf(mark)) {
 			return nil
 		}
 		generated, err := hasMark(path, mark)
@@ -271,6 +271,15 @@ func generatedFiles(root, mark string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// extOf is the extension of the files a mark is written into: YAML for the comment of
+// the OpenAPI generator, Go for the others.
+func extOf(mark string) string {
+	if strings.HasPrefix(mark, "#") {
+		return ".yaml"
+	}
+	return ".go"
 }
 
 func hasMark(path, mark string) (bool, error) {

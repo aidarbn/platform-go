@@ -17,19 +17,22 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// The schemas of the specification, from https://spec.openapis.org/oas/3.1/, version
-// 2022-10-07: the document, the document with schemas in the OpenAPI dialect, the
-// dialect and its vocabulary.
+// The schemas of the specification, from https://spec.openapis.org/oas/3.1/: the
+// document (2025-09-15, which allows $ref in a path item as the specification does),
+// the document with schemas in the OpenAPI dialect, the dialect and its vocabulary
+// (2024-11-10).
 //
 //go:embed schemas/*.json
 var specFS embed.FS
 
 var specSchemas = map[string]string{
-	"https://spec.openapis.org/oas/3.1/schema/2022-10-07":      "schemas/schema.json",
-	"https://spec.openapis.org/oas/3.1/schema-base/2022-10-07": "schemas/schema-base.json",
-	"https://spec.openapis.org/oas/3.1/dialect/base":           "schemas/dialect-base.json",
-	"https://spec.openapis.org/oas/3.1/meta/base":              "schemas/meta-base.json",
+	"https://spec.openapis.org/oas/3.1/schema/2025-09-15":      "schemas/schema.json",
+	"https://spec.openapis.org/oas/3.1/schema-base/2025-09-15": "schemas/schema-base.json",
+	"https://spec.openapis.org/oas/3.1/dialect/2024-11-10":     "schemas/dialect-base.json",
+	"https://spec.openapis.org/oas/3.1/meta/2024-11-10":        "schemas/meta-base.json",
 }
+
+const specURL = "https://spec.openapis.org/oas/3.1/schema-base/2025-09-15"
 
 const docURL = "mem:///openapi.json"
 
@@ -68,7 +71,7 @@ func Validate(doc []byte) error {
 			return err
 		}
 	}
-	spec, err := c.Compile("https://spec.openapis.org/oas/3.1/schema-base/2022-10-07")
+	spec, err := c.Compile(specURL)
 	if err != nil {
 		return fmt.Errorf("compile the schema of the specification: %w", err)
 	}

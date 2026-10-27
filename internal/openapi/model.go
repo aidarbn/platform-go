@@ -39,6 +39,7 @@ type Components struct {
 
 // PathItem holds the operations of one path.
 type PathItem struct {
+	Ref     string     `yaml:"$ref,omitempty"` // the item in the file of its proto file
 	Get     *Operation `yaml:"get,omitempty"`
 	Put     *Operation `yaml:"put,omitempty"`
 	Post    *Operation `yaml:"post,omitempty"`
