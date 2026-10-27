@@ -149,7 +149,7 @@ groups:
 
 ## The `postgres` module
 
-A PostgreSQL pool with a health check and pool metrics, the local database in `docker-compose.yml`, and migrations.
+A PostgreSQL pool with a health check and pool metrics, `numeric` as `decimal.Decimal`, connection hooks for the types of the project, the local database in `docker-compose.yml`, and migrations.
 
 Migrations are goose SQL files in `db/migrations`:
 
@@ -159,6 +159,56 @@ created db/migrations/20260914073005_create_orders.sql
 ```
 
 The directory is embedded into the binary by the generated `db/migrations/migrations.gen.go`, and the module applies pending migrations during startup, before any other module touches the database. A session advisory lock makes several instances starting at once apply each migration exactly once. Set `DATABASE_MIGRATE=false` when migrations run as a separate deploy step.
+
+### Pool, types and connection hooks
+
+The pool is configured by environment variables:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `DATABASE_URL` | required | database address |
+| `DATABASE_MAX_CONNS` | 10 | connection limit |
+| `DATABASE_MIN_CONNS` | 0 | connections kept open |
+| `DATABASE_MAX_CONN_LIFETIME` | 1h | a connection is replaced after this time |
+| `DATABASE_MAX_CONN_IDLE_TIME` | 30m | an idle connection is closed after this time |
+| `DATABASE_CONNECT_TIMEOUT` | 5s | timeout of a new connection and of the start check |
+| `DATABASE_MIGRATE` | true | apply migrations on start |
+
+Every connection gets the types of the platform first: `numeric` is read and written as `decimal.Decimal` (`github.com/shopspring/decimal`, the type `db/sqlc.yaml` maps it to) with the binary codec of `pgx-shopspring-decimal`, as in taply. Money and percentages never pass through `float64`.
+
+The module is built by the generated `modules.gen.go`, so a project passes its own options in `main.go` with `postgres.Apply`, before `platform.Run`:
+
+```go
+modules := platformModules(cfg)
+if err := postgres.Apply(modules,
+	// sizes of the application: they replace the defaults of the platform,
+	// while a DATABASE_* variable that is set still wins
+	postgres.WithDefaults(postgres.PoolSizes{MaxConns: 25, MinConns: 5, MaxConnIdleTime: 10 * time.Minute}),
+	// runs on every new connection, after the platform types: enums, composite types
+	postgres.WithAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+		t, err := conn.LoadType(ctx, "order_status")
+		if err != nil {
+			return err
+		}
+		conn.TypeMap().RegisterType(t)
+		return nil
+	}),
+	// anything else of pgxpool.Config: a tracer, BeforeAcquire, runtime parameters
+	postgres.WithPoolConfig(func(c *pgxpool.Config) {
+		c.ConnConfig.RuntimeParams["application_name"] = serviceName
+	}),
+); err != nil {
+	log.Fatal(err)
+}
+if err := platform.Run(platform.Config{Service: serviceName}, modules, wireDomain); err != nil {
+	log.Fatal(err)
+}
+```
+
+- For each pool size the first of these wins: the `DATABASE_*` variable, if it is set (even to `0`), or a value the project put into `cfg.Postgres` after `LoadConfig`; the value of `WithDefaults`; the default of the platform. A zero field of `PoolSizes` keeps the platform default.
+- Hooks of `WithAfterConnect` and functions of `WithPoolConfig` run in the order they were added. A failing hook discards the connection; on start that fails the database check.
+- `Apply` fails when the modules have no `postgres` module, so hooks the project relies on are never dropped silently.
+- Without the module, `pgdb.Open` takes the same through `pgdb.Config`: the sizes, and `Hooks` with `AfterConnect` and `ConfigurePool`. `pgdb.RegisterTypes` registers the platform types on a connection opened by other means.
 
 Queries come in two kinds, as in taply:
 

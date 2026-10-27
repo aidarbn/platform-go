@@ -110,3 +110,16 @@ func TestFailIsReportedWithTheRest(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestIsSet(t *testing.T) {
+	t.Setenv("APP_SET", "0")
+	t.Setenv("APP_BLANK", "  ")
+
+	l := confx.New("APP")
+	if !l.IsSet("SET") {
+		t.Error("IsSet(SET) = false: a zero value is still a value")
+	}
+	if l.IsSet("BLANK") || l.IsSet("MISSING") {
+		t.Error("IsSet must be false for a blank or missing variable")
+	}
+}
