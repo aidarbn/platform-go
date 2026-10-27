@@ -289,6 +289,8 @@ var all = []Module{
 			{Key: "RIVER_COMPLETED_RETENTION", Example: "24h", Comment: "how long completed jobs are kept"},
 			{Key: "RIVER_CANCELLED_RETENTION", Example: "24h", Comment: "how long cancelled jobs are kept"},
 			{Key: "RIVER_DISCARDED_RETENTION", Example: "168h", Comment: "how long discarded jobs are kept"},
+			{Key: "RIVER_STOP_TIMEOUT", Example: "", Comment: "on shutdown, how long running jobs may finish; empty waits as long as SHUTDOWN_TIMEOUT allows"},
+			{Key: "RIVER_CANCEL_TIMEOUT", Example: "", Comment: "then how long cancelled jobs get to return; empty waits without a limit"},
 		},
 	},
 	{
