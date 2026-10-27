@@ -7,6 +7,9 @@
 //	    out: api/openapi
 //	    strategy: all
 //	    opt: [base=api/openapi/base.yaml, path=openapi.yaml]
+//
+// With documents=platformgo.yaml it also writes openapi.<name>.bundle.yaml for every
+// document of api.openapi.documents in that file, a description for one audience each.
 package main
 
 import (

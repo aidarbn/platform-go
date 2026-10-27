@@ -1,0 +1,35 @@
+# The documents for the audiences of the restaurants API; the rest of the file is
+# what a project has, and the generator reads only api.openapi.documents.
+schema: 1
+project:
+  module: example.com/restaurants
+modules:
+  postgres: {}
+  api:
+    proto_dir: proto
+    openapi:
+      generator: platform
+      documents:
+        - name: tablet
+          title: Restaurants API — the tablet
+          description: What the tablet in a branch calls.
+          include:
+            tag_groups: [Tablet API]
+        - name: manager
+          title: Restaurants API — the manager
+          include:
+            tag_groups: [Manager API]
+        - name: superadmin
+          title: Restaurants API — the superadmin
+          include:
+            services: [aud.admin.v1.AdminService]
+        - name: public
+          include:
+            tag_groups: [Public API]
+            tags: [Tablet]
+          exclude:
+            tags: [Tablet]
+        - name: partner
+          description: Everything but the superadmin.
+          exclude:
+            tag_groups: [Superadmin API]

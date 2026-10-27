@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+// The API of the manager of a restaurant.
+package aud.manager.v1;
+
+import "aud/common/v1/common.proto";
+import "google/api/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+// Products of the restaurant.
+service ProductService {
+  option (platform.openapi.v1.service) = {
+    tag: "Products"
+    tag_group: "Manager API"
+  };
+
+  // The products.
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse) {
+    option (google.api.http) = {get: "/v1/manager/products"};
+  }
+
+  // Change a product.
+  rpc UpdateProduct(Product) returns (Product) {
+    option (google.api.http) = {
+      patch: "/v1/manager/products/{id}"
+      body: "*"
+    };
+  }
+}
+
+// Branches of the restaurant.
+service BranchService {
+  option (platform.openapi.v1.service) = {
+    tag: "Branches"
+    tag_group: "Manager API"
+  };
+
+  // The branches.
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse) {
+    option (google.api.http) = {get: "/v1/manager/branches"};
+  }
+}
+
+message ListProductsRequest {}
+
+message ListProductsResponse {
+  repeated Product products = 1;
+}
+
+message Product {
+  string id = 1;
+  string name = 2;
+  aud.common.v1.Money price = 3;
+}
+
+message ListBranchesRequest {}
+
+message ListBranchesResponse {
+  repeated aud.common.v1.Branch branches = 1;
+}

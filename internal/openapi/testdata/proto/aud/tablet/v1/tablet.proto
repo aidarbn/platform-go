@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+// The API of the tablet in a branch.
+package aud.tablet.v1;
+
+import "aud/common/v1/common.proto";
+import "google/api/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+// What the tablet calls.
+service TabletService {
+  option (platform.openapi.v1.service) = {
+    tag: "Tablet"
+    tag_group: "Tablet API"
+  };
+
+  // The menu the tablet shows.
+  rpc GetMenu(GetMenuRequest) returns (Menu) {
+    option (google.api.http) = {get: "/v1/tablet/menu"};
+  }
+
+  // Place an order.
+  rpc CreateOrder(Order) returns (Order) {
+    option (platform.openapi.v1.method) = {tag: "Tablet orders"};
+    option (google.api.http) = {
+      post: "/v1/tablet/orders"
+      body: "*"
+    };
+  }
+}
+
+message GetMenuRequest {}
+
+message Menu {
+  aud.common.v1.Branch branch = 1;
+  repeated MenuItem items = 2;
+}
+
+message MenuItem {
+  string name = 1;
+  aud.common.v1.Money price = 2;
+}
+
+message Order {
+  string id = 1;
+  repeated OrderLine lines = 2;
+}
+
+message OrderLine {
+  string item = 1;
+  int32 count = 2;
+}

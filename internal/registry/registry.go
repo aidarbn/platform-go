@@ -410,6 +410,31 @@ var apiOptions = []Option{
 				Enum:        []string{"platform", "connect", "none"},
 				Default:     "platform",
 			},
+			{
+				Name:        "documents",
+				Description: "descriptions for one audience each, generator platform only: openapi.<name>.bundle.yaml with the operations selected and the components they use, served at /openapi/<name>.yaml",
+				Kind:        KindList,
+				Default:     []any{},
+				Items: &Option{Kind: KindObject, Fields: []Option{
+					{Name: "name", Description: "the name in the file and the URL: lower case letters, digits, - and _; all is the whole description", Required: true},
+					{Name: "title", Description: "info.title of the document; the base's when empty"},
+					{Name: "description", Description: "info.description of the document; the base's when empty"},
+					documentSelector("include", "operations that go in: an operation matches a listed group, tag or service; everything when empty"),
+					documentSelector("exclude", "operations that stay out of the included ones, matched the same way"),
+				}},
+			},
 		},
 	},
+}
+
+// documentSelector picks operations for a document of the OpenAPI description.
+func documentSelector(name, description string) Option {
+	list := func(name, description string) Option {
+		return Option{Name: name, Description: description, Kind: KindList, Default: []any{}, Items: &Option{}}
+	}
+	return Option{Name: name, Description: description, Kind: KindObject, Fields: []Option{
+		list("tag_groups", "groups of x-tagGroups, as the description names them, base.yaml's included"),
+		list("tags", "sections, tags of operations"),
+		list("services", "gRPC services by full name, package.Service"),
+	}}
 }

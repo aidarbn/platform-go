@@ -48,6 +48,94 @@
               "additionalProperties": false,
               "description": "the OpenAPI description of the API",
               "properties": {
+                "documents": {
+                  "default": [],
+                  "description": "descriptions for one audience each, generator platform only: openapi.\u003cname\u003e.bundle.yaml with the operations selected and the components they use, served at /openapi/\u003cname\u003e.yaml",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "description": "info.description of the document; the base's when empty",
+                        "type": "string"
+                      },
+                      "exclude": {
+                        "additionalProperties": false,
+                        "description": "operations that stay out of the included ones, matched the same way",
+                        "properties": {
+                          "services": {
+                            "default": [],
+                            "description": "gRPC services by full name, package.Service",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "tag_groups": {
+                            "default": [],
+                            "description": "groups of x-tagGroups, as the description names them, base.yaml's included",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "tags": {
+                            "default": [],
+                            "description": "sections, tags of operations",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "include": {
+                        "additionalProperties": false,
+                        "description": "operations that go in: an operation matches a listed group, tag or service; everything when empty",
+                        "properties": {
+                          "services": {
+                            "default": [],
+                            "description": "gRPC services by full name, package.Service",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "tag_groups": {
+                            "default": [],
+                            "description": "groups of x-tagGroups, as the description names them, base.yaml's included",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "tags": {
+                            "default": [],
+                            "description": "sections, tags of operations",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "name": {
+                        "description": "the name in the file and the URL: lower case letters, digits, - and _; all is the whole description",
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "info.title of the document; the base's when empty",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "generator": {
                   "default": "platform",
                   "description": "platform: the platform's own generator describes the API as the gateway serves it, split by proto file with a bundle; connect: protoc-gen-connect-openapi writes one api/openapi/openapi.yaml, as before v0.10.0; none: the project keeps api/openapi/openapi.yaml itself",

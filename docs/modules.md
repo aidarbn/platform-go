@@ -306,6 +306,7 @@ modules:
 - `buf.breaking_except` goes into `breaking.except` next to `use: [FILE]`; `lint --against` uses it.
 - `openapi.generator: platform`, the default since v0.10.0, writes the description with the platform's own plugin, `protoc-gen-platform-openapi`, pinned in `go.mod` by `apply`; it is a package of the platform module, so its version is the platform's. See [The platform's OpenAPI generator](#the-platforms-openapi-generator).
 - `openapi.generator: connect` keeps the description of the versions before v0.10.0: protoc-gen-connect-openapi writes one `api/openapi/openapi.yaml` merged into `base.yaml`, gnostic annotations give sections and titles, and `buf.yaml` has the gnostic dependency. It stays for projects that are not ready to move; new features of the description come to `platform` only.
+- `openapi.documents` cuts descriptions for one audience each out of the whole one, `generator: platform` only; see [Documents for audiences](#documents-for-audiences).
 - `openapi.generator: none` takes the OpenAPI plugin out of `buf.gen.yaml`. The project then keeps `api/openapi/openapi.yaml` itself; the module serves it as before, `generate` never removes it and `verify` does not compare it. `api/openapi/base.yaml` is still created: with `none` nothing reads it, and it keeps the embed of `api/openapi` compiling before the project adds its description.
 
 ### The platform's OpenAPI generator
@@ -381,6 +382,48 @@ api/openapi/
 
 References between files are relative (`../../common.yaml#/components/responses/Error`); a path whose methods come from several proto files is written into the root itself. The service serves the bundle at `/openapi.yaml`, so `/docs` and clients keep their URL; the split files are for people and for review, and clients are generated from the bundle. `generate` removes every file with the generator's mark before buf writes the current ones, so the yaml of a deleted proto file goes with it, and `verify` compares all of them; back on `connect`, the marked files are left over and removed the same way, so a stale bundle is never served. With `none` the folder is the project's and nothing in it is removed: a project that keeps the platform's files as its own deletes their first line, the mark. A proto file whose yaml would land on one of the files of the description, such as `common.proto` at the root of the proto folder, fails generation.
 
+#### Documents for audiences
+
+One API often has several readers: the tablet in a branch, the manager of a restaurant, the superadmin, the public. Each of them needs only its part of the API, and a public document must not show the admin endpoints. `api.openapi.documents` in `platformgo.yaml` describes such documents; the whole description stays as it is:
+
+```yaml
+modules:
+  api:
+    openapi:
+      documents:
+        - name: tablet                       # openapi.tablet.bundle.yaml, /openapi/tablet.yaml, /docs/tablet
+          title: Taply — the tablet API      # info.title; the base's when empty
+          description: What the tablet calls. # info.description; the base's when empty
+          include:
+            tag_groups: [API Планшета]       # groups of x-tagGroups, base.yaml's included
+        - name: superadmin
+          include:
+            tag_groups: [API Суперадмина]
+            services: [proto.superadmin.v1.SuperAdminService]   # gRPC services by full name
+        - name: partner
+          exclude:                           # without include: everything but what is excluded
+            tags: [Суперадмин]
+```
+
+- An operation goes into a document when it matches `include` — its tag is listed in `tags`, its tag is in a group listed in `tag_groups`, or its method belongs to a service listed in `services` — and does not match `exclude`, which is matched the same way and wins. Without `include` everything goes in. Groups are those of the description, so groups written in `base.yaml` count, and a section that is in no group (Scalar and Redoc hide it in the sidebar) is reached by its tag or its service.
+- A group, a tag or a service the description does not have fails generation, as does a document that selects no operation: a typo would otherwise give an empty or a wrong document. A name is lower case letters, digits, `-` and `_`; `all` is the whole description.
+- The generator writes `api/openapi/openapi.<name>.bundle.yaml`, a bundle like `openapi.bundle.yaml`: the base with the document's title and description, the selected operations, the paths, tags and groups that still have one, and only the components they use — schemas, responses and the rest by reference (a discriminator's mapping by bare name too), security schemes by the security requirements; `x-` sections of the components stay. A tag of `base.yaml` with no operation, an introduction, goes from every document; a path item of `base.yaml` without operations stays. `services` selects the operations generated from the proto files; an operation `base.yaml` writes itself is selected by its tag or group. `common.yaml` and the files per proto file stay shared and are not repeated per document.
+- `apply` adds `documents=platformgo.yaml` to the options of the plugin in `buf.gen.yaml`, and the plugin reads the documents from `platformgo.yaml` itself, so a changed document needs `make generate` only. Without documents `buf.gen.yaml` and the description are the same as without the option.
+- The bundles carry the generator's mark: `generate` removes the bundle of a document that is gone, and `verify` compares every one of them.
+
+The module serves every document at `/openapi/<name>.yaml` with its own page at `/docs/<name>`; the whole description stays at `/openapi.yaml` and `/docs`. `API_DOCS=false` serves none of them. `API_DOCS_DOCUMENTS` lists the ones to serve, `all` for the whole one: `API_DOCS_DOCUMENTS=public` on production serves the public document alone, and `all,public` both; a name the description does not have is logged at start. Without `API_DOCS_DOCUMENTS` every document is served, as the whole description already is, with everything the documents hold: on a stand that must not show the admin endpoints, set it. Who may read them is up to the project:
+
+```go
+api.DocsAccess(app, func(doc string, next http.Handler) http.Handler {
+	if doc == "public" {
+		return next
+	}
+	return staffOnly(next) // a password, a token, a role: the project's own check
+})
+```
+
+`DocsAccess` gets the document name (`api.AllDocuments` for the whole one) and the handler of its description or its page, and returns the handler to serve. The descriptions are plain HTTP routes, not gRPC calls, so the interceptors of `rbac` do not see them; a check by role reads the token in the handler it returns. The page in the browser loads its description without an `Authorization` header, so a guarded page works with what a browser sends by itself — a cookie or basic auth.
+
 The handler is registered from `wire.go`:
 
 ```go
@@ -444,7 +487,8 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_CORS_EXPOSE` | none | response headers a page may read on top of `X-Request-ID` |
 | `API_CORS_CREDENTIALS` | `true` | `Access-Control-Allow-Credentials`; `false` with `*` answers a literal `*` |
 | `API_CORS_MAX_AGE` | `86400` | seconds a browser may cache a preflight |
-| `API_DOCS` | `true` | `/openapi.yaml` and `/docs` |
+| `API_DOCS` | `true` | `/openapi.yaml` and `/docs`, and the documents of `api.openapi.documents` |
+| `API_DOCS_DOCUMENTS` | all | the documents served by name, `all` for the whole description: `public`, `all,tablet` |
 | `API_REFLECTION` | `false` | gRPC reflection |
 | `API_MAX_RECV_MB`, `API_MAX_SEND_MB` | 16, 32 | message size limits; the request limit also caps HTTP bodies |
 | `API_RATE_RPS`, `API_RATE_BURST` | 50, 100 | per client; `0` turns the limit off |

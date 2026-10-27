@@ -1,0 +1,35 @@
+# The base of the audience documents: two security schemes, one of them used by no
+# document, a tag description, a schema of its own and a group of its own.
+openapi: 3.1.0
+info:
+  title: Restaurants API
+  version: "1.0"
+  description: Everything the restaurants service serves.
+servers:
+  - url: https://api.example.com
+security:
+  - bearerAuth: []
+tags:
+  - name: Tablet
+    description: What the tablet in a branch calls.
+x-tagGroups:
+  - name: Tablet API
+    tags: [Tablet, Tablet orders]
+  - name: Manager API
+    tags: [Products, Branches]
+  - name: Superadmin API
+    tags: [Superadmin]
+  - name: Public API
+    tags: [Auth, Status]
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    legacyKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    Unused:
+      type: string

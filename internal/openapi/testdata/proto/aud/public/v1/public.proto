@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+// What anyone may call.
+package aud.public.v1;
+
+import "google/api/annotations.proto";
+import "platform/openapi/v1/options.proto";
+
+// Signing in.
+service AuthService {
+  option (platform.openapi.v1.service) = {
+    tag: "Auth"
+    tag_group: "Public API"
+  };
+
+  // Sign in with a password.
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/login"
+      body: "*"
+    };
+  }
+}
+
+// The status of the service.
+service StatusService {
+  option (platform.openapi.v1.service) = {
+    tag: "Status"
+    tag_group: "Public API"
+  };
+
+  // Whether the service works.
+  rpc GetStatus(GetStatusRequest) returns (Status) {
+    option (google.api.http) = {get: "/v1/status"};
+  }
+}
+
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token = 1;
+}
+
+message GetStatusRequest {}
+
+message Status {
+  bool ok = 1;
+}

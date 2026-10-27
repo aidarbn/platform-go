@@ -219,6 +219,13 @@ func TestAPIRejectsBadSettings(t *testing.T) {
 		{"buf: {breaking_except: [field_no_delete]}", `"field_no_delete" is not a buf rule`},
 		{"openapi: {generator: v2}", "must be one of platform, connect, none"},
 		{"buf: {deps: [buf.build/gnostic/gnostic:v1]}\n    openapi: {generator: connect}", "is a dependency of the platform"},
+		{"openapi: {generator: connect, documents: [{name: tablet}]}", "only the generator platform writes documents, not connect"},
+		{"openapi: {generator: none, documents: [{name: tablet}]}", "only the generator platform writes documents, not none"},
+		{"openapi: {documents: [{name: Tablet}]}", `name "Tablet" must be lower case`},
+		{"openapi: {documents: [{name: all}]}", `name "all" is the whole description`},
+		{"openapi: {documents: [{name: a}, {name: a}]}", `name "a" is used twice`},
+		{"openapi: {documents: [{title: x}]}", "name"},
+		{"openapi: {documents: [{name: a, include: {groups: [x]}}]}", "groups"},
 	} {
 		f, err := spec.Parse([]byte(apiProject + "  api:\n    " + tc.section + "\n"))
 		if err == nil {
@@ -227,5 +234,46 @@ func TestAPIRejectsBadSettings(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.section, err, tc.want)
 		}
+	}
+}
+
+// Documents add one line to buf.gen.yaml, the plugin reads them from platformgo.yaml;
+// without them buf.gen.yaml is the one of before.
+func TestAPIOpenAPIDocuments(t *testing.T) {
+	plain, err := gen.Wiring(mustParse(t, apiProject+"  api: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := gen.Wiring(mustParse(t, apiProject+"  api:\n    openapi: {documents: []}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain[gen.BufGenPath]) != string(empty[gen.BufGenPath]) || strings.Contains(string(plain[gen.BufGenPath]), "documents=") {
+		t.Errorf("buf.gen.yaml without documents:\n%s", plain[gen.BufGenPath])
+	}
+	f := mustParse(t, apiProject+`  api:
+    openapi:
+      documents:
+        - name: tablet
+          title: The tablet
+          include: {tag_groups: [Tablet API], services: [shop.v1.TabletService]}
+          exclude: {tags: [Debug]}
+`)
+	files, err := gen.Wiring(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufGen := string(files[gen.BufGenPath])
+	if !strings.Contains(bufGen, "      - base=api/openapi/base.yaml\n      # The documents") || !strings.HasSuffix(strings.SplitN(bufGen, "inputs:", 2)[0], "      - documents=platformgo.yaml\n") {
+		t.Errorf("buf.gen.yaml:\n%s", bufGen)
+	}
+	s, err := gen.API(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := s.OpenAPI.Documents
+	if len(d) != 1 || d[0].Name != "tablet" || d[0].Title != "The tablet" || d[0].Include.TagGroups[0] != "Tablet API" ||
+		d[0].Include.Services[0] != "shop.v1.TabletService" || d[0].Exclude.Tags[0] != "Debug" {
+		t.Errorf("documents = %+v", d)
 	}
 }

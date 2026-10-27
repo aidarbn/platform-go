@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// Messages the tablet and the manager share.
+package aud.common.v1;
+
+// An amount of money.
+message Money {
+  // In tiyn.
+  int64 amount = 1;
+  string currency = 2;
+}
+
+// A branch of a restaurant.
+message Branch {
+  string id = 1;
+  string name = 2;
+}
