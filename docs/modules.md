@@ -275,7 +275,24 @@ api.AddUnaryInterceptor(app, auth.Interceptor(tokens))           // authenticati
 api.HandleHTTP(app, "POST /webhooks/kaspi", kaspi.WebhookHandler) // routes that are not gRPC
 ```
 
-What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: metrics (taply's `grpc_server_handled_total`, `grpc_server_handling_seconds` and `grpc_req_panics_recovered_total`, which the go-grpc dashboard and alerts of the monitoring agent read), logging of failed calls, panic recovery, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
+What the module does for every call, REST included — the gateway calls the local gRPC server, so both go through one chain: panic recovery, metrics (taply's `grpc_server_handled_total`, `grpc_server_handling_seconds` and `grpc_req_panics_recovered_total`, which the go-grpc dashboard and alerts of the monitoring agent read), logging of failed calls, errors without internal details (a plain error becomes `Internal`, a status keeps its code), project interceptors, protovalidate validation with the violations as details.
+
+**The interceptor chain** is ordered by phase, as taply orders its interceptors; the order is the application's, not the order the modules start in. From the outside in:
+
+1. `PhaseRecover` — the outer recovery: a panic in any interceptor answers `Internal`;
+2. `PhaseObserve` — the client address, metrics, logging, errors without details;
+3. `PhaseLimit` — the rate limit by address, deprecated methods;
+4. `PhaseErrorsI18n` — the translation of error messages (`i18n`), outside authentication so its refusals are translated too;
+5. `PhaseAuthenticate` — the project's authentication; `api.AddUnaryInterceptor` and `api.AddStreamInterceptor` add here;
+6. `PhaseAuthorize` — the access check (`rbac`, `api.Authorize`);
+7. `PhaseGuard` — checks that need the caller, such as a tenant guard; the rate limit per principal;
+8. `PhaseTransform` — changes to the request and the response with the caller known: the translation of response fields (`i18n`);
+9. `PhaseValidate` — protovalidate;
+10. `PhaseAfterValidate` — what must see a valid request;
+11. `PhaseIdempotency` — idempotency;
+12. `PhaseHandlerRecover` — the inner recovery: a panic of the handler becomes `Internal` before idempotency, so the key is not left in progress and the metrics see the `Internal` the client gets.
+
+`api.AddUnaryInterceptorAt(app, api.PhaseGuard, "restaurant", guard)` and `api.AddStreamInterceptorAt` place a project interceptor in a phase; the phases are a hundred apart, so `api.PhaseGuard+10` runs after every guard. Within a phase the platform's interceptors come first and the project's keep the order they were added in. `api.Chain(app)` and `api.StreamChain(app)` list the chain as `phase/name` once the module has started — a project test can pin it — and the start logs it. Streams have the same phases without the rate limit, validation and idempotency. The REST side speaks snake_case JSON as in the proto files, returns every field, ignores unknown request fields and forwards request headers as gRPC metadata. Also: gRPC health, optional reflection, CORS, `/openapi.yaml` and `/docs`, graceful stop.
 
 The HTTP side, following taply's gateway:
 
@@ -420,7 +437,7 @@ message Product {
 }
 ```
 
-Translations live in taply's `i18n_translations` table (`entity`, `entity_id`, `field`, `locale`, `text`); for every response the module collects the annotated fields, loads their translations with one query per entity type and substitutes the language of `Accept-Language` — `kk-KZ` matches `kk`, an unsupported language gets `I18N_DEFAULT_LOCALE`. An entity without a translation keeps its base value. A message with a `field_translations` map belongs to an editor and is left alone; for its requests the base value is copied into the default locale, so the column and the translation never disagree. `i18n.From(app)` reads and writes translations (`Set`, `SetBatch`, `SetBatchIfMissing` for syncs that must not overwrite edits, `GetAll`, `GetBatchAll`, in a transaction with `WithTx`); `i18nx.TranslationsToProto`, `ProtoToTranslations` and `ValidateFields` serve editor APIs. `i18n.SkipTranslation(app, fn)` turns substitution off for chosen calls, as taply does for some tablets.
+Translations live in taply's `i18n_translations` table (`entity`, `entity_id`, `field`, `locale`, `text`); for every response the module collects the annotated fields, loads their translations with one query per entity type and substitutes the language of `Accept-Language` — `kk-KZ` matches `kk`, an unsupported language gets `I18N_DEFAULT_LOCALE`. An entity without a translation keeps its base value. A message with a `field_translations` map belongs to an editor and is left alone; for its requests the base value is copied into the default locale, so the column and the translation never disagree. `i18n.From(app)` reads and writes translations (`Set`, `SetBatch`, `SetBatchIfMissing` for syncs that must not overwrite edits, `GetAll`, `GetBatchAll`, in a transaction with `WithTx`); `i18nx.TranslationsToProto`, `ProtoToTranslations` and `ValidateFields` serve editor APIs. `i18n.SkipTranslation(app, fn)` turns substitution off for chosen calls, as taply does for some tablets; the substitution runs in `PhaseTransform`, after the project's authentication, so `fn` sees the caller it put into the context. Error messages are translated in `PhaseErrorsI18n`, outside authentication, so its refusals are translated too.
 
 **Error messages** are translated the way taply does, in order: a whole sentence template, `{resource} {id}: {message}`, `missing {field}` and `{field} is required`, an exact message. The platform translates its own messages (rate limit, authentication, idempotency, routing) and taply's generic ones into Russian, Kazakh and English; the project adds its own in `i18n/messages.yaml`, created with the module and embedded into the binary:
 
@@ -507,7 +524,7 @@ api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.Unary
 })
 ```
 
-The access check runs after every project interceptor and before request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
+The access check runs in `PhaseAuthorize`, after the project's authentication and before its guards and request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. Only the token itself decides `Unauthenticated`: a valid token whose scope names no role the service knows is `rbac.WithRoles(ctx)` with no roles, an authenticated caller who may do nothing, and answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
 
 ## The `s3` module
 
