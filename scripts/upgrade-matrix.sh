@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Upgrade matrix: a project created by a released platform version moves to this
-# checkout and must stay correct — apply by the new version, verify, build, vet, tests.
+# checkout and must stay correct — apply by the new version, verify, a tidy go.mod,
+# build, vet, tests.
 #
 #   scripts/upgrade-matrix.sh v0.2.0 [v0.2.1 ...]
 #
@@ -44,6 +45,8 @@ for from in "$@"; do
     "$new" upgrade --no-check "$next"
     grep -q "^platform: $next\$" platformgo.yaml
     go tool platformgo verify
+    # apply tidies after the generators too, so the upgrade leaves go.mod tidy.
+    go mod tidy -diff
     go build ./...
     go vet ./...
     go test ./...

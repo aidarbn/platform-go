@@ -328,16 +328,34 @@ func cmdApply(args []string, out io.Writer) error {
 	if _, err := os.Stat(filepath.Join(*dir, "go.mod")); err != nil {
 		return nil
 	}
-	fmt.Fprintln(out, "go mod tidy")
-	cmd := exec.Command("go", "mod", "tidy")
-	cmd.Dir = *dir
-	cmd.Stdout, cmd.Stderr = out, os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := goModTidy(*dir, out); err != nil {
 		return err
 	}
 	// The generators are in go.sum now, so the queries can be generated.
-	return runSqlc(plan, *dir, out)
+	if err := generators(plan, *dir, out); err != nil {
+		return err
+	}
+	// The generated code may import other packages than before: a codemod that drops
+	// an import of a proto file, as openapi.gnostic does, drops the Go module of that
+	// import from the generated code, and go.mod would keep it.
+	if err := goModTidy(*dir, out); err != nil {
+		return fmt.Errorf("go mod tidy after the generators: %w", err)
+	}
+	return nil
 }
+
+// goModTidy and generators are what apply runs after it writes the files; tests replace
+// them, so those tests can not run in parallel.
+var (
+	goModTidy = func(dir string, out io.Writer) error {
+		fmt.Fprintln(out, "go mod tidy")
+		cmd := exec.Command("go", "mod", "tidy")
+		cmd.Dir = dir
+		cmd.Stdout, cmd.Stderr = out, os.Stderr
+		return cmd.Run()
+	}
+	generators = runSqlc
+)
 
 // stringList is a flag that may repeat and holds comma separated values.
 type stringList []string
