@@ -50,6 +50,7 @@ func commands() []setup.Command {
 			dir,
 			{Name: "dry-run", Summary: "upgrade a copy and print the plan", Bool: true},
 			{Name: "no-check", Summary: "skip the checks after the upgrade", Bool: true},
+			{Name: "strict", Summary: "fail when a check after the upgrade fails", Bool: true},
 		}},
 		{Name: "doctor", Summary: "check the environment and the project", Flags: []setup.Flag{
 			dir, {Name: "fix", Summary: "fix what can be fixed", Bool: true},

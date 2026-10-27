@@ -33,6 +33,9 @@ type Options struct {
 	Version string // a tag, or latest when empty
 	DryRun  bool   // upgrade a copy of the project and print the plan; the project stays as it is
 	NoCheck bool   // skip go build, platformgo verify and go test after the upgrade
+	// Strict fails the upgrade when a check fails. Without it a failed check is a
+	// warning and the upgrade succeeds, as it did before the checks existed.
+	Strict bool
 }
 
 // Check is a command run after the upgrade.
@@ -105,7 +108,11 @@ func Run(ctx context.Context, dir string, opts Options, run Runner, out io.Write
 	}
 	res.Checks = runChecks(ctx, dir, run, func(Check) io.Writer { return out })
 	if failed := res.Failed(); len(failed) > 0 {
-		return res, fmt.Errorf("upgrade: %s → %s is applied, but checks failed: %s", res.From, res.To, strings.Join(failed, ", "))
+		err := fmt.Errorf("upgrade: %s → %s is applied, but checks failed: %s", res.From, res.To, strings.Join(failed, ", "))
+		if opts.Strict {
+			return res, err
+		}
+		fmt.Fprintf(out, "warning: %v; fix them or revert the upgrade (--strict makes this an error)\n", err)
 	}
 	return res, nil
 }
@@ -216,7 +223,11 @@ func dryRun(ctx context.Context, dir string, opts Options, run Runner, out io.Wr
 		fmt.Fprintf(out, "  fail  %s: %v\n%s", c.Name, c.Err, indent(indent(res.Checks[i].Output)))
 	}
 	if failed := res.Failed(); len(failed) > 0 {
-		return res, fmt.Errorf("upgrade: %s → %s would fail checks: %s", res.From, res.To, strings.Join(failed, ", "))
+		err := fmt.Errorf("upgrade: %s → %s would fail checks: %s", res.From, res.To, strings.Join(failed, ", "))
+		if opts.Strict {
+			return res, err
+		}
+		fmt.Fprintf(out, "warning: %v (--strict makes this an error)\n", err)
 	}
 	return res, nil
 }

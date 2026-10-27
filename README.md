@@ -18,7 +18,7 @@
 | `platformgo db generate [--dsn]` | migrates the database and regenerates the jet query builder | ready |
 | `platformgo lint` | the checks of taply in one command: format, go mod tidy, build, generation, file length, golangci-lint, proto lint and breaking changes with `api`, new migrations with `postgres`, govulncheck; `--against <branch>` is the base for both | ready |
 | `platformgo doctor [--fix]` | checks Go, git, Docker, shell completion and, inside a project, `platformgo.yaml`, the pinned platform version, generation and `.env` files; `--fix` applies generation, copies `.env` files from their examples and installs completion | ready |
-| `platformgo upgrade [version]` | moves a project to a platform version: `go get`, the version recorded in `platformgo.yaml`, `apply` by the new version with its codemods, then `go build`, `platformgo verify` and `go test` (`--no-check` skips them); `--dry-run` does it all in a copy and prints the plan | ready |
+| `platformgo upgrade [version]` | moves a project to a platform version: `go get`, the version recorded in `platformgo.yaml`, `apply` by the new version with its codemods, then `go build`, `platformgo verify` and `go test`, a warning when they fail (`--strict` fails, `--no-check` skips them); `--dry-run` does it all in a copy and prints the plan | ready |
 | `platformgo setup [--alias] [--remove]` | shell completion for zsh, bash and fish and the short `pgo` alias, as one block in the shell configuration that a second run replaces | ready |
 | `platformgo completion <shell>` | prints the completion script | ready |
 

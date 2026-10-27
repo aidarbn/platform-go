@@ -158,7 +158,7 @@ func TestUpgradeFailedChecks(t *testing.T) {
 	dir := project(t, description)
 	g := &fakeGo{fail: map[string]error{"test ./...": errors.New("exit status 1"), "tool platformgo verify": errors.New("exit status 1")}}
 
-	res, err := upgrade.Run(context.Background(), dir, upgrade.Options{Version: "v0.2.5"}, g.run, io.Discard)
+	res, err := upgrade.Run(context.Background(), dir, upgrade.Options{Version: "v0.2.5", Strict: true}, g.run, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "v0.2.1 → v0.2.5 is applied, but checks failed: platformgo verify, go test") {
 		t.Fatalf("err = %v", err)
 	}
@@ -168,6 +168,33 @@ func TestUpgradeFailedChecks(t *testing.T) {
 	// The upgrade stays for the developer to fix or revert.
 	if raw, _ := os.ReadFile(filepath.Join(dir, "go.mod")); !strings.Contains(string(raw), "v0.2.5") {
 		t.Errorf("go.mod:\n%s", raw)
+	}
+}
+
+// Without --strict a failed check is a warning: upgrade exits as it did before the
+// checks existed, so scripts that ran it keep their exit codes.
+func TestUpgradeFailedChecksWarnByDefault(t *testing.T) {
+	dir := project(t, description)
+	g := &fakeGo{fail: map[string]error{"test ./...": errors.New("exit status 1")}}
+
+	var out bytes.Buffer
+	res, err := upgrade.Run(context.Background(), dir, upgrade.Options{Version: "v0.2.5"}, g.run, &out)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !slices.Equal(res.Failed(), []string{"go test"}) {
+		t.Errorf("failed = %v", res.Failed())
+	}
+	if want := "warning: upgrade: v0.2.1 → v0.2.5 is applied, but checks failed: go test; fix them or revert the upgrade (--strict makes this an error)\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	out.Reset()
+	if _, err := upgrade.Run(context.Background(), project(t, description), upgrade.Options{Version: "v0.2.5", DryRun: true}, g.run, &out); err != nil {
+		t.Fatalf("dry run: err = %v", err)
+	}
+	if want := "warning: upgrade: v0.2.1 → v0.2.5 would fail checks: go test (--strict makes this an error)\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("dry run output:\n%s", out.String())
 	}
 }
 
@@ -337,7 +364,7 @@ func TestDryRunReportsFailedChecks(t *testing.T) {
 		fail:   map[string]error{"tool platformgo verify": errors.New("exit status 1"), "mod tidy -diff": errors.New("exit status 1")},
 	}
 	var out bytes.Buffer
-	res, err := upgrade.Run(context.Background(), project(t, description), upgrade.Options{Version: "v0.2.5", DryRun: true}, g.run, &out)
+	res, err := upgrade.Run(context.Background(), project(t, description), upgrade.Options{Version: "v0.2.5", DryRun: true, Strict: true}, g.run, &out)
 	if err == nil || !strings.Contains(err.Error(), "v0.2.1 → v0.2.5 would fail checks: platformgo verify") {
 		t.Fatalf("err = %v", err)
 	}

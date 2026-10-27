@@ -20,7 +20,7 @@ The guarantee rests on three layers: an architecture that leaves almost nothing 
 1. warns when `go.mod` is not tidy before the upgrade: `apply` runs `go mod tidy`, and somebody else's leftovers would land in the upgrade commit, so they go into a commit of their own first;
 2. `go get` of the new version, the version recorded in `platformgo.yaml`;
 3. `go tool platformgo apply` by the new version: generated files, pinned tools, codemods, the lock;
-4. checks: `go build ./...`, `platformgo verify`, `go test ./...`. A failed check leaves the upgrade in place and fails the command, so it gets fixed or reverted. `--no-check` skips them, for CI that runs its own.
+4. checks: `go build ./...`, `platformgo verify`, `go test ./...`. A failed check leaves the upgrade in place to be fixed or reverted and prints a warning; the command still succeeds, as it did before the checks existed. `--strict` makes a failed check fail the command, `--no-check` skips the checks, for CI that runs its own.
 
 `--dry-run` does all of it in a temporary copy of the project — `.git` and `node_modules` left out, relative replace directives to folders outside the project made absolute — and prints what would happen, `platformgo plan` of the new version included; the project itself stays as it is. On a project with code on the `kit/adminx` API of v0.5:
 
@@ -41,6 +41,7 @@ checks:
   fail  platformgo verify: exit status 1
         error: manual steps of a platform upgrade are open: …
   fail  go test: exit status 1
+warning: upgrade: v0.5.11 → v0.8.0 would fail checks: go build, platformgo verify, go test (--strict makes this an error)
 ```
 
 `upgrade` runs from the binary at hand when it is at least as new as the version the project pins: the steps of the project are done by the new version anyway, and an older project would not know `--dry-run`.
@@ -135,6 +136,9 @@ Changes that keep the API but change what a project or its clients see, by the v
 - **Shutdown phases, budgets and River settings, opt-in.** `SHUTDOWN_PHASES`, `API_HTTP_STOP_TIMEOUT`, `API_GRPC_STOP_TIMEOUT`, `RIVER_STOP_TIMEOUT`, `RIVER_CANCEL_TIMEOUT`, `riverx.QueuesFrom` and `riverx.MaxAttemptsFrom` change nothing until a project sets or calls them: the modules stop in reverse order within `SHUTDOWN_TIMEOUT` and the queues come from `RIVER_QUEUES` or `default=10`, as before. `platformgo apply` adds the new variables to `.env.example`: `SHUTDOWN_PHASES=false` and the budgets with empty values, which mean unset. Two small differences without them: when running jobs do not finish within the shutdown timeout, River logs the warning `river jobs did not finish in time, cancelling them` before it cancels them, as it did silently before; and the `api` module stops its rate limiters and the idempotency cleanup after the running gRPC calls finish rather than before, so those calls are still limited and recorded. Nothing to do in a project.
 - **Tracing: `OTEL_SERVICE_NAME` is honoured.** Before, the spans always carried `project.service` as `service.name`, whatever `OTEL_SERVICE_NAME` said; now the variable wins when set. Affects only a stand that already sets `OTEL_SERVICE_NAME`, whose traces move to that name; remove the variable to keep the old one.
 - **Observability for services moving to the platform, opt-in.** `app.AliasMetric`, `METRICS_OPENMETRICS` with trace exemplars, `API_METRICS_TENANT_HEADER`, `api.DeprecatedReplacements`, `API_LOG_BODIES_MASK_PATHS` with `api.MaskLogBodies` and `PYROSCOPE_ADDR`. Without them `/metrics` serves the same metrics with the same labels in the same format, and nothing is profiled. `api_deprecated_calls_total` is now registered when the API starts rather than when the module initialises; a worker process, which serves no API, never had a series of it.
+- **`platformgo upgrade` checks the project after the upgrade.** Before, it stopped after `apply`; now it also runs `go build ./...`, `platformgo verify` and `go test ./...`, so it takes longer and needs what the tests of the project need. A failed check is a warning and the exit code is the same as before; `--strict` turns it into a failure, `--no-check` skips the checks. The `upgrade` workflow passes `--no-check` and runs its own checks, as before.
+- **`platformgo upgrade` runs from the binary at hand when it is at least as new as the version the project pins.** Before, a `platformgo` on the path always handed `upgrade` to `go tool platformgo` of the project. The result is the same — `go get` and `apply` by the new version — and an older pinned version would not know `--dry-run`. Other commands are still handed to the pinned version.
+- **`platformgo verify` fails while a manual step of an upgrade is open.** Codemods may now leave steps for a person; the ones whose code cannot compile with the new version, such as a reference to a removed name of `kit/adminx`, keep `verify` failing until they are done. A project that builds is not affected.
 
 ## Manual steps
 

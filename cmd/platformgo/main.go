@@ -103,8 +103,8 @@ func usage(out io.Writer) {
   platformgo migrate lint         lint the migrations the branch adds (--against <branch>)
   platformgo db generate          migrate the database and generate the jet query builder
   platformgo upgrade [version]    move the project to a platform version, latest by default, and
-                                  check it: go build, verify, go test (--no-check skips them);
-                                  --dry-run does it in a copy and prints the plan
+                                  check it: go build, verify, go test (--no-check skips them,
+                                  --strict fails on them); --dry-run does it in a copy
   platformgo schema               print the JSON schema of platformgo.yaml
   platformgo doctor [--fix]       check the development environment and the project
   platformgo setup [--alias]      shell completion and the short pgo alias
@@ -383,6 +383,7 @@ func cmdUpgrade(args []string, out io.Writer) error {
 	dir := fs.String("dir", ".", "project directory")
 	dryRun := fs.Bool("dry-run", false, "upgrade a copy of the project and print the plan; the project stays as it is")
 	noCheck := fs.Bool("no-check", false, "skip go build, platformgo verify and go test after the upgrade: for CI with its own checks")
+	strict := fs.Bool("strict", false, "fail when a check after the upgrade fails; without it a failed check is a warning")
 	version, err := parsePositional(fs, args)
 	if err != nil {
 		return err
@@ -391,7 +392,7 @@ func cmdUpgrade(args []string, out io.Writer) error {
 	// Ctrl-C stops go and still removes the copy of a dry run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	opts := upgrade.Options{Version: version, DryRun: *dryRun, NoCheck: *noCheck}
+	opts := upgrade.Options{Version: version, DryRun: *dryRun, NoCheck: *noCheck, Strict: *strict}
 	res, err := upgrade.Run(ctx, *dir, opts, upgradeRunner, out)
 	if err != nil {
 		return err
@@ -409,11 +410,16 @@ func cmdUpgrade(args []string, out io.Writer) error {
 // upgradeRunner runs the go command for upgrade; tests replace it.
 var upgradeRunner upgrade.Runner = goRunner
 
-// goRunner runs the go command for upgrade, its output and errors into out.
+// goRunner runs the go command for upgrade. Its output goes to out; its errors go to
+// stderr when out is the terminal output, as they always did, and into out when the
+// output is captured, for a dry run or the go.mod check.
 func goRunner(ctx context.Context, dir string, out io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = out, out
+	if out == io.Writer(os.Stdout) {
+		cmd.Stderr = os.Stderr
+	}
 	return cmd.Run()
 }
 
