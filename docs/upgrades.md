@@ -126,6 +126,7 @@ Changes that keep the API but change what a project or its clients see, by the v
 ### v0.11.1
 
 - **`i18n` translates the messages of external providers, an option.** `i18n.WithExternalErrors()` (or `(*i18nx.Client).TranslateExternal(true)`) lifts the rule that an error with an `ErrorInfo` of reason `EXTERNAL_TIMEOUT` or `EXTERNAL_UNAVAILABLE` keeps its text: it is translated when the dictionary has an entry for it, as taply does with the timeout of the cash register, and keeps its text otherwise; the code and the details stay, and an `Unavailable` is still never translated — see [Messages of external providers](modules.md#external-provider-messages). Off by default: without it the platform is v0.11.0 byte for byte. Nothing to do in a project.
+- **`golang.org/x/net` v0.62.0.** v0.61.0, which v0.11.0 required, has GO-2026-6860 in `html.Parse`, and `govulncheck` of `platformgo lint` failed in a project that calls it. The upgrade raises `golang.org/x/net` of a project to at least v0.62.0.
 
 ### v0.11.0
 

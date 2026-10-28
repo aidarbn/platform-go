@@ -4,11 +4,15 @@ Changes by release. What a project or its clients see differently, with how to k
 
 ## v0.11.1
 
-Backward compatible: one new option, off by default; without it the platform behaves as v0.11.0 byte for byte. Upgrade with `platformgo upgrade v0.11.1`; nothing to do in a project.
+Backward compatible: one new option, off by default; without it the platform behaves as v0.11.0 byte for byte. One fix raises a dependency. Upgrade with `platformgo upgrade v0.11.1`; nothing to do in a project.
 
 ### Added
 
 - `i18n`: `i18n.WithExternalErrors()` and `(*i18nx.Client).TranslateExternal` — translate the failures of external providers (`EXTERNAL_TIMEOUT`, `EXTERNAL_UNAVAILABLE` under a code other than `Unavailable`) when the dictionary has an entry for their text, as taply translates `zebra: external service timeout` for the guest at a tablet; the code and the `ErrorInfo` stay. See [messages of external providers](docs/modules.md#external-provider-messages).
+
+### Fixed
+
+- `golang.org/x/net` v0.62.0, which fixes GO-2026-6860 (`html.Parse`); with v0.61.0 the upgrade left a project's `govulncheck` red. Projects get this minimum version with the upgrade.
 
 ## v0.11.0
 
