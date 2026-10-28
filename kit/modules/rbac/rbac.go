@@ -147,7 +147,7 @@ func NewEnforcer(policy string) (*Enforcer, error) {
 // outside the module: a command, a test, a handler of a non-gRPC route.
 func NewEnforcerWith(opts ...Option) (*Enforcer, error) {
 	m := New(Config{}, opts...)
-	return newEnforcer(m.settings)
+	return newEnforcer(*m.settings())
 }
 
 func newEnforcer(s settings) (*Enforcer, error) {
@@ -412,37 +412,39 @@ type Option func(*Module)
 // embedded rbac/policy.csv. In taply's model it is checked by ParsePolicy; in a model of
 // the project's own it is casbin's CSV — p, g and the other types the model defines —
 // and casbin checks it, with the line of a broken rule. WithAdapter replaces it.
-func WithPolicy(text string) Option { return func(m *Module) { m.policy = text } }
+func WithPolicy(text string) Option { return func(m *Module) { m.settings().policy = text } }
 
 // WithModel replaces taply's model with a casbin model of the project's own: role
 // inheritance (g), domains, matchers and effects of its own. The policy must follow it.
-func WithModel(text string) Option { return func(m *Module) { m.model = text } }
+func WithModel(text string) Option { return func(m *Module) { m.settings().model = text } }
 
 // WithAdapter takes the policy from a casbin adapter — a database, a file, a service —
 // instead of the text of WithPolicy. Reload, or WithReloadEvery, reads it again without
 // a restart. In taply's model every load is checked as ParsePolicy checks a text.
-func WithAdapter(a persist.Adapter) Option { return func(m *Module) { m.adapter = a } }
+func WithAdapter(a persist.Adapter) Option { return func(m *Module) { m.settings().adapter = a } }
 
 // WithReloadEvery reloads the policy of the adapter on a period, from the start of the
 // module until the service stops. A failed reload keeps the policy in force, is logged
 // and counted in rbac_policy_reloads_total{result="error"}.
-func WithReloadEvery(d time.Duration) Option { return func(m *Module) { m.reloadEvery = d } }
+func WithReloadEvery(d time.Duration) Option { return func(m *Module) { m.settings().reloadEvery = d } }
 
 // WithFunction adds a function the matcher of the model may call, as casbin's
 // AddFunction does.
 func WithFunction(name string, fn func(args ...any) (any, error)) Option {
-	return func(m *Module) { m.functions = append(m.functions, function{name, fn}) }
+	return func(m *Module) { s := m.settings(); s.functions = append(s.functions, function{name, fn}) }
 }
 
 // WithRequest replaces how a call becomes the requests to enforce; see RequestFunc. It
 // is needed for a model whose request is not sub, obj, act — a domain, a tenant, an
 // attribute of the caller.
-func WithRequest(fn RequestFunc) Option { return func(m *Module) { m.request = fn } }
+func WithRequest(fn RequestFunc) Option { return func(m *Module) { m.settings().request = fn } }
 
 // WithPublic gives the request that, when allowed, makes a method public, in the order
 // of the model's request_definition. The default is {"*", method, "*"} for a request of
 // sub, obj, act; a model with another request has no public methods without it.
-func WithPublic(fn func(method string) []any) Option { return func(m *Module) { m.public = fn } }
+func WithPublic(fn func(method string) []any) Option {
+	return func(m *Module) { m.settings().public = fn }
+}
 
 // Configure applies options to the rbac module among the modules, for a project whose
 // wiring is generated: call it in main, between platformModules and platform.Run.
@@ -476,7 +478,8 @@ type settings struct {
 
 // Module implements platform.Module.
 type Module struct {
-	settings
+	// The options sit behind a pointer so that Module stays comparable, as it was.
+	opts     *settings
 	enforcer *Enforcer
 	app      *platform.App
 	denied   *prometheus.CounterVec
@@ -493,9 +496,17 @@ func New(_ Config, opts ...Option) *Module {
 
 func (m *Module) Name() string { return "rbac" }
 
+// settings returns the options, creating them for a Module built without New.
+func (m *Module) settings() *settings {
+	if m.opts == nil {
+		m.opts = &settings{}
+	}
+	return m.opts
+}
+
 // Init reads the policy and puts the access check in front of every call.
 func (m *Module) Init(_ context.Context, app *platform.App) error {
-	enforcer, err := newEnforcer(m.settings)
+	enforcer, err := newEnforcer(*m.settings())
 	if err != nil {
 		return err
 	}
@@ -507,7 +518,7 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 	if err := app.Metrics().Register(m.denied); err != nil {
 		return fmt.Errorf("rbac metrics: %w", err)
 	}
-	if m.adapter != nil {
+	if m.settings().adapter != nil {
 		reloads := prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "rbac", Name: "policy_reloads_total", Help: "reloads of the access policy from its adapter",
 		}, []string{"result"})
@@ -532,7 +543,7 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 // Start reloads the policy on the period of WithReloadEvery, and warns about rules that
 // grant nothing because no registered method matches them.
 func (m *Module) Start(ctx context.Context) error {
-	if m.adapter != nil && m.reloadEvery > 0 {
+	if s := m.settings(); s.adapter != nil && s.reloadEvery > 0 {
 		go m.reloadLoop(ctx)
 	}
 	if !m.app.Serves(platform.RoleAPI) {
@@ -548,7 +559,7 @@ func (m *Module) Start(ctx context.Context) error {
 
 // reloadLoop runs until the service stops: the context of Start is the one of the run.
 func (m *Module) reloadLoop(ctx context.Context) {
-	t := time.NewTicker(m.reloadEvery)
+	t := time.NewTicker(m.settings().reloadEvery)
 	defer t.Stop()
 	for {
 		select {
