@@ -47,6 +47,14 @@ func WithMessages(yaml string) Option { return func(m *Module) { m.messages = ya
 // did: a 400, 401 or 403 of the chain keeps its text whatever Accept-Language says.
 func WithErrorPhase(phase api.Phase) Option { return func(m *Module) { m.errorPhase = &phase } }
 
+// WithExternalErrors translates the failures of external providers too, as taply does:
+// api.ExternalTimeout("zebra", "external service timeout") gets the translation of the
+// key "error.msg.zebra: external service timeout" of i18n/messages.yaml in the language
+// of the request; without an entry the message keeps its text, and the ErrorInfo stays.
+// Off by default, the text names the provider and is left alone. An Unavailable, as
+// api.ExternalUnavailable builds it, is never translated, like any Unavailable.
+func WithExternalErrors() Option { return func(m *Module) { m.externalErrors = true } }
+
 // Configure applies options to the i18n module among the modules, for a project whose
 // wiring is generated: call it in main, between platformModules and platform.Run.
 func Configure(modules []platform.Module, opts ...Option) error {
@@ -67,6 +75,8 @@ type Module struct {
 	messages   string
 	errorPhase *api.Phase // nil: api.PhaseErrorsI18n; a pointer keeps Module comparable
 	client     *i18nx.Client
+
+	externalErrors bool
 
 	mu   sync.RWMutex
 	skip func(context.Context) bool
@@ -95,6 +105,7 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 	}
 
 	m.client = i18nx.New(pool, m.cfg.DefaultLocale, m.cfg.Locales...)
+	m.client.TranslateExternal(m.externalErrors)
 	if err := m.client.LoadMessages([]byte(i18nx.Builtin)); err != nil {
 		return fmt.Errorf("i18n: platform messages: %w", err)
 	}

@@ -206,7 +206,7 @@ func fieldOptions(fd protoreflect.FieldDescriptor) *i18npb.I18NFieldOptions {
 // unknown and unimplemented errors keep their text: they are for developers; so do the
 // failures of external providers (an ErrorInfo of reason EXTERNAL_UNAVAILABLE or
 // EXTERNAL_TIMEOUT, as api.ExternalUnavailable and api.ExternalTimeout build them),
-// whose text names the provider.
+// whose text names the provider, unless TranslateExternal turned their translation on.
 func (c *Client) TranslateError(err error, locale Locale) error {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -217,6 +217,9 @@ func (c *Client) TranslateError(err error, locale Locale) error {
 		return err
 	}
 	for _, d := range st.Details() {
+		if c.external.Load() {
+			break
+		}
 		if info, ok := d.(*errdetails.ErrorInfo); ok && (info.GetReason() == "EXTERNAL_UNAVAILABLE" || info.GetReason() == "EXTERNAL_TIMEOUT") {
 			return err
 		}

@@ -234,6 +234,73 @@ func TestTranslateErrorLeavesProviderFailures(t *testing.T) {
 	}
 }
 
+// TranslateExternal translates the failures of external providers with an entry in the
+// dictionary, as taply translates the timeout of the cash register for the guest; a
+// message without an entry, an Unavailable and a client with the option off keep the text.
+func TestTranslateExternal(t *testing.T) {
+	c := i18nx.New(nil, i18nx.LocaleRU, i18nx.LocaleKK, i18nx.LocaleEN)
+	if err := c.LoadMessages([]byte(i18nx.Builtin)); err != nil {
+		t.Fatal(err)
+	}
+	c.RegisterStatic("error.msg.zebra: external service timeout", map[i18nx.Locale]string{
+		i18nx.LocaleEN: "The cash register did not respond in time. Please try again",
+		i18nx.LocaleRU: "Касса не ответила вовремя. Попробуйте ещё раз",
+		i18nx.LocaleKK: "Касса уақытында жауап бермеді. Қайталап көріңіз",
+	})
+	external := func(code codes.Code, reason, msg string) error {
+		st, err := status.New(code, msg).WithDetails(&errdetails.ErrorInfo{Reason: reason, Metadata: map[string]string{"provider": "zebra"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Err()
+	}
+	timeout := external(codes.DeadlineExceeded, "EXTERNAL_TIMEOUT", "zebra: external service timeout")
+	translate := func(err error, locale i18nx.Locale) *status.Status {
+		t.Helper()
+		return status.Convert(c.TranslateError(err, locale))
+	}
+
+	// Off by default: the error comes back as it was.
+	if got := c.TranslateError(timeout, i18nx.LocaleRU); got != timeout {
+		t.Errorf("off: %v", got)
+	}
+
+	c.TranslateExternal(true)
+	for locale, want := range map[i18nx.Locale]string{
+		i18nx.LocaleRU: "Касса не ответила вовремя. Попробуйте ещё раз",
+		i18nx.LocaleKK: "Касса уақытында жауап бермеді. Қайталап көріңіз",
+	} {
+		got := translate(timeout, locale)
+		if got.Message() != want || got.Code() != codes.DeadlineExceeded {
+			t.Errorf("%s: %v %q", locale, got.Code(), got.Message())
+		}
+		info, ok := got.Details()[0].(*errdetails.ErrorInfo)
+		if len(got.Details()) != 1 || !ok || info.GetReason() != "EXTERNAL_TIMEOUT" || info.GetMetadata()["provider"] != "zebra" {
+			t.Errorf("%s: the details changed: %v", locale, got.Details())
+		}
+	}
+	// No entry: the text and the details stay.
+	other := external(codes.DeadlineExceeded, "EXTERNAL_TIMEOUT", "iiko: external service timeout")
+	if got := c.TranslateError(other, i18nx.LocaleRU); got != other {
+		t.Errorf("no entry: %v", got)
+	}
+	// An Unavailable stays untranslated whatever the reason, as taply has it.
+	unavailable := external(codes.Unavailable, "EXTERNAL_UNAVAILABLE", "zebra: external service timeout")
+	if got := c.TranslateError(unavailable, i18nx.LocaleRU); got != unavailable {
+		t.Errorf("unavailable: %v", got)
+	}
+	// Another code with EXTERNAL_UNAVAILABLE is translated too.
+	if got := translate(external(codes.FailedPrecondition, "EXTERNAL_UNAVAILABLE", "zebra: external service timeout"), i18nx.LocaleKK); got.Message() != "Касса уақытында жауап бермеді. Қайталап көріңіз" {
+		t.Errorf("failed precondition: %q", got.Message())
+	}
+
+	// Off again: as before.
+	c.TranslateExternal(false)
+	if got := c.TranslateError(timeout, i18nx.LocaleKK); got != timeout {
+		t.Errorf("off again: %v", got)
+	}
+}
+
 func TestValidateFieldsAndConversions(t *testing.T) {
 	m := map[string]*i18npb.LocaleMap{"name": {Values: map[string]string{"kk": "Атау"}}}
 	if err := i18nx.ValidateFields(m, []string{"name", "description"}); err != nil {
