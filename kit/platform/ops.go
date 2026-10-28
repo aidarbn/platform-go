@@ -76,13 +76,19 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := healthResponse{Status: "ok", Checks: make(map[string]string, len(checks))}
 	code := http.StatusOK
 	for i, c := range checks {
-		if errs[i] != nil {
+		switch {
+		case errs[i] == nil:
+			resp.Checks[c.name] = "ok"
+		case IsDegraded(errs[i]):
+			resp.Checks[c.name] = "degraded: " + errs[i].Error()
+			if resp.Status == "ok" {
+				resp.Status = "degraded"
+			}
+		default:
 			resp.Checks[c.name] = errs[i].Error()
 			resp.Status = "fail"
 			code = http.StatusServiceUnavailable
-			continue
 		}
-		resp.Checks[c.name] = "ok"
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

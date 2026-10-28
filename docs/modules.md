@@ -196,8 +196,11 @@ The pool is configured by environment variables:
 | `DATABASE_MIN_CONNS` | 0 | connections kept open |
 | `DATABASE_MAX_CONN_LIFETIME` | 1h | a connection is replaced after this time |
 | `DATABASE_MAX_CONN_IDLE_TIME` | 30m | an idle connection is closed after this time |
-| `DATABASE_CONNECT_TIMEOUT` | 5s | timeout of a new connection and of the start check |
+| `DATABASE_CONNECT_TIMEOUT` | 5s | timeout of a new connection and of one start check |
 | `DATABASE_MIGRATE` | true | apply migrations on start |
+| `DATABASE_STARTUP_TIMEOUT` | 15s | how long the start retries a database that does not answer; `0` checks once |
+
+**Start.** The module checks the database during startup, so a wrong address stops the start instead of the first request. A database that does not answer yet — a rolling deploy, a database container that starts a moment after the service — is retried: each attempt waits up to `DATABASE_CONNECT_TIMEOUT`, pauses grow from 250ms to 2s, each failed attempt is logged as a warning, and no attempt starts after `DATABASE_STARTUP_TIMEOUT` (`Config.StartupTimeout` in code; zero in a `Config` built by hand). A refusal of the database itself — a wrong user or password, no such database — and a malformed URL stop the start at once. A stop signal during the retries stops them. The database is not optional: migrations, River, settings and the domain need the pool, so there is no start without it.
 
 Every connection gets the types of the platform first: `numeric` is read and written as `decimal.Decimal` (`github.com/shopspring/decimal`, the type `db/sqlc.yaml` maps it to) with the binary codec of `pgx-shopspring-decimal`, as in taply. Money and percentages never pass through `float64`.
 
@@ -583,19 +586,30 @@ riverx.MaxAttemptsFrom(app, func(_ context.Context, kind string) (int, bool) {
 })
 ```
 
-- `QueuesFrom` is called once, when the module starts working jobs and the settings are loaded; a changed value applies after a restart, so mark such settings `requires_restart` in `settings.yaml`. Queues set in `RIVER_QUEUES` or in `Config.Queues` win over it, so an environment can still pin its capacity; with neither the module works `default=10`. An error, an empty map or a queue without workers stops the start. An instance that only inserts (`RIVER_WORK=false`, `APP_ROLE=api`) does not call it.
+- `QueuesFrom` is called once, when the module starts working jobs and the settings are loaded; a changed value applies after a restart, so mark such settings `requires_restart` in `settings.yaml`. Queues set in `RIVER_QUEUES` or in `Config.Queues` win over it, so an environment can still pin its capacity; with neither the module works `default=10`. See [where the queue sizes come from](#queue-sizes). An error, an empty map or a queue without workers stops the start. An instance that only inserts (`RIVER_WORK=false`, `APP_ROLE=api`) does not call it.
 - `MaxAttemptsFrom` is asked on every insert through `Queue` and for every periodic job, so a changed value applies to the jobs inserted after the change. Its value replaces the attempts the job carries in `InsertOpts()`; attempts passed explicitly to `Insert`/`InsertTx` or returned by `PeriodicJob.Opts` win over it. A kind it reports `false` or a non positive number for keeps its own attempts. Inserts made with `Client()` directly are River as it is and do not see it.
 
 **Shutdown.** The module stops River softly: no new jobs are fetched and running ones may finish. `RIVER_STOP_TIMEOUT` bounds that wait; when it runs out — or `SHUTDOWN_TIMEOUT` does — the running jobs get their context cancelled and `RIVER_CANCEL_TIMEOUT` to return, so none of them writes into a database pool that is already closed. With phased shutdown (`SHUTDOWN_PHASES`, see [Process roles](#process-roles)) the queue drains after the HTTP servers stop and before gRPC does.
 
 | Variable | Default | |
 |---|---|---|
-| `RIVER_QUEUES` | `default=10` | queues and their capacity: an environment parameter, staging and production differ in it |
+| `RIVER_QUEUES` | empty | queues and their capacity, `default=10,mail=2`: an environment parameter, staging and production differ in it. Empty or unset leaves the sizes to `QueuesFrom`, then `default=10` |
 | `RIVER_WORK` | `true` | `false` makes an instance insert only, for splitting API and worker instances |
 | `RIVER_JOB_TIMEOUT` | `1m` | |
 | `RIVER_COMPLETED_RETENTION`, `RIVER_CANCELLED_RETENTION`, `RIVER_DISCARDED_RETENTION` | `24h`, `24h`, `168h` | |
 | `RIVER_STOP_TIMEOUT` | none | on shutdown, how long running jobs may finish; none waits as long as `SHUTDOWN_TIMEOUT` allows. Taply uses `6s` |
 | `RIVER_CANCEL_TIMEOUT` | none | then how long cancelled jobs get to return; none waits without a limit. Taply uses `1s` |
+
+### Queue sizes
+
+The queues an instance works and their sizes come from the first of these that is set:
+
+1. `Config.Queues` changed in code after `riverx.Load`, or set in a `Config` built by hand;
+2. `RIVER_QUEUES` with a value — any value, `default=10` included, pins the sizes for the environment;
+3. `riverx.QueuesFrom` — the sizes from the project's settings, read once at start;
+4. `default=10`.
+
+`RIVER_QUEUES=` with an empty value counts as unset. The generated `.env.example` leaves it empty since v0.11.2: `make run` reads that file when there is no `.env`, and the `default=10` it held before won over `QueuesFrom`. A `.env` or a deploy environment copied from an older example still has `RIVER_QUEUES=default=10` and keeps winning over the settings: empty it or remove it there.
 
 ## The `enums` module
 
@@ -806,7 +820,18 @@ r, err := st.Get(ctx, "receipts", "2026/09/1.pdf") // s3.ErrNotFound when missin
 err = st.Delete(ctx, "images", path)
 ```
 
-The module connects during startup and checks the keys, so a wrong address stops the start instead of the first upload; `/health` keeps checking. `S3_ENDPOINT`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` are required; `S3_USE_SSL`, `S3_REGION` and `S3_PUBLIC_URL` are optional.
+The module connects during startup and checks the keys, so a wrong address stops the start instead of the first upload; `/health` keeps checking. `S3_ENDPOINT`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` are required; `S3_USE_SSL`, `S3_REGION`, `S3_PUBLIC_URL`, `S3_STARTUP_TIMEOUT` and `S3_OPTIONAL` are optional.
+
+**Start.** A storage that does not answer yet — a rolling deploy, a MinIO that starts a moment after the service, a 5xx while it starts — is retried: each attempt waits up to 5 seconds, pauses grow from 250ms to 2s, each failed attempt is logged as a warning, and no attempt starts after `S3_STARTUP_TIMEOUT` (15s; `Config.StartupTimeout` in code). `0` is a single check, as before v0.11.2, and so is a `Config` built by hand without the field. An answer of the storage itself — wrong keys, access denied — stops the start at once, without retries.
+
+**Without the storage.** `S3_OPTIONAL=true` (`Config.Optional`) is for a service whose files are a side feature: the start does not retry the storage and does not fail without it: it checks once, for up to 5 seconds, and logs `s3: storage is unreachable, starting without it`. While the storage is unreachable `/health` reports the check as `degraded: …` and the whole response as `"status": "degraded"` with **200**, so a probe neither takes the instance out nor restarts it; `Put`, `Get`, `Delete` and the other calls return the storage's errors, and work again once it answers. `S3_OPTIONAL` also turns off the start retries, and wrong keys do not stop the start either: they show in the log and in `/health`.
+
+| Variable | Default | |
+|---|---|---|
+| `S3_STARTUP_TIMEOUT` | `15s` | how long the start retries a storage that does not answer; `0` checks once |
+| `S3_OPTIONAL` | `false` | `true` starts without the storage, `/health` reports it degraded |
+
+A module of the project's own marks a check that the instance can work without with `platform.Degraded(err)` from its `Health`: `/health` answers 200 with `"status": "degraded"` unless another check fails, and `platform.IsDegraded` tells such an error apart.
 
 ## The `settings` module
 

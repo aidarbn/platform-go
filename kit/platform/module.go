@@ -1,6 +1,9 @@
 package platform
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Module is an infrastructure part of the application: database, queues, API, admin UI.
 //
@@ -32,6 +35,28 @@ type Stopper interface {
 type HealthChecker interface {
 	Health(ctx context.Context) error
 }
+
+// Degraded marks a health check failure of a part the instance can work without, such
+// as optional storage: /health reports the check as "degraded: <error>" and the whole
+// response as "degraded" with status 200, not 503, so a probe does not take the
+// instance out or restart it. A nil error stays nil.
+func Degraded(err error) error {
+	if err == nil {
+		return nil
+	}
+	return degradedError{err}
+}
+
+// IsDegraded reports whether err, or an error it wraps, came from Degraded.
+func IsDegraded(err error) bool {
+	var d degradedError
+	return errors.As(err, &d)
+}
+
+type degradedError struct{ err error }
+
+func (e degradedError) Error() string { return e.err.Error() }
+func (e degradedError) Unwrap() error { return e.err }
 
 // Shutdown phases a module can place its steps in. With phased shutdown on
 // (SHUTDOWN_PHASES), steps run in this order across all modules, as in taply: the HTTP

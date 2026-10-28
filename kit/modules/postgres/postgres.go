@@ -10,14 +10,17 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/aidarbn/platform-go/kit/confx"
+	"github.com/aidarbn/platform-go/kit/internal/startup"
 	"github.com/aidarbn/platform-go/kit/pgdb"
 	"github.com/aidarbn/platform-go/kit/platform"
 )
@@ -35,6 +38,15 @@ type Config struct {
 	// Migrate applies pending migrations during startup. Turn it off when migrations
 	// run as a separate step of the deploy.
 	Migrate bool
+
+	// StartupTimeout is how long the start keeps retrying a database that does not
+	// answer: one that comes up a moment after the instance, as in a rolling deploy,
+	// does not stop the start. Each attempt waits up to ConnectTimeout, pauses grow from
+	// 250ms to 2s, and no attempt starts after StartupTimeout. A refusal of the database
+	// itself (wrong password, no such database) or a malformed URL stops the start at
+	// once. Zero is a single attempt, the behaviour before v0.11.2; Load sets 15
+	// seconds.
+	StartupTimeout time.Duration
 
 	// fromEnv marks the pool sizes Load found in the environment, and loaded keeps what
 	// Load returned. A size set in the environment or changed after Load beats the
@@ -55,6 +67,10 @@ const (
 	fieldLoaded // the Config came from Load, so the bits above are meaningful
 )
 
+// DefaultStartupTimeout is the StartupTimeout Load uses when DATABASE_STARTUP_TIMEOUT is
+// unset.
+const DefaultStartupTimeout = 15 * time.Second
+
 // Load reads the module settings from environment variables.
 func Load(l *confx.Loader) Config {
 	cfg := Config{
@@ -65,6 +81,10 @@ func Load(l *confx.Loader) Config {
 		MaxConnIdleTime: l.Duration("DATABASE_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		ConnectTimeout:  l.Duration("DATABASE_CONNECT_TIMEOUT", 5*time.Second),
 		Migrate:         l.Bool("DATABASE_MIGRATE", true),
+		StartupTimeout:  l.Duration("DATABASE_STARTUP_TIMEOUT", DefaultStartupTimeout),
+	}
+	if cfg.StartupTimeout < 0 {
+		l.Fail(fmt.Errorf("%s: %s is negative", l.Key("DATABASE_STARTUP_TIMEOUT"), cfg.StartupTimeout))
 	}
 	cfg.fromEnv = fieldLoaded
 	for key, field := range map[string]poolField{
@@ -285,9 +305,20 @@ func resolve[T comparable](value, appDefault T, explicit bool) T {
 func (m *Module) Name() string { return "postgres" }
 
 // Init opens the pool, verifies the connection and puts the pool into the container,
-// where other modules and project code pick it up through Pool(app).
+// where other modules and project code pick it up through Pool(app). A database that
+// does not answer yet is retried within StartupTimeout.
 func (m *Module) Init(ctx context.Context, app *platform.App) error {
-	pool, err := pgdb.Open(ctx, m.poolConfig())
+	cfg := m.poolConfig()
+	budget := m.cfg.StartupTimeout
+	if cfg.URL == "" {
+		budget = 0 // pgdb reports the missing URL; there is nothing to wait for
+	}
+	var pool *pgxpool.Pool
+	err := startup.Retry(ctx, app.Logger().With("module", "postgres"), "postgres: database", budget, func(ctx context.Context) error {
+		var err error
+		pool, err = pgdb.Open(ctx, cfg)
+		return err
+	}, refused)
 	if err != nil {
 		return err
 	}
@@ -311,6 +342,18 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 		return fmt.Errorf("pool metrics: %w", err)
 	}
 	return nil
+}
+
+// refused reports a failure retrying would not help: the database refused the login or
+// has no such database, or the URL does not parse. An unreachable database, one that is
+// starting up or has no free connection slots is retried.
+func refused(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return strings.HasPrefix(pgErr.Code, "28") || pgErr.Code == "3D000"
+	}
+	var parseErr *pgconn.ParseConfigError
+	return errors.As(err, &parseErr)
 }
 
 // Health reports whether the database answers.

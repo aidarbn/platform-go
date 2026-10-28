@@ -257,3 +257,19 @@ func TestJetRejectsBadSettings(t *testing.T) {
 		t.Errorf("sqlc in the old jet folder: %v", err)
 	}
 }
+
+// The example environment leaves RIVER_QUEUES empty: make run reads .env.example when
+// there is no .env, and a value there would win over riverx.QueuesFrom.
+func TestEnvExampleLeavesRiverQueuesEmpty(t *testing.T) {
+	files, err := gen.Wiring(mustParse(t, "schema: 1\nproject:\n  module: example.com/app\nmodules:\n  postgres: {}\n  river: {}\n"))
+	if err != nil {
+		t.Fatalf("Wiring: %v", err)
+	}
+	env := string(files[gen.EnvPath])
+	if !strings.Contains(env, "\nRIVER_QUEUES=\n") || strings.Contains(env, "RIVER_QUEUES=default") {
+		t.Errorf("RIVER_QUEUES in .env.example:\n%s", env)
+	}
+	if !strings.Contains(env, "wins over riverx.QueuesFrom") {
+		t.Errorf("no word on the precedence:\n%s", env)
+	}
+}

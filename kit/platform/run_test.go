@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -255,6 +256,64 @@ func TestHealthReportsFailure(t *testing.T) {
 	}
 	if err := stop(); err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestHealthReportsDegraded(t *testing.T) {
+	j := &journal{}
+	healthOf := func(modules []platform.Module) (int, string, map[string]string) {
+		t.Helper()
+		addr, stop := runUntilStarted(t, testConfig(nil), modules, nil)
+		defer func() {
+			if err := stop(); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		}()
+		resp, err := http.Get("http://" + addr + "/health")
+		if err != nil {
+			t.Fatalf("health: %v", err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Status string            `json:"status"`
+			Checks map[string]string `json:"checks"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return resp.StatusCode, body.Status, body.Checks
+	}
+
+	degraded := fmt.Errorf("s3: %w", platform.Degraded(errors.New("storage is unreachable")))
+	code, status, checks := healthOf([]platform.Module{
+		&fakeModule{name: "postgres", journal: j},
+		&fakeModule{name: "s3", journal: j, healthErr: degraded},
+	})
+	if code != http.StatusOK || status != "degraded" || checks["s3"] != "degraded: s3: storage is unreachable" || checks["postgres"] != "ok" {
+		t.Errorf("health = %d %s %v, want 200 degraded", code, status, checks)
+	}
+
+	// A failed check wins over a degraded one, whatever the order.
+	code, status, checks = healthOf([]platform.Module{
+		&fakeModule{name: "s3", journal: j, healthErr: degraded},
+		&fakeModule{name: "postgres", journal: j, healthErr: errors.New("no connection")},
+	})
+	if code != http.StatusServiceUnavailable || status != "fail" || checks["postgres"] != "no connection" {
+		t.Errorf("health = %d %s %v, want 503 fail", code, status, checks)
+	}
+}
+
+func TestDegraded(t *testing.T) {
+	if platform.Degraded(nil) != nil {
+		t.Error("Degraded(nil) must be nil")
+	}
+	base := errors.New("down")
+	err := platform.Degraded(base)
+	if !platform.IsDegraded(err) || !errors.Is(err, base) || err.Error() != "down" {
+		t.Errorf("Degraded(down) = %v", err)
+	}
+	if platform.IsDegraded(base) || platform.IsDegraded(nil) {
+		t.Error("a plain error is not degraded")
 	}
 }
 
