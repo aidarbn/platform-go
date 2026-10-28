@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,6 +42,8 @@ type Client struct {
 	mu        sync.RWMutex
 	static    map[string]map[Locale]string
 	templates []errorTemplate
+
+	external atomic.Bool // translate the failures of external providers too
 }
 
 // New creates a client. The pool may be nil for static translations only.
@@ -87,6 +90,16 @@ var schemaSteps = []pgdb.SchemaStep{{Version: 1, Statements: []string{
 )`,
 	`CREATE INDEX IF NOT EXISTS idx_i18n_translations_lookup ON ` + Table + ` (entity, entity_id, locale)`,
 }}}
+
+// TranslateExternal turns on the translation of the failures of external providers (an
+// ErrorInfo of reason EXTERNAL_UNAVAILABLE or EXTERNAL_TIMEOUT), as taply translates
+// "zebra: external service timeout" for the guest at a tablet. Off by default: their
+// text names the provider and stays as it is. On, such a message is translated like any
+// other — only when the dictionary has an entry for it, otherwise it keeps its text — and
+// its details are kept; the codes TranslateError never translates stay untranslated, so
+// an EXTERNAL_UNAVAILABLE under Unavailable, as api.ExternalUnavailable builds it, keeps
+// its text either way.
+func (c *Client) TranslateExternal(on bool) { c.external.Store(on) }
 
 // DefaultLocale is the locale of the base columns and the fallback of every lookup.
 func (c *Client) DefaultLocale() Locale { return c.defaultLocale }
