@@ -372,6 +372,41 @@ func storeContract(t *testing.T, store api.IdempotencyStore, key string) {
 	if err := store.Finish(ctx, done); err != nil {
 		t.Fatal(err)
 	}
+
+	// A completed record past its expiry, not yet deleted, is taken over by exactly one
+	// of racing repeats; a fresh one is not taken over at all.
+	took.Store(0)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := store.Retake(ctx, first.ID, us(time.Minute))
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				took.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if took.Load() != 1 {
+		t.Errorf("%d repeats took the expired outcome", took.Load())
+	}
+	if got, _, _ := store.Begin(ctx, rec); got.Status != "in_progress" {
+		t.Errorf("after taking the expired outcome: %+v", got)
+	}
+	fresh := first
+	fresh.Status, fresh.ExpiresAt, fresh.Lease = "completed", us(time.Hour), time.Time{}
+	if err := store.Finish(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.Retake(ctx, first.ID, us(time.Minute)); ok || err != nil {
+		t.Errorf("a fresh outcome was taken over: %v %v", ok, err)
+	}
+	if err := store.Finish(ctx, done); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := store.DeleteExpired(ctx, time.Now()); err != nil || n < 1 {
 		t.Errorf("DeleteExpired = %d, %v", n, err)
 	}

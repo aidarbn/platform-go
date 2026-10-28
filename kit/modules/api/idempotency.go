@@ -76,8 +76,9 @@ type IdempotencyRecord struct {
 type IdempotencyStore interface {
 	// Begin inserts an in_progress record, or returns the existing one with created false.
 	Begin(ctx context.Context, rec IdempotencyRecord) (IdempotencyRecord, bool, error)
-	// Retake moves a retry record, or an in_progress one whose lock expired, back to
-	// in_progress until lockUntil. It reports false when another call took it first.
+	// Retake moves a retry record, an in_progress one whose lock expired or a completed
+	// one past its expiry back to in_progress until lockUntil. It reports false when
+	// another call took it first.
 	Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error)
 	// Finish stores the outcome. With rec.Lease set it writes only while the record is
 	// still in_progress with that expiry, and returns ErrIdempotencyLeaseLost otherwise.
@@ -203,27 +204,20 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 	if created {
 		lease = rec.ExpiresAt
 	} else {
-		// The same key with another request is a client bug, not a repeat.
-		if rec.Fingerprint != fingerprint {
-			i.count(info.FullMethod, idemMismatch)
-			return nil, status.Error(codes.AlreadyExists, "duplicate request with different payload")
+		var replay bool
+		if rec, replay, err = i.takeOver(ctx, rec, fingerprint, lease); err != nil || replay {
+			if replay {
+				i.count(info.FullMethod, idemReplay)
+				return i.cached(ctx, info.FullMethod, rec)
+			}
+			if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
+				i.count(info.FullMethod, idemMismatch)
+			} else if ok && st.Code() == codes.Aborted {
+				i.count(info.FullMethod, idemAborted)
+			}
+			return nil, err
 		}
-		if rec.Status == idemCompleted {
-			i.count(info.FullMethod, idemReplay)
-			return i.cached(ctx, info.FullMethod, rec)
-		}
-		// A retry, or a call whose lease expired: one repeat takes it over, the store
-		// decides which.
-		took, err := i.store.Retake(ctx, rec.ID, lease)
-		if err != nil {
-			i.log.ErrorContext(ctx, "idempotency retake failed", "method", info.FullMethod, "err", err)
-			return nil, status.Error(codes.Internal, "internal error")
-		}
-		if !took {
-			i.count(info.FullMethod, idemAborted)
-			return nil, status.Error(codes.Aborted, "request is already in progress")
-		}
-		rec.Status, rec.ExpiresAt = idemInProgress, lease
+		lease = rec.Lease
 	}
 	rec.Lease = lease
 
@@ -245,6 +239,55 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 }
 
 // printableASCII accepts what a client puts into a header: UUIDs and the like.
+// takeOver decides what a repeat of an existing key does: replay the outcome, run the
+// call again under the record, or be refused. It returns the record to run under, or to
+// replay with replay set, or the status for the caller.
+func (i *idempotency) takeOver(ctx context.Context, rec IdempotencyRecord, fingerprint string, lease time.Time) (IdempotencyRecord, bool, error) {
+	for attempt := 0; ; attempt++ {
+		// The same key with another request is a client bug, not a repeat.
+		if rec.Fingerprint != fingerprint {
+			return rec, false, status.Error(codes.AlreadyExists, "duplicate request with different payload")
+		}
+		// A completed record past its retention is gone, even while DeleteExpired has not
+		// removed it yet: the repeat runs the call again. A store that does not let it go
+		// — Retake of a project's store written before — keeps the replay.
+		expired := rec.Status == idemCompleted && time.Now().After(rec.ExpiresAt)
+		if rec.Status == idemCompleted && (!expired || attempt > 0) {
+			return rec, true, nil
+		}
+		// A retry, a call whose lease expired or an expired outcome: one repeat takes it
+		// over, the store decides which.
+		took, err := i.store.Retake(ctx, rec.ID, lease)
+		if err != nil {
+			i.log.ErrorContext(ctx, "idempotency retake failed", "method", rec.Method, "err", err)
+			return rec, false, status.Error(codes.Internal, "internal error")
+		}
+		if took {
+			rec.Status, rec.ExpiresAt, rec.Lease = idemInProgress, lease, lease
+			return rec, false, nil
+		}
+		if attempt > 0 {
+			return rec, false, status.Error(codes.Aborted, "request is already in progress")
+		}
+		// Another repeat was first: read the record again and decide on what it is now —
+		// in progress is Aborted, a fresh outcome is replayed. Begin reads it, and holds
+		// the key itself when the record was deleted in between.
+		var created bool
+		rec, created, err = i.store.Begin(ctx, IdempotencyRecord{
+			User: rec.User, Method: rec.Method, Key: rec.Key, Fingerprint: fingerprint,
+			Status: idemInProgress, ExpiresAt: lease,
+		})
+		if err != nil {
+			i.log.ErrorContext(ctx, "idempotency check failed", "method", rec.Method, "err", err)
+			return rec, false, status.Error(codes.Internal, "internal error")
+		}
+		if created {
+			rec.Lease = rec.ExpiresAt
+			return rec, false, nil
+		}
+	}
+}
+
 func printableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < 0x20 || s[i] > 0x7e {
@@ -552,7 +595,7 @@ func (s *MemoryIdempotencyStore) Retake(_ context.Context, id int64, lockUntil t
 	if r == nil {
 		return false, nil
 	}
-	if r.Status == idemRetry || (r.Status == idemInProgress && time.Now().After(r.ExpiresAt)) {
+	if r.Status == idemRetry || ((r.Status == idemInProgress || r.Status == idemCompleted) && time.Now().After(r.ExpiresAt)) {
 		r.Status, r.ExpiresAt = idemInProgress, lockUntil
 		return true, nil
 	}
@@ -675,12 +718,12 @@ func (s *pgIdempotencyStore) Begin(ctx context.Context, rec IdempotencyRecord) (
 	return existing, false, err
 }
 
-// Retake is a compare and set: of two repeats racing for a retry or an expired lease,
-// one wins.
+// Retake is a compare and set: of two repeats racing for a retry, an expired lease or
+// an expired outcome, one wins.
 func (s *pgIdempotencyStore) Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		"UPDATE "+idempotencyTable+" SET status = 'in_progress', expires_at = $2, updated_at = now() "+
-			"WHERE id = $1 AND (status = 'retry' OR (status = 'in_progress' AND expires_at < now()))",
+			"WHERE id = $1 AND (status = 'retry' OR (status IN ('in_progress', 'completed') AND expires_at < now()))",
 		id, lockUntil)
 	if err != nil {
 		return false, err
