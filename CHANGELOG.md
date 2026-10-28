@@ -2,6 +2,25 @@
 
 Changes by release. What a project or its clients see differently, with how to keep the old behaviour, is in [docs/upgrades.md](docs/upgrades.md#behaviour-changes); manual steps of an upgrade are there too. Releases before v0.11.0 are described only there.
 
+## v0.11.2
+
+Backward compatible: no API of `kit` changes incompatibly. One default changes, listed under Changed: the start check of `s3` and `postgres` is retried for 15 seconds instead of being made once; `S3_STARTUP_TIMEOUT=0` and `DATABASE_STARTUP_TIMEOUT=0` give the old behaviour back. Upgrade with `platformgo upgrade v0.11.2`; nothing to do in a project, but see Fixed for a `.env` that still sets `RIVER_QUEUES=default=10`.
+
+### Added
+
+- `s3`: `S3_OPTIONAL` (`Config.Optional`) — start without the storage: one check, a warning in the log, `/health` reports s3 as degraded with 200 while it is unreachable, file operations return the storage's errors. Off by default. See [the s3 module](docs/modules.md#the-s3-module).
+- `s3`: `S3_STARTUP_TIMEOUT` (`Config.StartupTimeout`) and `postgres`: `DATABASE_STARTUP_TIMEOUT` (`Config.StartupTimeout`) — how long the start retries a storage or a database that does not answer.
+- `platform`: `platform.Degraded` and `platform.IsDegraded` — a health check failure of a part the instance can work without; `/health` answers 200 with `"status": "degraded"` unless another check fails.
+
+### Changed
+
+- `s3`, `postgres`: the start check is retried for 15 seconds by default — each attempt as long as before (5s for the storage, `DATABASE_CONNECT_TIMEOUT` for the database), pauses from 250ms to 2s, a warning for each failed attempt — instead of one attempt and exit. A replica rolled out while MinIO or Postgres restarts now waits for it rather than exiting and being restarted, as one did on the dev stand of taply. A refusal of the service itself (wrong keys, a wrong password, no such database, a malformed URL) is not retried and stops the start at once, as before.
+  Why retries by default and not the old behaviour byte for byte: the old check turned a few seconds of a restarting dependency into a crash and a restart of the service, which is what the fix is for; with retries a misconfiguration still fails at once, and a dependency that stays down still stops the start, within the same order of time (15–20s instead of 5s) — well inside the start budget of compose and Kubernetes probes, since `/health` is not served until the modules are up anyway. The storage is not made optional by default: a service that needs its files should not run without them unnoticed. The old behaviour: `S3_STARTUP_TIMEOUT=0`, `DATABASE_STARTUP_TIMEOUT=0`; a `Config` built by hand rather than by `Load` keeps it as well. See [behaviour changes](docs/upgrades.md#v0112).
+
+### Fixed
+
+- Generator: `.env.example` has `RIVER_QUEUES=` empty, with a comment on the order, instead of `RIVER_QUEUES=default=10`. A value there won over `riverx.QueuesFrom`, and `make run` reads `.env.example` when there is no `.env`, so a project sizing its queues from its settings ran `default=10`. The upgrade regenerates `.env.example`; a `.env` or a deploy environment copied from an older example still sets `RIVER_QUEUES=default=10` and still wins — empty or remove it there. The order of the sources is in [queue sizes](docs/modules.md#queue-sizes).
+
 ## v0.11.1
 
 Backward compatible: one new option, off by default; without it the platform behaves as v0.11.0 byte for byte. One fix raises a dependency. Upgrade with `platformgo upgrade v0.11.1`; nothing to do in a project.

@@ -80,6 +80,7 @@ var all = []Module{
 			{Key: "DATABASE_MAX_CONNS", Example: "10", Comment: "connection limit"},
 			{Key: "DATABASE_MIN_CONNS", Example: "0", Comment: "connections kept open"},
 			{Key: "DATABASE_MIGRATE", Example: "true", Comment: "apply migrations on start"},
+			{Key: "DATABASE_STARTUP_TIMEOUT", Example: "15s", Comment: "how long the start retries a database that does not answer; 0 tries once"},
 		},
 		ProjectPkg:   "db/migrations",
 		ProjectAlias: "migrations",
@@ -232,6 +233,8 @@ var all = []Module{
 			{Key: "S3_USE_SSL", Example: "false", Comment: "https to the storage"},
 			{Key: "S3_REGION", Example: "", Comment: "region, when the storage needs one"},
 			{Key: "S3_PUBLIC_URL", Example: "", Comment: "where public buckets are served, for example https://example.com/storage"},
+			{Key: "S3_STARTUP_TIMEOUT", Example: "15s", Comment: "how long the start retries a storage that does not answer; 0 tries once"},
+			{Key: "S3_OPTIONAL", Example: "false", Comment: "true starts without the storage: /health reports it degraded, file operations fail"},
 		},
 		// Pigsty's community build of MinIO: MinIO publishes no images any more, neither to
 		// Docker Hub nor, without an account, to quay.io.
@@ -270,7 +273,9 @@ var all = []Module{
 		Package:  "riverx",
 		Field:    "River",
 		Env: []EnvVar{
-			{Key: "RIVER_QUEUES", Example: "default=10", Comment: "queues and how many jobs each works at once"},
+			// Empty: a value here would win over the queue sizes of riverx.QueuesFrom
+			// (the project's settings), and make run reads this file when there is no .env.
+			{Key: "RIVER_QUEUES", Example: "", Comment: "queues and how many jobs each works at once, for example default=10,mail=2; set, it wins over riverx.QueuesFrom; empty takes QueuesFrom, otherwise default=10"},
 			{Key: "RIVER_WORK", Example: "true", Comment: "work jobs; false leaves this instance inserting only"},
 			{Key: "RIVER_JOB_TIMEOUT", Example: "1m", Comment: "how long one job may run"},
 			{Key: "RIVER_COMPLETED_RETENTION", Example: "24h", Comment: "how long completed jobs are kept"},
