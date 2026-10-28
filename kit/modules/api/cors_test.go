@@ -111,3 +111,60 @@ func TestCORSBadHeaderInConfigStopsTheStart(t *testing.T) {
 		}
 	}
 }
+
+// A preflight the CORS policy does not answer goes on to the API by default, and with
+// CORSPreflightNoContent answers 204 without CORS headers, as taply's.
+func TestCORSPreflightNoContent(t *testing.T) {
+	if api.Load(confx.New("")).CORSPreflightNoContent {
+		t.Fatal("on by default")
+	}
+	t.Setenv("API_CORS_PREFLIGHT_NO_CONTENT", "true")
+	if !api.Load(confx.New("")).CORSPreflightNoContent {
+		t.Fatal("API_CORS_PREFLIGHT_NO_CONTENT is not read")
+	}
+
+	preflight := func(origin string) map[string]string {
+		h := map[string]string{"Access-Control-Request-Method": "POST"}
+		if origin != "" {
+			h["Origin"] = origin
+		}
+		return h
+	}
+	for name, tc := range map[string]struct {
+		cfg     api.Config
+		origin  string
+		code    int
+		allowed bool
+	}{
+		"default, foreign origin": {api.Config{CORSOrigins: []string{"https://app.example.com"}}, "https://evil.example.org", 0, false},
+		"foreign origin":          {api.Config{CORSOrigins: []string{"https://app.example.com"}, CORSPreflightNoContent: true}, "https://evil.example.org", http.StatusNoContent, false},
+		"no origin":               {api.Config{CORSOrigins: []string{"https://app.example.com"}, CORSPreflightNoContent: true}, "", http.StatusNoContent, false},
+		"no CORS at all":          {api.Config{CORSPreflightNoContent: true}, "https://app.example.com", http.StatusNoContent, false},
+		"allowed origin":          {api.Config{CORSOrigins: []string{"https://app.example.com"}, CORSPreflightNoContent: true}, "https://app.example.com", http.StatusNoContent, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := start(t, tc.cfg)
+			code, body, h := s.do("OPTIONS", "/v1/things", "", preflight(tc.origin))
+			if tc.code == 0 {
+				// The gateway's answer, as before the option.
+				if code == http.StatusNoContent || body == "" {
+					t.Errorf("the default changed: %d %q", code, body)
+				}
+				return
+			}
+			if code != tc.code || body != "" {
+				t.Errorf("%d %q", code, body)
+			}
+			if got := h.Get("Access-Control-Allow-Origin") != ""; got != tc.allowed {
+				t.Errorf("Access-Control-Allow-Origin = %q", h.Get("Access-Control-Allow-Origin"))
+			}
+			if !tc.allowed && h.Get("Access-Control-Allow-Methods") != "" {
+				t.Error("CORS headers for a refused preflight")
+			}
+			// Other methods still reach the API.
+			if code, _, _ := s.do("POST", "/v1/things", `{"name":"a"}`, map[string]string{"Origin": tc.origin}); code != http.StatusOK {
+				t.Errorf("POST: %d", code)
+			}
+		})
+	}
+}

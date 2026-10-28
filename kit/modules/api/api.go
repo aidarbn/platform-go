@@ -63,6 +63,11 @@ type Config struct {
 	CORSExpose        []string
 	CORSNoCredentials bool
 	CORSMaxAge        int
+	// CORSPreflightNoContent answers every OPTIONS request that gets no CORS answer — a
+	// foreign origin, no origin, no API_CORS_ORIGINS — with 204 and no CORS headers, as
+	// taply does, instead of passing it to the API, whose gateway answers 404 or 405
+	// with a body.
+	CORSPreflightNoContent bool
 
 	// RateLimit per client address, and per principal; zero rates turn it off.
 	RateLimit RateLimit
@@ -151,6 +156,8 @@ func Load(l *confx.Loader) Config {
 		CORSExpose:        headerNames(l, "API_CORS_EXPOSE"),
 		CORSNoCredentials: !l.Bool("API_CORS_CREDENTIALS", true),
 		CORSMaxAge:        corsMaxAge(l),
+
+		CORSPreflightNoContent: l.Bool("API_CORS_PREFLIGHT_NO_CONTENT", false),
 
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
@@ -925,6 +932,9 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 		on: m.cfg.AccessLog, bodies: m.cfg.LogBodies,
 		mask: slices.Concat(m.cfg.LogBodiesMaskPaths, m.registry.maskPaths),
 	}, h)
+	if m.cfg.CORSPreflightNoContent {
+		h = preflightNoContent(h)
+	}
 	if len(m.cfg.CORSOrigins) > 0 {
 		h = newCORS(m.cfg, m.registry.corsHeaders).wrap(h)
 	}

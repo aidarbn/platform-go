@@ -289,6 +289,19 @@ func (p *corsPolicy) wrap(next http.Handler) http.Handler {
 	})
 }
 
+// preflightNoContent answers an OPTIONS request the CORS policy let through — it sits
+// inside the policy — with 204 and no CORS headers: the browser refuses the call, and
+// the API never sees it.
+func preflightNoContent(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // joinHeaders lists header names once each, in the order given; header names do not
 // depend on case.
 func joinHeaders(lists ...[]string) string {
