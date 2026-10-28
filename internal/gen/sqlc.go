@@ -80,10 +80,8 @@ func (s SqlcSettings) QueriesDir() string { return path.Join(s.Dir, s.Queries) }
 // Sqlc reads the sqlc option of the postgres module, with the defaults for what the file
 // leaves out.
 func Sqlc(f *spec.File) (SqlcSettings, error) {
-	var opts struct {
-		Sqlc SqlcSettings `yaml:"sqlc"`
-	}
-	if err := f.DecodeOptions("postgres", &opts); err != nil {
+	opts, err := postgresOptions(f)
+	if err != nil {
 		return SqlcSettings{}, err
 	}
 	s := opts.Sqlc

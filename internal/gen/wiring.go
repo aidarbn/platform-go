@@ -171,11 +171,15 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 		return nil, fmt.Errorf("%s: %w", ModulesPath, err)
 	}
 
+	local, err := localModules(f, all)
+	if err != nil {
+		return nil, err
+	}
 	files := map[string][]byte{
 		ConfigPath:  config,
 		ModulesPath: mods,
-		EnvPath:     env(f, all),
-		ComposePath: compose(f, all),
+		EnvPath:     env(f, local),
+		ComposePath: compose(f, local),
 	}
 	if _, ok := f.Modules["postgres"]; ok {
 		sqlc, err := Sqlc(f)
@@ -312,6 +316,23 @@ func env(f *spec.File, modules []registry.Module) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+// localModules are the enabled modules with the local services and examples the
+// options of the project ask for: postgres takes its database from the compose option.
+func localModules(f *spec.File, modules []registry.Module) ([]registry.Module, error) {
+	out := slices.Clone(modules)
+	for i, m := range out {
+		if m.Name != "postgres" {
+			continue
+		}
+		c, err := PostgresComposeSettings(f)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = c.apply(m)
+	}
+	return out, nil
 }
 
 // compose builds the local services of the enabled modules. The file is always there,

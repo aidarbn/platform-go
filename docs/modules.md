@@ -160,6 +160,31 @@ created db/migrations/20260914073005_create_orders.sql
 
 The directory is embedded into the binary by the generated `db/migrations/migrations.gen.go`, and the module applies pending migrations during startup, before any other module touches the database. A session advisory lock makes several instances starting at once apply each migration exactly once. Set `DATABASE_MIGRATE=false` when migrations run as a separate deploy step.
 
+### The local database
+
+`docker-compose.yml` gets a `postgres` service — `postgres:18-alpine`, user, password and database `app`, on `127.0.0.1:5432`, data in the `postgres-data` volume, a `pg_isready` health check — and `.env.example` its address in `DATABASE_URL`. A project with another local database says so in the `compose` option; every key is optional and the defaults are that service, byte for byte:
+
+```yaml
+modules:
+  postgres:
+    compose:
+      image: postgres:16-alpine          # default postgres:18-alpine
+      db: be-maas-api                    # default app
+      user: app                          # default app
+      password: app                      # default app
+      port: 5544                         # on 127.0.0.1; default 5432
+      data_dir: /var/lib/postgresql/data # where postgres-data goes; default /var/lib/postgresql
+      command: [-c, max_connections=300] # arguments of the server; default none
+      init: deploy/postgres/keycloak.sql # into /docker-entrypoint-initdb.d; default none
+      enabled: true                      # false: no service, for one of the project's own
+```
+
+- `DATABASE_URL` in `.env.example` follows `user`, `password`, `port` and `db`, escaped as a URL; `platformgo db generate` reads it from there when nothing else gives an address.
+- `data_dir` is where the image keeps its data: `/var/lib/postgresql` from postgres 18, `/var/lib/postgresql/data` before it. With the wrong one the data lands in an anonymous volume and is lost when the container is recreated.
+- `init` is a folder or a `.sql`, `.sql.gz`, `.sql.xz`, `.sql.zst` or `.sh` file, relative to the project root and inside it, mounted read only: a file into `/docker-entrypoint-initdb.d/<its name>`, a folder as `/docker-entrypoint-initdb.d`. The image runs the scripts once, on an empty database: after a change, `docker compose down -v` to see it.
+- `enabled: false` leaves the service and its volume out, for a database service of the project's own in `docker-compose.override.yml`; `DATABASE_URL` still follows the other keys.
+- Values are quoted where YAML, the shell of the health check or the `$` interpolation of compose would read them differently; the port is 1 to 65535.
+
 ### Pool, types and connection hooks
 
 The pool is configured by environment variables:

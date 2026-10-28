@@ -9,6 +9,7 @@ Backward compatible: no API of `kit` changes incompatibly, and every new behavio
 ### Added
 
 - `rbac`: any casbin model and policy store. `WithModel` (role inheritance, domains, matchers of the project's own), `WithAdapter` (any casbin adapter, Postgres for one) with `Enforcer.Reload` and `WithReloadEvery` to take a new policy without a restart, safe while calls are checked; `WithFunction` for functions of the matcher; `WithRequest` and `ErrUnauthenticated` for how a call becomes the requests to enforce; `WithPublic` for public methods of another request; `Configure` to give the options from the `main.go` of a generated project; `Enforcer.Check`, `Enforcer.Casbin` (the `*casbin.SyncedEnforcer`) and `NewEnforcerWith`; the metric `rbac_policy_reloads_total{result}` with an adapter. See [the rbac module](docs/modules.md#any-casbin-model).
+- `postgres`: the local database of `docker-compose.yml` and the `DATABASE_URL` of `.env.example` are an option, `compose` — image, database, user, password, port, data folder, server arguments, an init script, or no service at all. See [the local database](docs/modules.md#the-local-database).
 
 - `api`: `api.IdempotencyMessages` — texts of the errors about a missing, too long or unprintable `Idempotency-Key` of the project's own (taply's: `Idempotency-Key is required in header`, `Idempotency-Key is too long`).
 - `api`: `API_CORS_PREFLIGHT_NO_CONTENT` (`Config.CORSPreflightNoContent`) — an `OPTIONS` request the CORS policy does not answer gets 204 without CORS headers, as in taply, instead of the gateway's 404 or 405.
