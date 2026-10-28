@@ -312,6 +312,7 @@ type Registry struct {
 	idemMethods  []string
 	idemListed   bool
 	idemUser     func(context.Context) string
+	idemTexts    IdempotencyKeyMessages
 	corsHeaders  []string
 	rateKey      func(context.Context) string
 	replacements map[string]string
@@ -441,6 +442,22 @@ func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
 	r := registry(app)
 	r.add(func() { r.idemUser = user })
+}
+
+// IdempotencyKeyMessages are the texts of the InvalidArgument a call gets for a bad
+// Idempotency-Key. An empty one keeps the platform's.
+type IdempotencyKeyMessages struct {
+	Required     string // "Idempotency-Key is required in the header"
+	TooLong      string // "Idempotency-Key is longer than 255 characters"
+	NotPrintable string // "Idempotency-Key must be printable ASCII"
+}
+
+// IdempotencyMessages replaces the texts of the errors about the Idempotency-Key, for a
+// project whose clients know other ones — taply's "Idempotency-Key is required in
+// header" and "Idempotency-Key is too long".
+func IdempotencyMessages(app *platform.App, texts IdempotencyKeyMessages) {
+	r := registry(app)
+	r.add(func() { r.idemTexts = texts })
 }
 
 // Methods returns the full names of every registered gRPC method, such as
@@ -845,7 +862,7 @@ func (m *Module) idempotency(ctx context.Context) (*idempotency, error) {
 		}
 	}()
 	return &idempotency{
-		store: store, required: required, user: m.registry.idemUser,
+		store: store, required: required, user: m.registry.idemUser, texts: m.registry.idemTexts,
 		retention: m.cfg.IdempotencyRetention, lease: m.cfg.IdempotencyLease,
 		log: m.log, now: time.Now, calls: calls,
 	}, nil

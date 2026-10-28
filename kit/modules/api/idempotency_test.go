@@ -443,3 +443,41 @@ func TestPostgresIdempotencyStoreContract(t *testing.T) {
 	})
 	storeContract(t, store, key)
 }
+
+// The texts of a bad key are the platform's, or the project's own.
+func TestIdempotencyKeyMessages(t *testing.T) {
+	long := strings.Repeat("k", 256)
+	for name, tc := range map[string]struct {
+		texts             *api.IdempotencyKeyMessages
+		required, tooLong string
+	}{
+		"the platform's": {nil,
+			"Idempotency-Key is required in the header", "Idempotency-Key is longer than 255 characters"},
+		"taply's": {&api.IdempotencyKeyMessages{Required: "Idempotency-Key is required in header", TooLong: "Idempotency-Key is too long"},
+			"Idempotency-Key is required in header", "Idempotency-Key is too long"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			extraWire = func(app *platform.App) {
+				api.RequireIdempotency(app, "/platformtest.v1.EchoService/CreateThing")
+				withUser(app)
+				if tc.texts != nil {
+					api.IdempotencyMessages(app, *tc.texts)
+				}
+			}
+			t.Cleanup(func() { extraWire = nil })
+			s := start(t, api.Config{}, api.WithIdempotencyStore(api.NewMemoryIdempotencyStore()))
+			for _, c := range []struct {
+				headers map[string]string
+				want    string
+			}{
+				{map[string]string{"X-User": "alice"}, tc.required},
+				{map[string]string{"X-User": "alice", "Idempotency-Key": long}, tc.tooLong},
+			} {
+				code, body, _ := s.do("POST", "/v1/things", `{"name":"a"}`, c.headers)
+				if code != http.StatusBadRequest || !strings.Contains(body, `"`+c.want+`"`) {
+					t.Errorf("%d %s, want %q", code, body, c.want)
+				}
+			}
+		})
+	}
+}

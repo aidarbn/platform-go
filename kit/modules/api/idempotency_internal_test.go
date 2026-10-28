@@ -543,3 +543,17 @@ func mustMarshal(m proto.Message) []byte {
 	}
 	return b
 }
+
+// A key the gateway lets through only over gRPC: the project's text for it.
+func TestNotPrintableKeyMessage(t *testing.T) {
+	var log bytes.Buffer
+	i := newTestIdempotency(NewMemoryIdempotencyStore(), &log)
+	h := func(context.Context, any) (any, error) { return &testv1.CreateThingResponse{}, nil }
+	if _, err := call(i, createThing, "a\tb", h); status.Convert(err).Message() != "Idempotency-Key must be printable ASCII" {
+		t.Errorf("the platform's text: %v", err)
+	}
+	i.texts = IdempotencyKeyMessages{NotPrintable: "bad key"}
+	if _, err := call(i, createThing, "a\tb", h); status.Convert(err).Message() != "bad key" {
+		t.Errorf("the project's text: %v", err)
+	}
+}

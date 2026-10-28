@@ -137,6 +137,7 @@ type idempotency struct {
 	required  map[string]bool
 	accept    map[string]bool // the methods whose keys count; filled once the services are known
 	user      func(context.Context) string
+	texts     IdempotencyKeyMessages
 	retention time.Duration
 	lease     time.Duration
 	log       *slog.Logger
@@ -160,7 +161,7 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 	key := idempotencyKey(ctx)
 	if key == "" {
 		if i.required[info.FullMethod] {
-			return nil, status.Errorf(codes.InvalidArgument, "%s is required in the header", IdempotencyKeyHeader)
+			return nil, i.invalid(i.texts.Required, fmt.Sprintf("%s is required in the header", IdempotencyKeyHeader))
 		}
 		return handler(ctx, req)
 	}
@@ -177,10 +178,10 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 		return handler(ctx, req)
 	}
 	if len(key) > maxIdempotencyKey {
-		return nil, status.Errorf(codes.InvalidArgument, "%s is longer than %d characters", IdempotencyKeyHeader, maxIdempotencyKey)
+		return nil, i.invalid(i.texts.TooLong, fmt.Sprintf("%s is longer than %d characters", IdempotencyKeyHeader, maxIdempotencyKey))
 	}
 	if !printableASCII(key) {
-		return nil, status.Errorf(codes.InvalidArgument, "%s must be printable ASCII", IdempotencyKeyHeader)
+		return nil, i.invalid(i.texts.NotPrintable, fmt.Sprintf("%s must be printable ASCII", IdempotencyKeyHeader))
 	}
 
 	msg, ok := req.(proto.Message)
@@ -236,6 +237,14 @@ func (i *idempotency) unary(ctx context.Context, req any, info *grpc.UnaryServer
 	resp, handlerErr := handler(ctx, req)
 	i.finish(ctx, rec, held, resp, handlerErr)
 	return resp, handlerErr
+}
+
+// invalid is the InvalidArgument for a bad key: the project's text, or the platform's.
+func (i *idempotency) invalid(text, platform string) error {
+	if text == "" {
+		text = platform
+	}
+	return status.Error(codes.InvalidArgument, text)
 }
 
 // printableASCII accepts what a client puts into a header: UUIDs and the like.
