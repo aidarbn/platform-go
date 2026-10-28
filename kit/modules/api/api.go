@@ -320,6 +320,7 @@ type Registry struct {
 	idemListed   bool
 	idemUser     func(context.Context) string
 	idemTexts    IdempotencyKeyMessages
+	maxRecv      int
 	corsHeaders  []string
 	rateKey      func(context.Context) string
 	replacements map[string]string
@@ -449,6 +450,15 @@ func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
 	r := registry(app)
 	r.add(func() { r.idemUser = user })
+}
+
+// MaxRecvSize sets the largest request message, in bytes, from code: a project that keeps
+// the limit of uploads in its own settings reads them in wireDomain and passes it here.
+// It wins over API_MAX_RECV_MB and caps HTTP bodies as that does; zero or less keeps the
+// environment's. A change needs a restart, as the variable does.
+func MaxRecvSize(app *platform.App, bytes int) {
+	r := registry(app)
+	r.add(func() { r.maxRecv = bytes })
 }
 
 // IdempotencyKeyMessages are the texts of the InvalidArgument a call gets for a bad
@@ -630,6 +640,9 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 // Start builds the servers from what the project registered and starts serving.
 func (m *Module) Start(ctx context.Context) error {
 	m.registry.seal()
+	if m.registry.maxRecv > 0 {
+		m.cfg.MaxRecvSize = m.registry.maxRecv
+	}
 	// A worker process does not serve the API; services are still registered, so the
 	// same wireDomain works for every role.
 	if m.skipped {

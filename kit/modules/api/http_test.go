@@ -422,3 +422,16 @@ func TestForwardedForOverSeveralLines(t *testing.T) {
 		t.Errorf("%d %s", resp.StatusCode, raw)
 	}
 }
+
+// The limit set in code wins over the environment's.
+func TestMaxRecvSizeFromCode(t *testing.T) {
+	extraWire = func(app *platform.App) { api.MaxRecvSize(app, 1024) }
+	t.Cleanup(func() { extraWire = nil })
+	s := start(t, api.Config{MaxRecvSize: 1 << 20})
+	if code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"`+strings.Repeat("x", 4096)+`"}`, nil); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("a body over the limit of the code: %d", code)
+	}
+	if code, _, _ := s.do("POST", "/v1/echo", `{"message_text":"hi"}`, nil); code != http.StatusOK {
+		t.Errorf("a small body: %d", code)
+	}
+}
