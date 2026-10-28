@@ -40,11 +40,33 @@ type Option func(*Module)
 // wiring passes the embedded i18n/messages.yaml.
 func WithMessages(yaml string) Option { return func(m *Module) { m.messages = yaml } }
 
+// WithErrorPhase moves the translation of error messages to another phase of the API
+// chain. By default it is api.PhaseErrorsI18n, outside authentication, so the refusals
+// of authentication, guards and validation are translated too. api.PhaseAfterValidate
+// translates only what the handler and the phases after validation return, as taply
+// did: a 400, 401 or 403 of the chain keeps its text whatever Accept-Language says.
+func WithErrorPhase(phase api.Phase) Option { return func(m *Module) { m.errorPhase = &phase } }
+
+// Configure applies options to the i18n module among the modules, for a project whose
+// wiring is generated: call it in main, between platformModules and platform.Run.
+func Configure(modules []platform.Module, opts ...Option) error {
+	for _, m := range modules {
+		if mod, ok := m.(*Module); ok {
+			for _, opt := range opts {
+				opt(mod)
+			}
+			return nil
+		}
+	}
+	return errors.New("i18n: the module is not among the modules: enable i18n in platformgo.yaml")
+}
+
 // Module implements platform.Module.
 type Module struct {
-	cfg      Config
-	messages string
-	client   *i18nx.Client
+	cfg        Config
+	messages   string
+	errorPhase *api.Phase // nil: api.PhaseErrorsI18n; a pointer keeps Module comparable
+	client     *i18nx.Client
 
 	mu   sync.RWMutex
 	skip func(context.Context) bool
@@ -85,12 +107,16 @@ func (m *Module) Init(ctx context.Context, app *platform.App) error {
 	platform.Provide(app, m)
 	platform.Provide(app, m.client)
 	// Error messages are translated outside the project's authentication, so its
-	// refusals are translated too; response fields inside it, so SkipTranslation sees
+	// refusals are translated too, unless WithErrorPhase moves them; response fields inside it, so SkipTranslation sees
 	// the caller. An editor's request takes its base fields from the default
 	// translation before normalisation and validation, so they pass the same checks as
 	// fields sent directly, and the base fields are copied back into the translation
 	// after validation, so the translation gets the value the checks passed.
-	api.AddUnaryInterceptorAt(app, api.PhaseErrorsI18n, "i18n-errors", m.client.ErrorInterceptor())
+	errorPhase := api.PhaseErrorsI18n
+	if m.errorPhase != nil {
+		errorPhase = *m.errorPhase
+	}
+	api.AddUnaryInterceptorAt(app, errorPhase, "i18n-errors", m.client.ErrorInterceptor())
 	api.AddUnaryInterceptorAt(app, api.PhaseTransform, "i18n-fields", m.client.FieldsInterceptor(m.skipCall))
 	api.AddUnaryInterceptorAt(app, api.PhaseTransform, "i18n-base", m.client.BaseFromTranslationInterceptor())
 	api.AddUnaryInterceptorAt(app, api.PhaseAfterValidate, "i18n-mirror", m.client.RequestInterceptor())
