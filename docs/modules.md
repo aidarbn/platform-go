@@ -530,10 +530,25 @@ The description marks messages with `additionalProperties: false`: that is the c
 | `API_RATE_IPV6_PREFIX` | 64 | leading bits of an IPv6 address that make one client of the rate limit; `128` limits every address on its own |
 | `API_IDEMPOTENCY_RETENTION`, `API_IDEMPOTENCY_LEASE` | `24h`, `2m` | how long a final outcome is remembered; the lease of a running call, extended while it runs. `API_IDEMPOTENCY_LOCK`, the old name of the lease, is still read, with a warning |
 | `API_ACCESS_LOG`, `API_LOG_BODIES`, `API_SECURITY_HEADERS` | `true` | |
+| `API_HTTP_READ_HEADER_TIMEOUT` | `10s` | how long the headers of a REST request may take to arrive; never off, so a slowloris client is cut off. See [HTTP server timeouts](#http-server-timeouts) |
+| `API_HTTP_READ_TIMEOUT` | none | how long a whole REST request, its body included, may take to arrive |
+| `API_HTTP_WRITE_TIMEOUT` | none | how long a REST request may take from the end of its headers to the end of its answer; none, since it would cut server-streaming methods and downloads |
+| `API_HTTP_IDLE_TIMEOUT` | `2m` | how long a keep-alive connection may wait for its next request |
 | `API_HTTP_STOP_TIMEOUT`, `API_GRPC_STOP_TIMEOUT` | none | on shutdown, how long running REST calls, then running gRPC calls, may finish before they are cut off; none waits as long as `SHUTDOWN_TIMEOUT` allows |
 | `API_LOG_BODIES_MASK_PATHS` | none | path parts whose bodies are logged as `[REDACTED]`, on top of `api.MaskLogBodies` |
 | `API_METRICS_TENANT_HEADER` | none | request header for the `tenant_name` label of the call metrics |
 | `API_TRUSTED_PROXIES` | loopback and private networks | whose `X-Forwarded-For` names the client; networks set here, not the default, may also name it over gRPC with `api.ClientIPMetadataKey`; a request from elsewhere keeps its connection address, so an allowlist by address cannot be bypassed with a forged header. `none` ignores the header; the gRPC side still trusts loopback, for the gateway. Narrow it to the real proxies when clients can reach the service from a private network |
+
+### HTTP server timeouts
+
+The REST server has the four timeouts of `http.Server`, from `API_HTTP_*_TIMEOUT` or the fields `HTTPReadHeaderTimeout`, `HTTPReadTimeout`, `HTTPWriteTimeout` and `HTTPIdleTimeout` of `api.Config` in code. The defaults are chosen so that nothing a project serves today is cut off:
+
+- **Headers, 10s, never off.** A client that sends its headers slower is disconnected, the defence against slowloris. Zero or less in a `Config` built by hand means 10s; in the environment it is refused.
+- **Whole request, none.** An upload of up to `API_MAX_RECV_MB` over a slow mobile link may take long; set a limit per stand when the clients are known — taply had 30s.
+- **Answer, none.** The timeout counts from the end of the headers to the end of the answer, so it would cut a server-streaming method behind the gateway, a download through `api.HandleHTTP` or a long call in the middle of the answer, without an error the client could tell from a dropped connection. Set it only when the API has none of them — taply had 60s. A handler that needs more than the server allows extends its own deadlines: `http.NewResponseController(w).SetWriteDeadline(…)`.
+- **Idle keep-alive connection, 2m.** Before v0.11.3 an idle connection was kept until the client closed it. Zero in a `Config` means 2m and is refused in the environment; negative in a `Config` keeps the connection forever.
+
+The server sets the deadlines anew for every request of a connection, so a preflight that follows a call on a keep-alive connection, the 204 of `API_CORS_PREFLIGHT_NO_CONTENT` included, gets the full timeouts, and the answer keeps the connection. That is why the timeouts belong to the server and not to an `api.UseHTTP` middleware: the CORS answer and the 204 are written outside the project's middleware, so deadlines set there would bound the calls but not the preflights, which a slow client could then hold open. The ops server (`/health`, `/metrics`) has fixed limits: 5s for the headers, 10s for the request, 30s for the answer, 2m idle.
 
 ## The `river` module
 

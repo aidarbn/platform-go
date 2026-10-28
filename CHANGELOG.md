@@ -2,6 +2,20 @@
 
 Changes by release. What a project or its clients see differently, with how to keep the old behaviour, is in [docs/upgrades.md](docs/upgrades.md#behaviour-changes); manual steps of an upgrade are there too. Releases before v0.11.0 are described only there.
 
+## v0.11.3
+
+Backward compatible: no API of `kit` changes incompatibly. Two defaults change, listed under Changed: the REST server of `api` closes keep-alive connections idle for 2 minutes, and the ops server bounds whole requests. The new REST timeouts are off by default, except the header timeout the server always had. Upgrade with `platformgo upgrade v0.11.3`; nothing to do in a project.
+
+### Added
+
+- `api`: the timeouts of the REST server — `API_HTTP_READ_HEADER_TIMEOUT` (`Config.HTTPReadHeaderTimeout`, 10s), `API_HTTP_READ_TIMEOUT` (`Config.HTTPReadTimeout`, none), `API_HTTP_WRITE_TIMEOUT` (`Config.HTTPWriteTimeout`, none) and `API_HTTP_IDLE_TIMEOUT` (`Config.HTTPIdleTimeout`, 2m), with the constants `api.DefaultHTTPReadHeaderTimeout` and `api.DefaultHTTPIdleTimeout`. taply ran with 5s, 30s and 60s. See [HTTP server timeouts](docs/modules.md#http-server-timeouts).
+  Why these defaults: the header timeout stays 10s and cannot be turned off — zero in the environment is refused, zero or less in a `Config` means 10s — since without it one slow client per connection holds the server (slowloris). The read timeout stays off because it covers the body, and an upload of up to `API_MAX_RECV_MB` over a slow link may take long; the header timeout already bounds what a client can hold without sending anything. The write timeout stays off because it runs from the end of the headers to the end of the answer: a server-streaming method behind the gateway, a download through `api.HandleHTTP` or a long call would be cut in the middle of its answer, and the platform cannot know whether a project has them. The timeouts are those of the server, set anew for every request of a connection, so a preflight after a call on a keep-alive connection — the 204 of `API_CORS_PREFLIGHT_NO_CONTENT` included — gets them in full and keeps the connection; a middleware could not do this, since preflights are answered outside the project's middleware.
+
+### Changed
+
+- `api`: a keep-alive connection of the REST server idle for 2 minutes is closed (`API_HTTP_IDLE_TIMEOUT`). Before, with no read timeout, `http.Server` never closed it, so idle connections held file descriptors until the client went away. Clients reopen a closed idle connection on the next request. The old behaviour: `Config.HTTPIdleTimeout` negative. See [behaviour changes](docs/upgrades.md#v0113).
+- Ops server (`/health`, `/metrics`): on top of the 5s header timeout, 10s to read a request, 30s to answer it, 2 minutes for an idle connection. Health checks answer within 3s and a scrape within these limits.
+
 ## v0.11.2
 
 Backward compatible: no API of `kit` changes incompatibly. One default changes, listed under Changed: the start check of `s3` and `postgres` is retried for 15 seconds instead of being made once; `S3_STARTUP_TIMEOUT=0` and `DATABASE_STARTUP_TIMEOUT=0` give the old behaviour back. Upgrade with `platformgo upgrade v0.11.2`; nothing to do in a project, but see Fixed for a `.env` that still sets `RIVER_QUEUES=default=10`.
