@@ -154,8 +154,9 @@ func TestHTTPWriteTimeoutCutsLongHandler(t *testing.T) {
 	}
 }
 
-// Without API_HTTP_WRITE_TIMEOUT a streamed answer that takes longer than any request
-// timeout of the server is delivered whole.
+// Without API_HTTP_WRITE_TIMEOUT, its default, a streamed answer that takes longer than
+// the other timeouts of the server is delivered whole: the read timeout does not bound
+// the answer.
 func TestHTTPNoWriteTimeoutByDefaultKeepsStreams(t *testing.T) {
 	extraWire = slowRoute(150*time.Millisecond, 5)
 	t.Cleanup(func() { extraWire = nil })
@@ -183,7 +184,7 @@ func TestPreflightOnKeepAliveConnection(t *testing.T) {
 		CORSPreflightNoContent: true,
 		HTTPReadTimeout:        300 * time.Millisecond,
 		HTTPWriteTimeout:       300 * time.Millisecond,
-		HTTPIdleTimeout:        time.Second,
+		HTTPIdleTimeout:        3 * time.Second,
 	})
 	conn := dial(t, s)
 	r := bufio.NewReader(conn)
@@ -228,13 +229,13 @@ func TestPreflightOnKeepAliveConnection(t *testing.T) {
 
 	begin := time.Now()
 	_ = conn.SetDeadline(time.Time{})
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if n, err := r.Read(make([]byte, 1)); n != 0 || err == nil {
 		t.Fatalf("idle connection: %d bytes, %v", n, err)
 	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		t.Fatal("the idle connection was not closed")
 	}
-	if took := time.Since(begin); took < 700*time.Millisecond {
+	if took := time.Since(begin); took < 2*time.Second {
 		t.Errorf("idle connection closed after %s, before the idle timeout", took)
 	}
 }

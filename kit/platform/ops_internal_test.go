@@ -18,5 +18,4 @@ func TestOpsServerTimeouts(t *testing.T) {
 		s.srv.WriteTimeout != opsWriteTimeout || s.srv.IdleTimeout != opsIdleTimeout {
 		t.Fatalf("timeouts: %v %v %v %v", s.srv.ReadHeaderTimeout, s.srv.ReadTimeout, s.srv.WriteTimeout, s.srv.IdleTimeout)
 	}
-
 }
