@@ -612,7 +612,7 @@ func bodyForLog(contentType string, body []byte, size int64) string {
 
 // routingError names the method and the path of a request no route matched.
 func routingError(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, httpStatus int) {
-	err := status.Error(codes.Internal, "unexpected routing error")
+	err := status.Error(codes.Internal, "Unexpected routing error")
 	switch httpStatus {
 	case http.StatusBadRequest:
 		err = status.Error(codes.InvalidArgument, http.StatusText(httpStatus))
