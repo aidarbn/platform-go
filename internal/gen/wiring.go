@@ -182,6 +182,9 @@ func Wiring(f *spec.File) (map[string][]byte, error) {
 		ComposePath: compose(f, local),
 	}
 	if _, ok := f.Modules["postgres"]; ok {
+		if _, err := Jet(f); err != nil {
+			return nil, err
+		}
 		sqlc, err := Sqlc(f)
 		if err != nil {
 			return nil, err

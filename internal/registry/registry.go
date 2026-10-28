@@ -84,7 +84,7 @@ var all = []Module{
 		ProjectPkg:   "db/migrations",
 		ProjectAlias: "migrations",
 		ExtraArgs:    []string{"postgres.WithMigrations(migrations.FS)"},
-		Options:      []Option{sqlcOption, composeOption},
+		Options:      []Option{sqlcOption, jetOption, composeOption},
 		Compose: `  postgres:
     image: postgres:18-alpine
     environment:
@@ -370,6 +370,17 @@ var sqlcOption = Option{
 			Default:     map[string]any{},
 			Values:      &Option{},
 		},
+	},
+}
+
+// jetOption is where the dynamic query builder of the postgres module goes. The default
+// is the folder every project had before the option existed.
+var jetOption = Option{
+	Name:        "jet",
+	Description: "dynamic queries: where jet writes the query builder",
+	Kind:        KindObject,
+	Fields: []Option{
+		{Name: "out", Description: "folder of the generated Go code, relative to the project root", Default: "internal/db/jetgen"},
 	},
 }
 

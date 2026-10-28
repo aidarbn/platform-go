@@ -251,6 +251,18 @@
               },
               "type": "object"
             },
+            "jet": {
+              "additionalProperties": false,
+              "description": "dynamic queries: where jet writes the query builder",
+              "properties": {
+                "out": {
+                  "default": "internal/db/jetgen",
+                  "description": "folder of the generated Go code, relative to the project root",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
             "sqlc": {
               "additionalProperties": false,
               "description": "static queries: where sqlc.yaml, the queries and the generated code live, and Go types on top of the platform's",

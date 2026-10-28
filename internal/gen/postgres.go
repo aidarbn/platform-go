@@ -18,6 +18,7 @@ import (
 // postgresSection is the section of the postgres module in platformgo.yaml.
 type postgresSection struct {
 	Sqlc    SqlcSettings    `yaml:"sqlc"`
+	Jet     JetSettings     `yaml:"jet"`
 	Compose PostgresCompose `yaml:"compose"`
 }
 

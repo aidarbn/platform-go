@@ -49,6 +49,7 @@ type Plan struct {
 	Conflicts []Conflict
 
 	Sqlc gen.SqlcSettings // where sqlc reads and writes, when postgres is enabled
+	Jet  gen.JetSettings  // where jet writes, when postgres is enabled
 	API  gen.APISettings  // where the proto files are and who writes OpenAPI, when api is enabled
 
 	dir     string
@@ -106,6 +107,9 @@ func Build(dir string) (*Plan, error) {
 	}
 	if _, ok := f.Modules["postgres"]; ok {
 		if p.Sqlc, err = gen.Sqlc(f); err != nil {
+			return nil, err
+		}
+		if p.Jet, err = gen.Jet(f); err != nil {
 			return nil, err
 		}
 	}

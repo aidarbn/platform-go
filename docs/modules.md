@@ -240,7 +240,7 @@ Queries come in two kinds, as in taply:
 | Kind | Tool | Where | How to regenerate |
 |---|---|---|---|
 | static — the query text is known in advance | sqlc | `db/queries/*.sql` → `internal/db/sqlcgen` | `make generate`; no database needed |
-| dynamic — filters, sorting, pagination built at run time | jet | the migrated schema → `internal/db/jetgen/{model,table}` | `make db-generate`: migrates the local database and reads its schema |
+| dynamic — filters, sorting, pagination built at run time | jet | the migrated schema → `internal/db/jetgen/{model,table}` (`jet.out`) | `make db-generate`: migrates the local database and reads its schema |
 
 Both generators are pinned as `tool` in `go.mod` by `platformgo apply` (sqlc v1.31.1, jet v2.16.0) and removed with the module. `db/sqlc.yaml` is generated: schema from the migrations, `pgx/v5`, `numeric` as `decimal.Decimal`, `uuid` as `uuid.UUID`, `jsonb` as `json.RawMessage`, `timestamptz` and `date` as `time.Time`, nullable columns as pointers. `verify` fails when the sqlc output is stale or left from a removed query file.
 
@@ -260,12 +260,15 @@ modules:
         - {db_type: int4, nullable: true, go_type: {type: int64, pointer: true}}
         - {column: orders.meta, go_type: {import: example.com/shop/internal/domain, type: Meta}}
       renames: {url: URL}
+    jet:
+      out: internal/adapters/out/db/jet   # default internal/db/jetgen
 ```
 
 - The schema is always `db/migrations`: `migrations.gen.go` embeds it, so the generated `sqlc.yaml` points there from wherever `dir` is.
 - An override takes `db_type` or `column`, `nullable`, and `go_type` as a name (`int64`) or an object (`import`, `package`, `type`, `pointer`, `slice`), as in sqlc. Overrides of the project come first, so one for `uuid` or `pg_catalog.numeric` replaces the platform's.
 - Moving `dir` moves the generated file: `apply` writes the new one and deletes the old. `queries` is relative to `dir`, so move the query files along; until then `generate` finds no queries and removes the code generated from them. Moving `out` does not move code already generated: delete the old folder after `make generate`.
-- `out` must not hold or sit in the queries, the migrations or `internal/db/jetgen`, nor hold `dir`: sqlc output is cleaned before every run.
+- `out` must not hold or sit in the queries, the migrations or the jet folder, nor hold `dir`: sqlc output is cleaned before every run.
+- `jet.out` is where `make db-generate` writes the query builder; it must not hold or sit in the queries or the migrations, and sqlc's `out` must stay out of it: jet's old output is cleaned before every run. The builder is not a file `apply` writes, so moving the folder changes nothing in `platformgo.lock`; move or delete the old folder and run `make db-generate`.
 
 ```go
 // static: sqlc on the pool
@@ -279,7 +282,7 @@ var orders []model.Orders
 err := stmt.QueryContext(ctx, postgres.SQL(app), &orders)
 ```
 
-jet writes its output under the database name; platformgo moves the packages straight under `internal/db/jetgen`, so import paths are the same for every developer.
+jet writes its output under the database name; platformgo moves the packages straight under `internal/db/jetgen` (or `jet.out`), so import paths are the same for every developer.
 
 ## The `api` module
 

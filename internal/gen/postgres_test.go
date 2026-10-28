@@ -185,3 +185,75 @@ func TestPostgresComposeRejectsBadSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestJetSettings(t *testing.T) {
+	d, err := gen.Jet(mustParse(t, postgresProject+" {}\n"))
+	if err != nil || d.Out != "internal/db/jetgen" {
+		t.Errorf("defaults = %+v, %v", d, err)
+	}
+	j, err := gen.Jet(mustParse(t, postgresProject+"\n    jet:\n      out: ./internal/adapters/out/db/jet/\n"))
+	if err != nil || j.Out != "internal/adapters/out/db/jet" {
+		t.Errorf("settings = %+v, %v", j, err)
+	}
+}
+
+// The folder of jet is not a generated file: moving it changes nothing platformgo writes.
+func TestJetOutChangesNoFile(t *testing.T) {
+	before, err := gen.Wiring(mustParse(t, postgresProject+" {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := gen.Wiring(mustParse(t, postgresProject+"\n    jet:\n      out: internal/adapters/out/db/jet\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("files: %d before, %d after", len(before), len(after))
+	}
+	for path, content := range before {
+		if string(after[path]) != string(content) {
+			t.Errorf("%s changed", path)
+		}
+	}
+}
+
+func TestJetRejectsBadSettings(t *testing.T) {
+	for _, tc := range []struct{ section, want string }{
+		{"jet: {out: /etc}", `option jet: out "/etc" must be a folder inside the project`},
+		{"jet: {out: ../jet}", `option jet: out "../jet" must be a folder inside the project`},
+		{"jet: {out: .}", `option jet: out "." must be a folder inside the project`},
+		{"jet: {out: \"a\\nb\"}", "must be a folder inside the project"},
+		{"jet: {out: db}", "out \"db\" overlaps the migrations folder db/migrations"},
+		{"jet: {out: db/migrations/jet}", "overlaps the migrations folder"},
+		{"jet: {out: db/queries}", "overlaps the queries folder db/queries"},
+		{"{jet: {out: db/sqlc/queries/x}, sqlc: {dir: db/sqlc}}", "overlaps the queries folder db/sqlc/queries"},
+		{"jet: {out: 5}", "option jet.out must be a string"},
+		{"jet: {typo: x}", `unknown key "typo"`},
+		// The sqlc option checks its output against the folder jet actually uses.
+		{"jet: {out: internal/store}", ""},
+		{"{jet: {out: internal/store}, sqlc: {out: internal/store/sqlc}}", `option sqlc: out "internal/store/sqlc" overlaps the jet output folder internal/store`},
+		{"{jet: {out: internal/store/jet}, sqlc: {out: internal/store}}", "overlaps the jet output folder internal/store/jet"},
+	} {
+		section := "\n    " + tc.section + "\n"
+		if strings.HasPrefix(tc.section, "{") {
+			section = " " + tc.section + "\n"
+		}
+		f, err := spec.Parse([]byte(postgresProject + section))
+		if err == nil {
+			_, err = gen.Wiring(f)
+		}
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", tc.section, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.section, err, tc.want)
+		}
+	}
+	// The old default moves with the option: sqlc may now use it.
+	if _, err := gen.Wiring(mustParse(t, postgresProject+" {jet: {out: internal/store/jet}, sqlc: {out: internal/db/jetgen}}\n")); err != nil {
+		t.Errorf("sqlc in the old jet folder: %v", err)
+	}
+}
