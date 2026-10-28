@@ -4,7 +4,7 @@ Changes by release. What a project or its clients see differently, with how to k
 
 ## v0.11.0
 
-Backward compatible: without the new options everything behaves, fails and is counted as in v0.10.1, and no API of `kit` changes incompatibly. Upgrade with `platformgo upgrade v0.11.0`; nothing to do in a project.
+Backward compatible: no API of `kit` changes incompatibly, and every new behaviour is an option, off by default. Two defaults change, listed under Changed: the capital of one routing error text no client sees today, and the Go toolchain. The fix of idempotency changes what a late repeat gets, listed under Fixed. Upgrade with `platformgo upgrade v0.11.0`; nothing to do in a project.
 
 ### Added
 
