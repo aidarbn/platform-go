@@ -16,6 +16,12 @@ import (
 const (
 	healthTimeout     = 3 * time.Second
 	readHeaderTimeout = 5 * time.Second
+	// The ops server takes only GET requests and answers within the health timeout or as
+	// fast as the metrics gather, so its requests are bounded whole, and idle probe
+	// connections are closed.
+	opsReadTimeout  = 10 * time.Second
+	opsWriteTimeout = 30 * time.Second
+	opsIdleTimeout  = 2 * time.Minute
 )
 
 // opsServer serves /health and /metrics. It always runs, separately from application
@@ -36,8 +42,14 @@ func startOps(addr string, openMetrics bool, app *App) (*opsServer, error) {
 	}
 
 	s := &opsServer{
-		srv: &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout},
-		ln:  ln,
+		srv: &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       opsReadTimeout,
+			WriteTimeout:      opsWriteTimeout,
+			IdleTimeout:       opsIdleTimeout,
+		},
+		ln: ln,
 	}
 	go func() {
 		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
