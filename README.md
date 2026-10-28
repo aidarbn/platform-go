@@ -36,7 +36,7 @@ A project is described declaratively in `platformgo.yaml` — see [docs/config.m
 | `api` — gRPC and REST gateway from proto files, OpenAPI 3.1 with validation rules, interceptors, health, CORS, docs | ready |
 | `river` — background jobs, periodic jobs scheduled from business settings, job options carried by the job as in taply | ready |
 | `s3` — object storage with taply's storage API: public and private buckets, streaming uploads, signed links, MinIO in compose | ready |
-| `rbac` — access to gRPC and REST methods by role, taply's casbin model and policy, embedded policy file | ready |
+| `rbac` — access to gRPC and REST methods by role, taply's casbin model and policy with an embedded policy file, or any casbin model and adapter with reload | ready |
 | `i18n` — translated entity fields and error messages by Accept-Language, taply's proto option, table and error translation | ready |
 | `enums` — catalog of enums from taply's go-enum markers, served translated and used for validation | ready |
 | `web` — server rendered pages next to the API: templ with generation pinned, htmx fragments, CSRF, sealed cookies, hashed assets, strict CSP | ready |

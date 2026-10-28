@@ -123,6 +123,14 @@ Before v1 the platform is still finding its shape, so the policy is what it can 
 
 Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
 
+### v0.11.0
+
+Backward compatible: no API of `kit` changes incompatibly and nothing needs doing in a project.
+
+- **`rbac` takes any casbin model, an option.** `WithModel`, `WithAdapter` with `Reload` and `WithReloadEvery`, `WithFunction`, `WithRequest`, `WithPublic`, `Configure` for a generated project, and `Check` and `Casbin` on the enforcer — see [Any casbin model](modules.md#any-casbin-model). Without the new options the module is taply's as before: the same model, `ParsePolicy` checks and error texts, `Public` as the role `*`, the start warning of `Unmatched`, `rbac_denied_total` with the same reasons, and no new metric or log line. The casbin enforcer is now a `SyncedEnforcer`, which answers the same; the generated wiring does not change. Nothing to do in a project.
+- **An idempotency outcome past its retention is not replayed.** A completed record stayed in `platform_idempotency_keys` until the hourly cleanup removed it, up to an hour after its expiry, and a repeat with the same key got the old answer meanwhile. Now `Retake` of the memory and postgres stores takes such a record over as it takes an expired lease: the repeat that wins runs the call again and its outcome is kept for the retention anew, a racing repeat reads the record again and answers `Aborted` while it runs, or replays the new outcome once it is there. Affects clients that repeat a key after `API_IDEMPOTENCY_RETENTION`: they get a fresh call, as they would after the cleanup. A project's own `IdempotencyStore` whose `Retake` does not take a completed record keeps the old replay; to fix it there, let `Retake` take a completed record whose expiry has passed. The same key with another payload still answers `AlreadyExists` until the record is removed.
+- **The policy example in the docs works again.** Its rules carried comments after them, and a comma in a comment broke the line. A comment takes a line of its own; the module did not change.
+
 ### v0.10.1
 
 Fixes of v0.10.0 found on the upgrade of wallet-damdala from v0.9.1.

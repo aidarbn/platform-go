@@ -11,7 +11,7 @@ A module is declared as a section in `platformgo.yaml` and applied with `platfor
 | **admin** | admin shell: login, roles, audit log; pages for settings, jobs and state; a place for project pages |
 | **settings** | business settings: the `settings.yaml` schema, values in the database, cache, change notifications, typed access from code |
 | **s3** | object storage (MinIO), file uploads, service in docker-compose |
-| **rbac** | access to gRPC methods by role, taply's casbin model and policy format |
+| **rbac** | access to gRPC methods by role: taply's casbin model and policy format by default, any casbin model and adapter as an option |
 | **i18n** | translations, locale in context, interceptors, dictionary migration |
 | **enums** | enum catalogue from markers in the domain |
 | **web** | server rendered pages next to the API: templ components, htmx fragments, CSRF, sealed cookies, hashed static assets, strict CSP |
@@ -475,7 +475,7 @@ And on every call, following taply's interceptors:
 
 - **Rate limit** — a token bucket per client address, 50 calls a second with a burst of 100, and a separate 30/60 for public methods (the ones `rbac` marks public, or `api.PublicMethods`). An IPv6 client is limited by its /64, the block one subscriber gets, so it cannot take a new bucket with every address of the block; `API_RATE_IPV6_PREFIX` changes the length, `128` limits every address on its own. A refused call answers `ResourceExhausted`, 429 over REST, and is counted in `api_rate_limited_total`. It runs before project interceptors, so a flood never reaches token validation. A second bucket limits each principal, 50/100 by default, once the project names it: `api.RateLimitKey(app, func(ctx) string)` returns the user, API client or device the authentication put into the context. It runs after the project interceptors, counts refusals in `api_principal_rate_limited_total`, and leaves a call with an empty key to the limit by address; the limit by address applies to every call. Streams are not limited.
 - **Deprecated methods** — `option deprecated = true` in the proto file is enough: calls are counted in `api_deprecated_calls_total{method}` and logged with the caller's address and user agent, so the method can go once nobody calls it. taply keeps this list in code. `api.DeprecatedReplacements(app, map[string]string{"/shop.v1.Orders/GetOld": "/shop.v1.Orders/Get"})` in wireDomain adds taply's `replacement` label to the metric and the log line, and counts a listed method as deprecated even without the proto option; without the call the metric has only `method`.
-- **Idempotency** — a call with an `Idempotency-Key` header is remembered in the database of the `postgres` module, with the semantics of taply after its fixes: a repeat gets the saved answer without running the handler again, the same key with a different payload answers `AlreadyExists`, a repeat while the first call runs answers `Aborted`. A key counts only for a caller `api.IdempotencyUser` names — without it, or for an anonymous caller, the header is ignored, since anonymous callers would share one space of keys — and only on the methods it is meant for: by default every method that changes something (its HTTP binding is not a GET and its `idempotency_level` is not `NO_SIDE_EFFECTS`); `api.IdempotencyMethods(app, methods...)` replaces that with a list, as taply keeps one. `api.RequireIdempotency(app, methods...)` makes a key mandatory, as taply does for every create method; a required method without a key answers `InvalidArgument` for anonymous callers too. Only final outcomes are remembered: a success and the client errors a repeat cannot fix (`InvalidArgument`, `NotFound`, `AlreadyExists`, `FailedPrecondition`, `PermissionDenied`, `Unauthenticated`, `OutOfRange`, `Unimplemented`), with the `google.rpc.Status` the client got, details included; anything else — `Internal`, `Unknown`, `Canceled`, `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, a panic — lets the next repeat run. A `RetryableError` decides either way. A running call holds its key with a lease (`API_IDEMPOTENCY_LEASE`, 2 minutes) that it extends every third of it, so a long handler keeps its key, and a call that died frees it when the lease runs out; one repeat takes it over with a compare and set. The outcome is written only while the call still holds its lease — a call whose key was taken over does not overwrite the new owner's — on a context cut loose from the call with a five second budget, so a client that hangs up does not leave the key in progress. A failed write is retried twice within that budget; a key that is not printable ASCII or is longer than 255 characters answers `InvalidArgument`. Calls are counted in `api_idempotency_total{method,result}` (`replay`, `aborted`, `mismatch`, `lease_lost`, `stored`, `retry`, `save_failed`); expired records are removed at start and hourly. The leases are written from the clock of the process and taken over by the clock of the database, so the two must agree within a lease less a third of it, as NTP keeps them; a handler whose success is not a proto message is not remembered. Without the `postgres` module keys are ignored, and a required key stops the start.
+- **Idempotency** — a call with an `Idempotency-Key` header is remembered in the database of the `postgres` module, with the semantics of taply after its fixes: a repeat gets the saved answer without running the handler again, the same key with a different payload answers `AlreadyExists`, a repeat while the first call runs answers `Aborted`. A key counts only for a caller `api.IdempotencyUser` names — without it, or for an anonymous caller, the header is ignored, since anonymous callers would share one space of keys — and only on the methods it is meant for: by default every method that changes something (its HTTP binding is not a GET and its `idempotency_level` is not `NO_SIDE_EFFECTS`); `api.IdempotencyMethods(app, methods...)` replaces that with a list, as taply keeps one. `api.RequireIdempotency(app, methods...)` makes a key mandatory, as taply does for every create method; a required method without a key answers `InvalidArgument` for anonymous callers too. Only final outcomes are remembered: a success and the client errors a repeat cannot fix (`InvalidArgument`, `NotFound`, `AlreadyExists`, `FailedPrecondition`, `PermissionDenied`, `Unauthenticated`, `OutOfRange`, `Unimplemented`), with the `google.rpc.Status` the client got, details included; anything else — `Internal`, `Unknown`, `Canceled`, `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, a panic — lets the next repeat run. A `RetryableError` decides either way. A running call holds its key with a lease (`API_IDEMPOTENCY_LEASE`, 2 minutes) that it extends every third of it, so a long handler keeps its key, and a call that died frees it when the lease runs out; one repeat takes it over with a compare and set. The outcome is written only while the call still holds its lease — a call whose key was taken over does not overwrite the new owner's — on a context cut loose from the call with a five second budget, so a client that hangs up does not leave the key in progress. A failed write is retried twice within that budget; a key that is not printable ASCII or is longer than 255 characters answers `InvalidArgument`. Calls are counted in `api_idempotency_total{method,result}` (`replay`, `aborted`, `mismatch`, `lease_lost`, `stored`, `retry`, `save_failed`); expired records are removed at start and hourly, and an outcome past its retention is never replayed in between: the repeat that takes it over with the same compare and set runs the call again, a racing one answers `Aborted` while it runs. The leases are written from the clock of the process and taken over by the clock of the database, so the two must agree within a lease less a third of it, as NTP keeps them; a handler whose success is not a proto message is not remembered. Without the `postgres` module keys are ignored, and a required key stops the start.
 
 The description marks messages with `additionalProperties: false`: that is the contract for clients, while the gateway is more forgiving and ignores unknown fields.
 
@@ -670,10 +670,14 @@ Role based access to the gRPC methods of the API — REST calls included, since 
 
 ```
 # p, role, method pattern (keyMatch2), action
-p, *, /grpc.health.v1.Health/*, *                  # * — public, no authentication
-p, admin, /shop.v1.OrdersService/*, *              # every method of a service
+# * is the public role: no authentication
+p, *, /grpc.health.v1.Health/*, *
+# every method of a service
+p, admin, /shop.v1.OrdersService/*, *
 p, support, /shop.v1.OrdersService/GetOrder, *
 ```
+
+A comment takes a line of its own: a `#` after a rule is part of its last field.
 
 The module decides what a role may call; who the caller is stays with the project. The project's authentication interceptor puts the roles into the context and skips authentication for public methods:
 
@@ -691,6 +695,62 @@ api.AddUnaryInterceptor(app, func(ctx context.Context, req any, info *grpc.Unary
 ```
 
 The access check runs in `PhaseAuthorize`, after the project's authentication and before its guards and request validation: no roles in the context answers `Unauthenticated`, no matching role answers `PermissionDenied`. Only the token itself decides `Unauthenticated`: a valid token whose scope names no role the service knows is `rbac.WithRoles(ctx)` with no roles, an authenticated caller who may do nothing, and answers `PermissionDenied`. A caller cannot claim the public role `*` to reach a private method. A broken policy line stops the start with its line number, a rule that matches no registered method is logged at start, and refused calls are counted in `rbac_denied_total{method,reason}`.
+
+### Any casbin model
+
+Since v0.11.0 the module takes any casbin model and a policy from any casbin adapter. Without these options it is taply's, as above, byte for byte: the same model, checks, errors, logs and metrics.
+
+| Option | What it does |
+|---|---|
+| `WithModel(text)` | a casbin model of the project's own: role inheritance (`g`), domains or tenants, matchers and effects of its own |
+| `WithPolicy(text)` | the policy text, `rbac/policy.csv` in the generated wiring. In taply's model `ParsePolicy` checks it; in a model of the project's own it is casbin's CSV — `p`, `g` and whatever the model defines — and casbin checks it, a broken rule stopping the start with its line |
+| `WithAdapter(persist.Adapter)` | the policy from a casbin adapter — Postgres, a file, a service — instead of the text, which is then ignored. In taply's model every load is checked as `ParsePolicy` checks a text |
+| `WithReloadEvery(d)` | reload the adapter's policy on a period while the service runs |
+| `WithFunction(name, fn)` | a function the matcher may call, as casbin's `AddFunction` |
+| `WithRequest(func(ctx, method) ([][]any, error))` | how a call becomes the requests to enforce, see below |
+| `WithPublic(func(method) []any)` | the request that, when allowed, makes a method public |
+
+A generated project gives the options in its own `main.go`, between `platformModules` and `platform.Run`; the generated wiring stays as it is:
+
+```go
+modules := platformModules(cfg)
+if err := rbac.Configure(modules,
+	rbac.WithModel(accessModel),
+	rbac.WithAdapter(policyStore), // a casbin adapter over the project's database
+	rbac.WithReloadEvery(30*time.Second),
+	rbac.WithRequest(tenantRequest),
+); err != nil {
+	log.Fatal(err)
+}
+if err := platform.Run(platform.Config{Service: serviceName}, modules, wireDomain); err != nil {
+	log.Fatal(err)
+}
+```
+
+**Requests.** By default a call is one request per role from `rbac.WithRoles`: `{role, method, "*"}`, allowed when any is. That fits a model whose request is `sub, obj, act`, role inheritance included. A model with another request — `r = sub, dom, obj, act` — needs `WithRequest`, or the start fails with `give WithRequest`. The function returns the requests in the order of the model's `request_definition`; the call is allowed when any of them is. It returns `rbac.ErrUnauthenticated` for a caller who has not authenticated (`Unauthenticated`, counted as `unauthenticated`), no requests for one who may do nothing (`PermissionDenied`, `forbidden`), and any other error to refuse: an error with a gRPC status reaches the client as it is, any other answers `Internal` and is logged; both are counted with the reason `error`. An error of casbin itself — a matcher on a missing field — answers `Internal` the same way.
+
+```go
+func tenantRequest(ctx context.Context, method string) ([][]any, error) {
+	users, ok := rbac.RolesFrom(ctx)
+	if !ok {
+		return nil, rbac.ErrUnauthenticated
+	}
+	tenant := tenantFrom(ctx) // the project's own
+	var reqs [][]any
+	for _, u := range users {
+		reqs = append(reqs, []any{u, tenant, method, "*"})
+	}
+	return reqs, nil
+}
+```
+
+**Public methods.** A method is public when the public request is allowed: `{"*", method, "*"}` by default, as in taply's model, so a model of `sub, obj, act` keeps `p, *, /grpc.health.v1.Health/*, *` working when its matcher compares `r.sub == p.sub`. A model with another request has no public methods until `WithPublic` gives the request — for the domain model above, `[]any{"*", "*", method, "*"}` with a rule `p, *, *, /grpc.health.v1.Health/*, *`. Public methods skip the request function and authentication as before. The public request is also enforced once at start, so a matcher calling an unknown function stops the start instead of failing every call.
+
+**`Rules` and `Unmatched`.** In a model of the project's own a rule is the `p` line read through the fields named `sub`, `obj` and `act` of `policy_definition` (empty when the model has none), with its line when the policy is a text and line 0 from an adapter. Only rules whose `obj` starts with `/` are method patterns: `Unmatched`, and the warning at start, look at those alone, so a rule over another kind of object is never reported. `Allowed(roles, method)` asks `{role, method, "*"}` as before; `Check(ctx, method)` asks what the interceptor asks, with the request function — use it for a check outside gRPC.
+
+**Reload.** `rbac.From(app).Reload()` reads the adapter again and swaps the policy whole: a call being checked sees the old policy or the new one, never a mix (the enforcer is casbin's `SyncedEnforcer`). A load that fails — the database is down, or in taply's model a rule breaks the format — leaves the policy in force and returns the error. `WithReloadEvery` does the same on a period from the start of the module until the service stops, logs a failure as a warning and counts every reload in `rbac_policy_reloads_total{result="ok|error"}`, a metric that exists only with an adapter. A policy text is part of the binary: `Reload` does nothing.
+
+**Casbin itself.** `rbac.From(app).Casbin()` is the `*casbin.SyncedEnforcer` for what the module does not wrap: implicit roles, domains, policy changes through the casbin API (saved through the adapter when it supports it, kept in memory with a text), a watcher calling `LoadPolicy` on changes from other instances. In taply's model the adapter it holds is the project's wrapped in the format check. `rbac.NewEnforcerWith(opts...)` builds the same enforcer outside the module, for a command or a test.
 
 ## The `s3` module
 
