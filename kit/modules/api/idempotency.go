@@ -251,7 +251,7 @@ func (i *idempotency) takeOver(ctx context.Context, rec IdempotencyRecord, finge
 		// A completed record past its retention is gone, even while DeleteExpired has not
 		// removed it yet: the repeat runs the call again. A store that does not let it go
 		// — Retake of a project's store written before — keeps the replay.
-		expired := rec.Status == idemCompleted && time.Now().After(rec.ExpiresAt)
+		expired := rec.Status == idemCompleted && i.now().After(rec.ExpiresAt)
 		if rec.Status == idemCompleted && (!expired || attempt > 0) {
 			return rec, true, nil
 		}
@@ -266,10 +266,11 @@ func (i *idempotency) takeOver(ctx context.Context, rec IdempotencyRecord, finge
 			rec.Status, rec.ExpiresAt, rec.Lease = idemInProgress, lease, lease
 			return rec, false, nil
 		}
-		if attempt > 0 {
+		if attempt > 0 || !expired {
+			// A live call or a retry another repeat took: refused, as always.
 			return rec, false, status.Error(codes.Aborted, "request is already in progress")
 		}
-		// Another repeat was first: read the record again and decide on what it is now —
+		// Another repeat took the expired outcome first: read the record again and decide on what it is now —
 		// in progress is Aborted, a fresh outcome is replayed. Begin reads it, and holds
 		// the key itself when the record was deleted in between.
 		var created bool

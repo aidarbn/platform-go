@@ -382,6 +382,8 @@ func (e *Enforcer) Reload() error {
 // domains, policy changes through the casbin API, a watcher. Changes to the policy it
 // makes are seen by the module at once; with a policy text they live until a restart.
 // In taply's model the adapter it holds checks the format on every load.
+// A change made through it while a Reload runs may be lost to the reloaded policy: with
+// an adapter, write to the store and reload.
 func (e *Enforcer) Casbin() *casbin.SyncedEnforcer { return e.se }
 
 type rolesKey struct{}

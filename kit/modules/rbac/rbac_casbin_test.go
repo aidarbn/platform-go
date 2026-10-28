@@ -428,3 +428,129 @@ func ExampleWithRequest() {
 	fmt.Println(status.Code(e.Check(ctx, "/shop.v1.Orders/Delete")))
 	// Output: PermissionDenied
 }
+
+// batchAdapter is a store that writes in batches and updates rules.
+type batchAdapter struct {
+	memAdapter
+	added, removed, updated int
+}
+
+func (a *batchAdapter) AddPolicies(_, _ string, rules [][]string) error {
+	a.added += len(rules)
+	return nil
+}
+
+func (a *batchAdapter) RemovePolicies(_, _ string, rules [][]string) error {
+	a.removed += len(rules)
+	return nil
+}
+
+func (a *batchAdapter) UpdatePolicy(string, string, []string, []string) error {
+	a.updated++
+	return nil
+}
+
+func (a *batchAdapter) UpdatePolicies(_, _ string, old, _ [][]string) error {
+	a.updated += len(old)
+	return nil
+}
+
+func (a *batchAdapter) UpdateFilteredPolicies(string, string, [][]string, int, ...string) ([][]string, error) {
+	a.updated++
+	return nil, nil
+}
+
+// Writes through the casbin API reach the project's store in taply's model, and stay in
+// memory with a policy text.
+func TestWritesThroughCasbin(t *testing.T) {
+	rule := []string{"support", "/shop.v1.Orders/List", "*"}
+	newRule := []string{"support", "/shop.v1.Orders/Find", "*"}
+	write := func(t *testing.T, e *rbac.Enforcer, updatable bool) {
+		t.Helper()
+		c := e.Casbin()
+		if _, err := c.AddPolicies([][]string{rule}); err != nil {
+			t.Fatalf("AddPolicies: %v", err)
+		}
+		if !e.Allowed([]string{"support"}, "/shop.v1.Orders/List") {
+			t.Error("a rule added through casbin does not grant")
+		}
+		_, err := c.UpdatePolicy(rule, newRule)
+		if updatable != (err == nil) {
+			t.Errorf("UpdatePolicy: %v", err)
+		}
+		_, err = c.UpdatePolicies([][]string{newRule}, [][]string{rule})
+		if updatable != (err == nil) {
+			t.Errorf("UpdatePolicies: %v", err)
+		}
+		_, err = c.UpdateFilteredPolicies([][]string{rule}, 0, "support")
+		if updatable != (err == nil) {
+			t.Errorf("UpdateFilteredPolicies: %v", err)
+		}
+		cur, _ := c.GetPolicy()
+		if _, err := c.RemovePolicies(cur[len(cur)-1:]); err != nil {
+			t.Errorf("RemovePolicies: %v", err)
+		}
+		if _, err := c.AddPolicy("x", "/y/*", "*"); err != nil {
+			t.Errorf("AddPolicy: %v", err)
+		}
+		if _, err := c.RemovePolicy("x", "/y/*", "*"); err != nil {
+			t.Errorf("RemovePolicy: %v", err)
+		}
+		if _, err := c.RemoveFilteredPolicy(0, "x"); err != nil {
+			t.Errorf("RemoveFilteredPolicy: %v", err)
+		}
+		if err := c.SavePolicy(); err != nil {
+			t.Errorf("SavePolicy: %v", err)
+		}
+	}
+
+	t.Run("text in a model of its own", func(t *testing.T) {
+		e, err := rbac.NewEnforcerWith(rbac.WithModel(inheritModel), rbac.WithPolicy(inheritPolicy))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, e, true)
+		if _, err := e.Casbin().AddPolicy("late", "/z/*", "*"); err != nil {
+			t.Fatal(err)
+		}
+		if r := e.Rules(); r[len(r)-1].Role != "late" || r[len(r)-1].Line != 0 {
+			t.Errorf("a rule added at run time has a line: %+v", r)
+		}
+	})
+	t.Run("batch store in taply's model", func(t *testing.T) {
+		a := &batchAdapter{}
+		a.set("p, *, /grpc.health.v1.Health/*, *")
+		e, err := rbac.NewEnforcerWith(rbac.WithAdapter(a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, e, true)
+		if a.added != 1 || a.removed != 1 || a.updated != 3 {
+			t.Errorf("the store saw %d added, %d removed, %d updated", a.added, a.removed, a.updated)
+		}
+	})
+	t.Run("plain store in taply's model", func(t *testing.T) {
+		a := &memAdapter{}
+		a.set("p, *, /grpc.health.v1.Health/*, *")
+		e, err := rbac.NewEnforcerWith(rbac.WithAdapter(a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, e, false)
+	})
+}
+
+// A model without a policy definition named p has no fields for Rules.
+func TestModelWithoutFields(t *testing.T) {
+	m := strings.NewReplacer("p = sub, obj, act", "p = who, what, how", "p.sub", "p.who", "p.obj", "p.what", "p.act", "p.how").Replace(inheritModel)
+	e, err := rbac.NewEnforcerWith(rbac.WithModel(m), rbac.WithPolicy("p, a, /x/*, *\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := e.Rules(); len(r) != 1 || r[0] != (rbac.Rule{Line: 1}) {
+		t.Errorf("rules = %+v", r)
+	}
+	if !e.Allowed([]string{"a"}, "/x/y") {
+		t.Error("the model of its own does not decide")
+	}
+}
