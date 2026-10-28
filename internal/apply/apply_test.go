@@ -413,6 +413,36 @@ func TestMovingSqlcConfig(t *testing.T) {
 	}
 }
 
+// The jet folder reaches the plan, which db generate writes into; moving it rewrites
+// no generated file and leaves the lock as it was.
+func TestMovingJetOut(t *testing.T) {
+	dir := project(t, withoutSettings)
+	if p := execute(t, dir); p.Jet.Out != "internal/db/jetgen" {
+		t.Errorf("default plan jet = %+v", p.Jet)
+	}
+	lockBefore, err := os.ReadFile(filepath.Join(dir, "platformgo.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, dir, spec.FileName, strings.Replace(withoutSettings, "postgres: {}", "postgres:\n    jet: {out: internal/store/jet}", 1))
+	p := build(t, dir)
+	if p.Jet.Out != "internal/store/jet" {
+		t.Errorf("plan jet = %+v", p.Jet)
+	}
+	if !p.UpToDate() {
+		t.Errorf("moving the jet folder changed generated files: write = %v, delete = %v", p.Write, p.Delete)
+	}
+	execute(t, dir)
+	lockAfter, err := os.ReadFile(filepath.Join(dir, "platformgo.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockAfter) != string(lockBefore) {
+		t.Errorf("platformgo.lock changed:\n%s", lockAfter)
+	}
+}
+
 // Moving proto_dir moves the i18n option of the platform. The old copy has no mark of
 // its own (it is the very file kit/i18nx is generated from), so it is kept and reported.
 func TestMovingProtoDir(t *testing.T) {

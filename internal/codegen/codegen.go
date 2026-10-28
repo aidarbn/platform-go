@@ -19,8 +19,9 @@ import (
 	"strings"
 )
 
-// Paths of the query generation, relative to the project root. The sqlc ones are the
-// defaults; a project moves them with the sqlc option of the postgres module.
+// Paths of the query generation, relative to the project root. The sqlc and jet ones are
+// the defaults; a project moves them with the sqlc and jet options of the postgres
+// module.
 const (
 	QueriesDir    = "db/queries"
 	MigrationsDir = "db/migrations"
@@ -137,8 +138,9 @@ func SqlcCheck(ctx context.Context, dir string, l SqlcLayout) error {
 //
 // jet writes into <path>/<database>/<schema>. The database name differs between
 // developers, and it would end up in import paths, so the output is generated into a
-// scratch directory and its packages are moved straight under internal/db/jetgen.
-func Jet(ctx context.Context, dir, dsn string, out io.Writer) error {
+// scratch directory and its packages are moved straight under target, a folder relative
+// to the project root: JetOut unless the project moved it.
+func Jet(ctx context.Context, dir, target, dsn string, out io.Writer) error {
 	scratch, err := os.MkdirTemp(dir, ".jetgen-")
 	if err != nil {
 		return err
@@ -162,11 +164,11 @@ func Jet(ctx context.Context, dir, dsn string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := removeGenerated(dir, JetOut, jetMark); err != nil {
+	if err := removeGenerated(dir, filepath.FromSlash(target), jetMark); err != nil {
 		return err
 	}
-	target := filepath.Join(dir, JetOut)
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	abs := filepath.Join(dir, filepath.FromSlash(target))
+	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(schemaDir)
@@ -174,9 +176,9 @@ func Jet(ctx context.Context, dir, dsn string, out io.Writer) error {
 		return err
 	}
 	for _, e := range entries {
-		dst := filepath.Join(target, e.Name())
+		dst := filepath.Join(abs, e.Name())
 		if _, err := os.Stat(dst); err == nil {
-			return fmt.Errorf("%s/%s has files written by hand; move them out of the generated folder", JetOut, e.Name())
+			return fmt.Errorf("%s/%s has files written by hand; move them out of the generated folder", target, e.Name())
 		}
 		if err := os.Rename(filepath.Join(schemaDir, e.Name()), dst); err != nil {
 			return err

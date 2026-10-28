@@ -63,6 +63,11 @@ type Config struct {
 	CORSExpose        []string
 	CORSNoCredentials bool
 	CORSMaxAge        int
+	// CORSPreflightNoContent answers every OPTIONS request that gets no CORS answer — a
+	// foreign origin, no origin, no API_CORS_ORIGINS — with 204 and no CORS headers, as
+	// taply does, instead of passing it to the API, whose gateway answers 404 or 405
+	// with a body.
+	CORSPreflightNoContent bool
 
 	// RateLimit per client address, and per principal; zero rates turn it off.
 	RateLimit RateLimit
@@ -151,6 +156,8 @@ func Load(l *confx.Loader) Config {
 		CORSExpose:        headerNames(l, "API_CORS_EXPOSE"),
 		CORSNoCredentials: !l.Bool("API_CORS_CREDENTIALS", true),
 		CORSMaxAge:        corsMaxAge(l),
+
+		CORSPreflightNoContent: l.Bool("API_CORS_PREFLIGHT_NO_CONTENT", false),
 
 		AccessLog:       l.Bool("API_ACCESS_LOG", true),
 		LogBodies:       l.Bool("API_LOG_BODIES", true),
@@ -312,6 +319,8 @@ type Registry struct {
 	idemMethods  []string
 	idemListed   bool
 	idemUser     func(context.Context) string
+	idemTexts    IdempotencyKeyMessages
+	maxRecv      int
 	corsHeaders  []string
 	rateKey      func(context.Context) string
 	replacements map[string]string
@@ -441,6 +450,31 @@ func RateLimitKey(app *platform.App, key func(ctx context.Context) string) {
 func IdempotencyUser(app *platform.App, user func(ctx context.Context) string) {
 	r := registry(app)
 	r.add(func() { r.idemUser = user })
+}
+
+// MaxRecvSize sets the largest request message, in bytes, from code: a project that keeps
+// the limit of uploads in its own settings reads them in wireDomain and passes it here.
+// It wins over API_MAX_RECV_MB and caps HTTP bodies as that does; zero or less keeps the
+// environment's. A change needs a restart, as the variable does.
+func MaxRecvSize(app *platform.App, bytes int) {
+	r := registry(app)
+	r.add(func() { r.maxRecv = bytes })
+}
+
+// IdempotencyKeyMessages are the texts of the InvalidArgument a call gets for a bad
+// Idempotency-Key. An empty one keeps the platform's.
+type IdempotencyKeyMessages struct {
+	Required     string // "Idempotency-Key is required in the header"
+	TooLong      string // "Idempotency-Key is longer than 255 characters"
+	NotPrintable string // "Idempotency-Key must be printable ASCII"
+}
+
+// IdempotencyMessages replaces the texts of the errors about the Idempotency-Key, for a
+// project whose clients know other ones — taply's "Idempotency-Key is required in
+// header" and "Idempotency-Key is too long".
+func IdempotencyMessages(app *platform.App, texts IdempotencyKeyMessages) {
+	r := registry(app)
+	r.add(func() { r.idemTexts = texts })
 }
 
 // Methods returns the full names of every registered gRPC method, such as
@@ -606,6 +640,9 @@ func (m *Module) Init(_ context.Context, app *platform.App) error {
 // Start builds the servers from what the project registered and starts serving.
 func (m *Module) Start(ctx context.Context) error {
 	m.registry.seal()
+	if m.registry.maxRecv > 0 {
+		m.cfg.MaxRecvSize = m.registry.maxRecv
+	}
 	// A worker process does not serve the API; services are still registered, so the
 	// same wireDomain works for every role.
 	if m.skipped {
@@ -845,7 +882,7 @@ func (m *Module) idempotency(ctx context.Context) (*idempotency, error) {
 		}
 	}()
 	return &idempotency{
-		store: store, required: required, user: m.registry.idemUser,
+		store: store, required: required, user: m.registry.idemUser, texts: m.registry.idemTexts,
 		retention: m.cfg.IdempotencyRetention, lease: m.cfg.IdempotencyLease,
 		log: m.log, now: time.Now, calls: calls,
 	}, nil
@@ -908,6 +945,9 @@ func (m *Module) httpHandler(gateway *runtime.ServeMux) http.Handler {
 		on: m.cfg.AccessLog, bodies: m.cfg.LogBodies,
 		mask: slices.Concat(m.cfg.LogBodiesMaskPaths, m.registry.maskPaths),
 	}, h)
+	if m.cfg.CORSPreflightNoContent {
+		h = preflightNoContent(h)
+	}
 	if len(m.cfg.CORSOrigins) > 0 {
 		h = newCORS(m.cfg, m.registry.corsHeaders).wrap(h)
 	}

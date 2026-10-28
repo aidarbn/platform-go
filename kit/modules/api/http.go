@@ -289,6 +289,19 @@ func (p *corsPolicy) wrap(next http.Handler) http.Handler {
 	})
 }
 
+// preflightNoContent answers an OPTIONS request the CORS policy let through — it sits
+// inside the policy — with 204 and no CORS headers: the browser refuses the call, and
+// the API never sees it.
+func preflightNoContent(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // joinHeaders lists header names once each, in the order given; header names do not
 // depend on case.
 func joinHeaders(lists ...[]string) string {
@@ -599,7 +612,7 @@ func bodyForLog(contentType string, body []byte, size int64) string {
 
 // routingError names the method and the path of a request no route matched.
 func routingError(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, httpStatus int) {
-	err := status.Error(codes.Internal, "unexpected routing error")
+	err := status.Error(codes.Internal, "Unexpected routing error")
 	switch httpStatus {
 	case http.StatusBadRequest:
 		err = status.Error(codes.InvalidArgument, http.StatusText(httpStatus))

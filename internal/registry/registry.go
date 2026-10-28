@@ -84,7 +84,7 @@ var all = []Module{
 		ProjectPkg:   "db/migrations",
 		ProjectAlias: "migrations",
 		ExtraArgs:    []string{"postgres.WithMigrations(migrations.FS)"},
-		Options:      []Option{sqlcOption},
+		Options:      []Option{sqlcOption, jetOption, composeOption},
 		Compose: `  postgres:
     image: postgres:18-alpine
     environment:
@@ -370,6 +370,43 @@ var sqlcOption = Option{
 			Default:     map[string]any{},
 			Values:      &Option{},
 		},
+	},
+}
+
+// jetOption is where the dynamic query builder of the postgres module goes. The default
+// is the folder every project had before the option existed.
+var jetOption = Option{
+	Name:        "jet",
+	Description: "dynamic queries: where jet writes the query builder",
+	Kind:        KindObject,
+	Fields: []Option{
+		{Name: "out", Description: "folder of the generated Go code, relative to the project root", Default: "internal/db/jetgen"},
+	},
+}
+
+// composeOption is the local database of the postgres module: its service in
+// docker-compose.yml and the DATABASE_URL example in .env.example. The defaults are the
+// service every project had before the option existed.
+var composeOption = Option{
+	Name:        "compose",
+	Description: "the local database: its service in docker-compose.yml and DATABASE_URL in .env.example",
+	Kind:        KindObject,
+	Fields: []Option{
+		{Name: "enabled", Description: "generate the service; false leaves it out for a database service of the project's own in docker-compose.override.yml", Kind: KindBool, Default: true},
+		{Name: "image", Description: "Docker image of the database", Default: "postgres:18-alpine"},
+		{Name: "db", Description: "name of the database", Default: "app"},
+		{Name: "user", Description: "user of the database", Default: "app"},
+		{Name: "password", Description: "password of the user", Default: "app"},
+		{Name: "port", Description: "port on 127.0.0.1 the database listens on", Kind: KindInt, Default: 5432},
+		{Name: "data_dir", Description: "folder of the data inside the container, where the postgres-data volume goes: /var/lib/postgresql/data for images before 18", Default: "/var/lib/postgresql"},
+		{
+			Name:        "command",
+			Description: "arguments of the postgres server: [-c, max_connections=300]",
+			Kind:        KindList,
+			Default:     []any{},
+			Items:       &Option{},
+		},
+		{Name: "init", Description: "a folder or a .sql or .sh file, relative to the project root, mounted into /docker-entrypoint-initdb.d: run once on an empty database"},
 	},
 }
 

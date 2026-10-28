@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -13,8 +14,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	testv1 "github.com/aidarbn/platform-go/kit/internal/testapi/platformtest/v1"
+	"github.com/aidarbn/platform-go/kit/pgdb"
 )
 
 const (
@@ -292,5 +295,265 @@ func TestKeyMustBePrintable(t *testing.T) {
 		if _, err := call(i, createThing, key, h); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("%q: %v", key, err)
 		}
+	}
+}
+
+// expire moves every completed record of the store past its retention, as time would,
+// before DeleteExpired removes it.
+func expire(store *MemoryIdempotencyStore) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, r := range store.records {
+		if r.Status == idemCompleted {
+			r.ExpiresAt = time.Now().Add(-time.Second)
+		}
+	}
+}
+
+// An outcome past its retention is not replayed even while its record is still there:
+// the repeat runs the call again and its outcome is kept.
+func TestExpiredOutcomeIsNotReplayed(t *testing.T) {
+	var log bytes.Buffer
+	store := NewMemoryIdempotencyStore()
+	i := newTestIdempotency(store, &log)
+	runs := 0
+	h := func(context.Context, any) (any, error) {
+		runs++
+		return &testv1.CreateThingResponse{Id: string(rune('0' + runs))}, nil
+	}
+	if _, err := call(i, createThing, "k", h); err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := call(i, createThing, "k", h); err != nil || resp.(*testv1.CreateThingResponse).GetId() != "1" || runs != 1 {
+		t.Fatalf("a fresh outcome must be replayed: %v %v, runs %d", resp, err, runs)
+	}
+	expire(store)
+	resp, err := call(i, createThing, "k", h)
+	if err != nil || resp.(*testv1.CreateThingResponse).GetId() != "2" || runs != 2 {
+		t.Fatalf("the expired outcome: %v %v, runs %d", resp, err, runs)
+	}
+	// The new outcome is kept for the retention again.
+	if resp, err := call(i, createThing, "k", h); err != nil || resp.(*testv1.CreateThingResponse).GetId() != "2" || runs != 2 {
+		t.Errorf("the new outcome is not replayed: %v %v, runs %d", resp, err, runs)
+	}
+	if statusOf(store) != idemCompleted {
+		t.Errorf("status %q", statusOf(store))
+	}
+}
+
+// Two repeats of an expired outcome: one runs the call again, the other re-reads the
+// record and is refused while it runs — run with -race.
+func TestExpiredOutcomeRace(t *testing.T) {
+	for name, store := range map[string]func(t *testing.T) IdempotencyStore{
+		"memory":   func(*testing.T) IdempotencyStore { return NewMemoryIdempotencyStore() },
+		"postgres": pgStore,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var log bytes.Buffer
+			s := store(t)
+			i := newTestIdempotency(s, &log)
+			key := "race-" + time.Now().Format("150405.000000000")
+			if _, err := call(i, createThing, key, func(context.Context, any) (any, error) {
+				return &testv1.CreateThingResponse{Id: "old"}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			expireRecord(t, s, key)
+
+			release := make(chan struct{})
+			var runs atomic32
+			h := func(context.Context, any) (any, error) {
+				runs.add()
+				<-release
+				return &testv1.CreateThingResponse{Id: "new"}, nil
+			}
+			type result struct {
+				resp any
+				err  error
+			}
+			results := make(chan result, 2)
+			for range 2 {
+				go func() {
+					resp, err := call(i, createThing, key, h)
+					results <- result{resp, err}
+				}()
+			}
+			// The loser answers while the winner still runs.
+			first := <-results
+			if status.Code(first.err) != codes.Aborted {
+				t.Errorf("the loser: %v %v", first.resp, first.err)
+			}
+			close(release)
+			second := <-results
+			if second.err != nil || second.resp.(*testv1.CreateThingResponse).GetId() != "new" {
+				t.Errorf("the winner: %v %v", second.resp, second.err)
+			}
+			if runs.get() != 1 {
+				t.Errorf("the call ran %d times", runs.get())
+			}
+			// And the next repeat replays the new outcome.
+			resp, err := call(i, createThing, key, h)
+			if err != nil || resp.(*testv1.CreateThingResponse).GetId() != "new" {
+				t.Errorf("after the race: %v %v", resp, err)
+			}
+		})
+	}
+}
+
+// A store whose Retake predates expired outcomes — a project's own — keeps the replay
+// it had.
+type oldRetake struct{ *MemoryIdempotencyStore }
+
+func (s oldRetake) Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error) {
+	s.mu.Lock()
+	r := s.byID(id)
+	completed := r != nil && r.Status == idemCompleted
+	s.mu.Unlock()
+	if completed {
+		return false, nil
+	}
+	return s.MemoryIdempotencyStore.Retake(ctx, id, lockUntil)
+}
+
+func TestExpiredOutcomeWithAnOlderStore(t *testing.T) {
+	var log bytes.Buffer
+	store := oldRetake{NewMemoryIdempotencyStore()}
+	i := newTestIdempotency(store, &log)
+	runs := 0
+	h := func(context.Context, any) (any, error) { runs++; return &testv1.CreateThingResponse{Id: "1"}, nil }
+	if _, err := call(i, createThing, "k", h); err != nil {
+		t.Fatal(err)
+	}
+	expire(store.MemoryIdempotencyStore)
+	if resp, err := call(i, createThing, "k", h); err != nil || resp.(*testv1.CreateThingResponse).GetId() != "1" || runs != 1 {
+		t.Errorf("an older store: %v %v, runs %d", resp, err, runs)
+	}
+}
+
+type atomic32 struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (a *atomic32) add() { a.mu.Lock(); a.n++; a.mu.Unlock() }
+func (a *atomic32) get() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.n
+}
+
+func pgStore(t *testing.T) IdempotencyStore {
+	t.Helper()
+	url := os.Getenv("DATABASE_TEST_URL")
+	if url == "" {
+		t.Skip("DATABASE_TEST_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgdb.Open(ctx, pgdb.Config{URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := newPGIdempotencyStore(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func expireRecord(t *testing.T, s IdempotencyStore, key string) {
+	t.Helper()
+	switch s := s.(type) {
+	case *MemoryIdempotencyStore:
+		expire(s)
+	case *pgIdempotencyStore:
+		t.Cleanup(func() {
+			_, _ = s.pool.Exec(context.Background(), "DELETE FROM "+idempotencyTable+" WHERE key = $1", key)
+		})
+		if _, err := s.pool.Exec(context.Background(),
+			"UPDATE "+idempotencyTable+" SET expires_at = now() - interval '1 second' WHERE key = $1 AND status = 'completed'", key); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// scripted is a store where another repeat acts between this one's read and its Retake.
+type scripted struct {
+	*MemoryIdempotencyStore
+	meanwhile func(s *MemoryIdempotencyStore, id int64)
+}
+
+func (s scripted) Retake(ctx context.Context, id int64, lockUntil time.Time) (bool, error) {
+	if s.meanwhile != nil {
+		s.meanwhile(s.MemoryIdempotencyStore, id)
+	}
+	return s.MemoryIdempotencyStore.Retake(ctx, id, lockUntil)
+}
+
+// The loser of the race re-reads the record and decides on what it is now.
+func TestExpiredOutcomeReread(t *testing.T) {
+	for name, tc := range map[string]struct {
+		meanwhile func(s *MemoryIdempotencyStore, id int64)
+		want      string
+		runs      int
+	}{
+		"the other repeat finished: replay its outcome": {func(s *MemoryIdempotencyStore, id int64) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			r := s.byID(id)
+			r.Status, r.ExpiresAt, r.Response = idemCompleted, time.Now().Add(time.Hour), mustMarshal(&testv1.CreateThingResponse{Id: "other"})
+		}, "other", 0},
+		"the record was deleted: hold the key anew": {func(s *MemoryIdempotencyStore, id int64) {
+			_, _ = s.DeleteExpired(context.Background(), time.Now())
+		}, "mine", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var log bytes.Buffer
+			mem := NewMemoryIdempotencyStore()
+			store := scripted{MemoryIdempotencyStore: mem}
+			i := newTestIdempotency(store, &log)
+			if _, err := call(i, createThing, "k", func(context.Context, any) (any, error) {
+				return &testv1.CreateThingResponse{Id: "old"}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			expire(mem)
+			once := sync.Once{}
+			store.meanwhile = func(s *MemoryIdempotencyStore, id int64) { once.Do(func() { tc.meanwhile(s, id) }) }
+			i.store = store
+			runs := 0
+			resp, err := call(i, createThing, "k", func(context.Context, any) (any, error) {
+				runs++
+				return &testv1.CreateThingResponse{Id: "mine"}, nil
+			})
+			if err != nil || resp.(*testv1.CreateThingResponse).GetId() != tc.want || runs != tc.runs {
+				t.Errorf("%v %v, runs %d", resp, err, runs)
+			}
+			if statusOf(mem) != idemCompleted {
+				t.Errorf("status %q", statusOf(mem))
+			}
+		})
+	}
+}
+
+func mustMarshal(m proto.Message) []byte {
+	b, err := proto.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// A key the gateway lets through only over gRPC: the project's text for it.
+func TestNotPrintableKeyMessage(t *testing.T) {
+	var log bytes.Buffer
+	i := newTestIdempotency(NewMemoryIdempotencyStore(), &log)
+	h := func(context.Context, any) (any, error) { return &testv1.CreateThingResponse{}, nil }
+	if _, err := call(i, createThing, "a\tb", h); status.Convert(err).Message() != "Idempotency-Key must be printable ASCII" {
+		t.Errorf("the platform's text: %v", err)
+	}
+	i.texts = IdempotencyKeyMessages{NotPrintable: "bad key"}
+	if _, err := call(i, createThing, "a\tb", h); status.Convert(err).Message() != "bad key" {
+		t.Errorf("the project's text: %v", err)
 	}
 }

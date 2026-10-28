@@ -436,10 +436,10 @@ func cmdDB(args []string, out io.Writer) error {
 		fmt.Fprintln(out, "migrated", name)
 	}
 
-	if err := codegen.Jet(ctx, *dir, dsn, out); err != nil {
+	if err := codegen.Jet(ctx, *dir, plan.Jet.Out, dsn, out); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "generated", codegen.JetOut)
+	fmt.Fprintln(out, "generated", plan.Jet.Out)
 	return nil
 }
 

@@ -80,15 +80,13 @@ func (s SqlcSettings) QueriesDir() string { return path.Join(s.Dir, s.Queries) }
 // Sqlc reads the sqlc option of the postgres module, with the defaults for what the file
 // leaves out.
 func Sqlc(f *spec.File) (SqlcSettings, error) {
-	var opts struct {
-		Sqlc SqlcSettings `yaml:"sqlc"`
-	}
-	if err := f.DecodeOptions("postgres", &opts); err != nil {
+	opts, err := postgresOptions(f)
+	if err != nil {
 		return SqlcSettings{}, err
 	}
 	s := opts.Sqlc
 	s.Dir, s.Queries, s.Out = clean(s.Dir), clean(s.Queries), clean(s.Out)
-	if err := s.check(); err != nil {
+	if err := s.check(clean(opts.Jet.Out)); err != nil {
 		return SqlcSettings{}, fmt.Errorf("module postgres: option sqlc: %w", err)
 	}
 	return s, nil
@@ -96,15 +94,51 @@ func Sqlc(f *spec.File) (SqlcSettings, error) {
 
 func clean(p string) string { return path.Clean(strings.TrimSpace(p)) }
 
-// jetOut is where jet writes the dynamic query builder.
-const jetOut = "internal/db/jetgen"
+// JetSettings is the jet option of the postgres module: where the dynamic query builder
+// is generated, relative to the project root, with forward slashes.
+type JetSettings struct {
+	Out string `yaml:"out"`
+}
+
+// Jet reads the jet option of the postgres module, with the default for what the file
+// leaves out.
+func Jet(f *spec.File) (JetSettings, error) {
+	opts, err := postgresOptions(f)
+	if err != nil {
+		return JetSettings{}, err
+	}
+	raw := opts.Jet.Out
+	j := JetSettings{Out: clean(raw)}
+	if err := j.check(raw, path.Join(clean(opts.Sqlc.Dir), clean(opts.Sqlc.Queries))); err != nil {
+		return JetSettings{}, fmt.Errorf("module postgres: option jet: %w", err)
+	}
+	return j, nil
+}
+
+// check rejects a folder jet must not write into: the old builder is removed from out
+// before every run, and the generated packages move in. The sqlc output is checked by
+// the sqlc option, which names the jet output it overlaps.
+func (j JetSettings) check(raw, queries string) error {
+	if !lock.SafePath(j.Out) || path.IsAbs(raw) || strings.ContainsFunc(raw, unicode.IsControl) {
+		return fmt.Errorf("out %q must be a folder inside the project", raw)
+	}
+	var errs []error
+	for _, other := range []struct{ name, value string }{
+		{"queries", queries}, {"migrations", MigrationsDir},
+	} {
+		if within(other.value, j.Out) || within(j.Out, other.value) {
+			errs = append(errs, fmt.Errorf("out %q overlaps the %s folder %s", j.Out, other.name, other.value))
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // within reports whether p is base or a folder inside it.
 func within(p, base string) bool {
 	return base == "." || p == base || strings.HasPrefix(p, base+"/")
 }
 
-func (s SqlcSettings) check() error {
+func (s SqlcSettings) check(jetOut string) error {
 	var errs []error
 	for _, p := range []struct{ name, value, raw string }{
 		{"dir", s.Dir, s.Dir}, {"queries", s.QueriesDir(), s.Queries}, {"out", s.Out, s.Out},

@@ -197,6 +197,72 @@
           "additionalProperties": false,
           "description": "platform module postgres",
           "properties": {
+            "compose": {
+              "additionalProperties": false,
+              "description": "the local database: its service in docker-compose.yml and DATABASE_URL in .env.example",
+              "properties": {
+                "command": {
+                  "default": [],
+                  "description": "arguments of the postgres server: [-c, max_connections=300]",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "data_dir": {
+                  "default": "/var/lib/postgresql",
+                  "description": "folder of the data inside the container, where the postgres-data volume goes: /var/lib/postgresql/data for images before 18",
+                  "type": "string"
+                },
+                "db": {
+                  "default": "app",
+                  "description": "name of the database",
+                  "type": "string"
+                },
+                "enabled": {
+                  "default": true,
+                  "description": "generate the service; false leaves it out for a database service of the project's own in docker-compose.override.yml",
+                  "type": "boolean"
+                },
+                "image": {
+                  "default": "postgres:18-alpine",
+                  "description": "Docker image of the database",
+                  "type": "string"
+                },
+                "init": {
+                  "description": "a folder or a .sql or .sh file, relative to the project root, mounted into /docker-entrypoint-initdb.d: run once on an empty database",
+                  "type": "string"
+                },
+                "password": {
+                  "default": "app",
+                  "description": "password of the user",
+                  "type": "string"
+                },
+                "port": {
+                  "default": 5432,
+                  "description": "port on 127.0.0.1 the database listens on",
+                  "type": "integer"
+                },
+                "user": {
+                  "default": "app",
+                  "description": "user of the database",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "jet": {
+              "additionalProperties": false,
+              "description": "dynamic queries: where jet writes the query builder",
+              "properties": {
+                "out": {
+                  "default": "internal/db/jetgen",
+                  "description": "folder of the generated Go code, relative to the project root",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
             "sqlc": {
               "additionalProperties": false,
               "description": "static queries: where sqlc.yaml, the queries and the generated code live, and Go types on top of the platform's",

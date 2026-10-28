@@ -372,6 +372,41 @@ func storeContract(t *testing.T, store api.IdempotencyStore, key string) {
 	if err := store.Finish(ctx, done); err != nil {
 		t.Fatal(err)
 	}
+
+	// A completed record past its expiry, not yet deleted, is taken over by exactly one
+	// of racing repeats; a fresh one is not taken over at all.
+	took.Store(0)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := store.Retake(ctx, first.ID, us(time.Minute))
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				took.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if took.Load() != 1 {
+		t.Errorf("%d repeats took the expired outcome", took.Load())
+	}
+	if got, _, _ := store.Begin(ctx, rec); got.Status != "in_progress" {
+		t.Errorf("after taking the expired outcome: %+v", got)
+	}
+	fresh := first
+	fresh.Status, fresh.ExpiresAt, fresh.Lease = "completed", us(time.Hour), time.Time{}
+	if err := store.Finish(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.Retake(ctx, first.ID, us(time.Minute)); ok || err != nil {
+		t.Errorf("a fresh outcome was taken over: %v %v", ok, err)
+	}
+	if err := store.Finish(ctx, done); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := store.DeleteExpired(ctx, time.Now()); err != nil || n < 1 {
 		t.Errorf("DeleteExpired = %d, %v", n, err)
 	}
@@ -407,4 +442,42 @@ func TestPostgresIdempotencyStoreContract(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM platform_idempotency_keys WHERE key = $1", key)
 	})
 	storeContract(t, store, key)
+}
+
+// The texts of a bad key are the platform's, or the project's own.
+func TestIdempotencyKeyMessages(t *testing.T) {
+	long := strings.Repeat("k", 256)
+	for name, tc := range map[string]struct {
+		texts             *api.IdempotencyKeyMessages
+		required, tooLong string
+	}{
+		"the platform's": {nil,
+			"Idempotency-Key is required in the header", "Idempotency-Key is longer than 255 characters"},
+		"taply's": {&api.IdempotencyKeyMessages{Required: "Idempotency-Key is required in header", TooLong: "Idempotency-Key is too long"},
+			"Idempotency-Key is required in header", "Idempotency-Key is too long"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			extraWire = func(app *platform.App) {
+				api.RequireIdempotency(app, "/platformtest.v1.EchoService/CreateThing")
+				withUser(app)
+				if tc.texts != nil {
+					api.IdempotencyMessages(app, *tc.texts)
+				}
+			}
+			t.Cleanup(func() { extraWire = nil })
+			s := start(t, api.Config{}, api.WithIdempotencyStore(api.NewMemoryIdempotencyStore()))
+			for _, c := range []struct {
+				headers map[string]string
+				want    string
+			}{
+				{map[string]string{"X-User": "alice"}, tc.required},
+				{map[string]string{"X-User": "alice", "Idempotency-Key": long}, tc.tooLong},
+			} {
+				code, body, _ := s.do("POST", "/v1/things", `{"name":"a"}`, c.headers)
+				if code != http.StatusBadRequest || !strings.Contains(body, `"`+c.want+`"`) {
+					t.Errorf("%d %s, want %q", code, body, c.want)
+				}
+			}
+		})
+	}
 }

@@ -182,7 +182,7 @@ func TestJet(t *testing.T) {
 		return nil
 	}
 
-	if err := codegen.Jet(context.Background(), dir, "postgres://app:app@localhost/devdb", io.Discard); err != nil {
+	if err := codegen.Jet(context.Background(), dir, codegen.JetOut, "postgres://app:app@localhost/devdb", io.Discard); err != nil {
 		t.Fatalf("Jet: %v", err)
 	}
 
@@ -209,12 +209,47 @@ func TestJet(t *testing.T) {
 	}
 }
 
+// A project that moved the builder: the old one goes from the folder given, the
+// default folder is left alone.
+func TestJetCustomFolder(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "internal/adapters/out/db/jet/table/removed.go", jetFile)
+	write(t, dir, "internal/db/jetgen/table/old.go", jetFile)
+	orig := codegen.GoCommand
+	t.Cleanup(func() { codegen.GoCommand = orig })
+	codegen.GoCommand = func(_ context.Context, dir string, _ io.Writer, a ...string) error {
+		for _, arg := range a {
+			if path, ok := strings.CutPrefix(arg, "-path="); ok {
+				write(t, dir, filepath.Join(path, "devdb", "public", "table", "orders.go"), jetFile)
+			}
+		}
+		return nil
+	}
+
+	if err := codegen.Jet(context.Background(), dir, "internal/adapters/out/db/jet", "postgres://app:app@localhost/devdb", io.Discard); err != nil {
+		t.Fatalf("Jet: %v", err)
+	}
+	if !exists(dir, "internal/adapters/out/db/jet/table/orders.go") || exists(dir, "internal/adapters/out/db/jet/table/removed.go") {
+		t.Error("the builder did not replace the old one in the folder given")
+	}
+	if !exists(dir, "internal/db/jetgen/table/old.go") {
+		t.Error("the default folder was touched")
+	}
+
+	write(t, dir, "internal/adapters/out/db/jet/table/mine.go", "package table\n")
+	write(t, dir, "internal/adapters/out/db/jet/table/x.go", jetFile)
+	err := codegen.Jet(context.Background(), dir, "internal/adapters/out/db/jet", "postgres://app:app@localhost/devdb", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "internal/adapters/out/db/jet/table has files written by hand") {
+		t.Errorf("hand-written files: err = %v", err)
+	}
+}
+
 func TestJetFailureKeepsOldBuilder(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "internal/db/jetgen/table/orders.go", jetFile)
 	fakeGo(t, errors.New("connection refused"))
 
-	if err := codegen.Jet(context.Background(), dir, "postgres://nowhere", io.Discard); err == nil {
+	if err := codegen.Jet(context.Background(), dir, codegen.JetOut, "postgres://nowhere", io.Discard); err == nil {
 		t.Fatal("a failed generation was reported as success")
 	}
 	if !exists(dir, "internal/db/jetgen/table/orders.go") {
