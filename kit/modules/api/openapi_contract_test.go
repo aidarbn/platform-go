@@ -60,7 +60,8 @@ func TestOpenAPIDescribesTheGateway(t *testing.T) {
 	var spec struct {
 		Paths map[string]map[string]struct {
 			RequestBody struct {
-				Content map[string]struct {
+				Required bool `json:"required"`
+				Content  map[string]struct {
 					Schema struct {
 						Ref string `json:"$ref"`
 					} `json:"schema"`
@@ -135,6 +136,18 @@ func TestOpenAPIDescribesTheGateway(t *testing.T) {
 		{"post", "/v1/upload", "/v1/upload", body.String(), contentType, http.StatusOK, `"avatar_size":3`},
 		{"post", "/v1/upload", "/v1/upload", `{"title":"t","avatar":{"filename":"a","content":"AAE="}}`, "application/json", http.StatusOK, `"avatar_size":2`},
 		{"post", "/v1/things", "/v1/things", `{"name":"a"}`, "application/json", http.StatusOK, `"calls"`},
+		// The gateway reads an empty body as {}: validation decides, as for {}.
+		{"post", "/v1/echo", "/v1/echo", "", "application/json", http.StatusBadRequest, "buf.validate.Violations"},
+		{"post", "/v1/things", "/v1/things", "", "application/json", http.StatusOK, `"calls"`},
+	}
+	// Every body of the test service has fields, so the description asks for it: a
+	// client can always send {}, and an empty body means the same to the gateway.
+	for path, item := range spec.Paths {
+		for verb, op := range item {
+			if len(op.RequestBody.Content) > 0 && !op.RequestBody.Required {
+				t.Errorf("%s %s: the request body is not required", verb, path)
+			}
+		}
 	}
 	for _, c := range calls {
 		header := map[string]string{}
@@ -153,7 +166,7 @@ func TestOpenAPIDescribesTheGateway(t *testing.T) {
 			t.Errorf("%s %s: %v", c.verb, c.path, err)
 		}
 		// A JSON request the gateway took matches the request schema too.
-		if ref := spec.Paths[c.template][c.verb].RequestBody.Content["application/json"].Schema.Ref; ref != "" && code == http.StatusOK && c.contentType == "application/json" {
+		if ref := spec.Paths[c.template][c.verb].RequestBody.Content["application/json"].Schema.Ref; ref != "" && code == http.StatusOK && c.contentType == "application/json" && c.body != "" {
 			if err := check.Check(strings.TrimPrefix(ref, "#/components/schemas/"), []byte(c.body)); err != nil {
 				t.Errorf("%s %s request: %v", c.verb, c.path, err)
 			}

@@ -137,6 +137,10 @@ func Generate(req *pluginpb.CodeGeneratorRequest) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := g.baseErrors(base); err != nil {
+		return nil, fmt.Errorf("%s: %w", opts.Base, err)
+	}
+	doc.Components = g.components()
 	bundle, err := Merge(base, doc)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", opts.Base, err)
@@ -184,6 +188,7 @@ type generator struct {
 	services  map[string]string     // operation id to the full name of the service of its method
 	targets   map[string]bool       // the proto files to describe
 	outputs   map[protoreflect.FullName]bool
+	fromBase  map[string]bool // "schemas/Error", "responses/Error": the base describes them itself
 	queued    map[string]bool
 	queue     []queuedSchema
 }
@@ -319,14 +324,20 @@ func describe(files []protoreflect.FileDescriptor) (*generator, *Document, error
 	for _, p := range slices.Sorted(maps.Keys(paths)) {
 		doc.Paths.Set(p, paths[p])
 	}
-	doc.Components = &Components{Schemas: NewOrdered[*Schema](), Responses: NewOrdered[*Response]()}
+	doc.Components = g.components()
+	return g, doc, nil
+}
+
+// components are the generated schemas and responses, sorted by name.
+func (g *generator) components() *Components {
+	c := &Components{Schemas: NewOrdered[*Schema](), Responses: NewOrdered[*Response]()}
 	for _, name := range slices.Sorted(maps.Keys(g.schemas)) {
-		doc.Components.Schemas.Set(name, g.schemas[name])
+		c.Schemas.Set(name, g.schemas[name])
 	}
 	for _, name := range slices.Sorted(maps.Keys(g.responses)) {
-		doc.Components.Responses.Set(name, g.responses[name])
+		c.Responses.Set(name, g.responses[name])
 	}
-	return g, doc, nil
+	return c
 }
 
 // mergePatterns lets the path variables of an operation match the segments of another

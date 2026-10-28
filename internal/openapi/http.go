@@ -178,6 +178,10 @@ func (g *generator) operation(m protoreflect.MethodDescriptor, r *annotations.Ht
 			s = g.ref(req, input)
 		}
 		op.RequestBody = g.requestBody(req, s, exclude)
+		// A body with nothing left once the path took its fields is optional: there is
+		// nothing to send.
+		// google.protobuf.Empty has no field either; the other well-known types have.
+		op.RequestBody.Required = req.Fields().Len() > len(exclude)
 	case body != "":
 		fd := req.Fields().ByName(protoreflect.Name(body))
 		if fd == nil {
@@ -188,6 +192,7 @@ func (g *generator) operation(m protoreflect.MethodDescriptor, r *annotations.Ht
 			md = fd.Message()
 		}
 		op.RequestBody = g.requestBody(md, g.field(fd, input), nil)
+		op.RequestBody.Required = true
 	}
 
 	if m.IsStreamingClient() && op.RequestBody != nil {
@@ -236,6 +241,11 @@ func (g *generator) inlineBody(md protoreflect.MessageDescriptor, exclude map[st
 }
 
 // requestBody is a JSON body, and a multipart one when the message holds files.
+//
+// The caller marks it required when the rule has a body with fields in it. The gateway
+// reads an empty body as {} and validates that, so required asks only for what a client
+// can always send, and it tells generated clients and documentation pages to send a body
+// rather than leave it out — what protoc-gen-connect-openapi said before v0.10.0.
 func (g *generator) requestBody(md protoreflect.MessageDescriptor, s *Schema, exclude map[string]bool) *RequestBody {
 	rb := &RequestBody{Content: NewOrdered[*MediaType]()}
 	if md != nil && g.hasFiles(md) {

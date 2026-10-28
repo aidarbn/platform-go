@@ -61,13 +61,14 @@ func TestGoldenSplit(t *testing.T) {
 	if single.GetFile()[0].GetContent() != string(got[openapi.BundleFile]) {
 		t.Error("the bundle differs from the single layout")
 	}
-	checkSplit(t, got)
+	checkSplit(t, got, nil)
 }
 
 // checkSplit resolves the root through the files it refers to and compares the result
 // with the bundle: every path item, every schema, and every reference points at a
-// file and a key that exist.
-func checkSplit(t *testing.T, files map[string][]byte) {
+// file and a key that exist. baseSchemas are the schemas the base describes itself:
+// they stay in the root.
+func checkSplit(t *testing.T, files map[string][]byte, baseSchemas []string) {
 	t.Helper()
 	docs := map[string]map[string]any{}
 	for name, b := range files {
@@ -147,13 +148,16 @@ func checkSplit(t *testing.T, files map[string][]byte) {
 	}
 	schemas := map[string]any{}
 	for name, doc := range docs {
-		if name == openapi.BundleFile || name == openapi.RootFile {
+		if name == openapi.BundleFile {
 			continue
 		}
 		comps, _ := doc["components"].(map[string]any)
 		for _, kind := range []string{"schemas", "responses"} {
 			m, _ := comps[kind].(map[string]any)
 			for k, v := range m {
+				if name == openapi.RootFile && (kind != "schemas" || !slices.Contains(baseSchemas, k)) && (kind != "responses" || !slices.Contains(baseSchemas, "responses/"+k)) {
+					t.Errorf("the root holds %s %s", kind, k)
+				}
 				if _, dup := schemas[kind+"/"+k]; dup {
 					t.Errorf("%s %s is in two files", kind, k)
 				}
@@ -173,12 +177,9 @@ func checkSplit(t *testing.T, files map[string][]byte) {
 	if len(schemas) > 0 {
 		t.Errorf("components the bundle lacks: %v", schemas)
 	}
-	// The root keeps the human part of the base and nothing of the components.
+	// The root keeps the human part of the base and only the components the base has.
 	if root["info"] == nil || root["servers"] == nil {
 		t.Error("the root lost the base")
-	}
-	if c, _ := root["components"].(map[string]any); c["schemas"] != nil {
-		t.Error("the root holds schemas")
 	}
 }
 
@@ -198,5 +199,67 @@ func TestSplitNameCollision(t *testing.T) {
 	}
 	if resp := run(t, "layout=single", []string{"Common.proto"}, files); resp.GetError() != "" {
 		t.Errorf("the single layout has no such files: %s", resp.GetError())
+	}
+}
+
+// A project with an error handler of its own describes its error body in the base: the
+// generator keeps that schema and response, drops the details only its own body names,
+// and every operation points at the base's, in both layouts.
+func TestBaseError(t *testing.T) {
+	files := compile(t, "testdata/proto", shopFiles...)
+	resp := run(t, "base=testdata/base-error.yaml", shopFiles, files)
+	if resp.GetError() != "" {
+		t.Fatal(resp.GetError())
+	}
+	got := map[string][]byte{}
+	for _, f := range resp.GetFile() {
+		got[f.GetName()] = []byte(f.GetContent())
+	}
+	for _, f := range []string{openapi.BundleFile, openapi.RootFile} {
+		if err := oascheck.Validate(got[f]); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+	}
+	checkSplit(t, got, []string{"Error", "ErrorDetail", "responses/Error"})
+
+	bundle := string(got[openapi.BundleFile])
+	for _, want := range []string{"request_id:", "description: An error of the shop."} {
+		if !strings.Contains(bundle, want) {
+			t.Errorf("the bundle lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"google.rpc.Status", "buf.validate.Violations:", "google.rpc.ErrorInfo:", "buf.validate.FieldPath:"} {
+		if strings.Contains(bundle, gone) {
+			t.Errorf("the bundle still has %q", gone)
+		}
+	}
+	if strings.Contains(string(got[openapi.CommonFile]), "Error:") {
+		t.Errorf("common.yaml still describes the error:\n%s", got[openapi.CommonFile])
+	}
+	if !strings.Contains(string(got["shop/v1/shop.yaml"]), "../../openapi.yaml#/components/responses/Error") {
+		t.Errorf("an operation does not point at the error of the base:\n%s", got["shop/v1/shop.yaml"])
+	}
+
+	// Only the schema in the base: the generated response points at it in the root.
+	base, err := os.ReadFile("testdata/base-error.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut, _, _ := strings.Cut(string(base), "  responses:\n")
+	only := filepath.Join(t.TempDir(), "base.yaml")
+	if err := os.WriteFile(only, []byte(cut), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp = run(t, "base="+only, shopFiles, files)
+	if resp.GetError() != "" {
+		t.Fatal(resp.GetError())
+	}
+	got = map[string][]byte{}
+	for _, f := range resp.GetFile() {
+		got[f.GetName()] = []byte(f.GetContent())
+	}
+	checkSplit(t, got, []string{"Error", "ErrorDetail"})
+	if !strings.Contains(string(got[openapi.CommonFile]), "openapi.yaml#/components/schemas/Error") {
+		t.Errorf("the generated response does not point at the schema of the base:\n%s", got[openapi.CommonFile])
 	}
 }

@@ -51,6 +51,15 @@ func (g *generator) split(base []byte, baseName string, doc *Document, docs []Do
 	for name := range g.responses {
 		responseFile[name] = CommonFile
 	}
+	// An error body the base describes stays in the root, where the base is.
+	for key := range g.fromBase {
+		kind, name, _ := strings.Cut(key, "/")
+		if kind == "schemas" {
+			schemaFile[name] = RootFile
+		} else {
+			responseFile[name] = RootFile
+		}
+	}
 	own := []string{RootFile, BundleFile, CommonFile, baseName}
 	for _, d := range docs {
 		own = append(own, DocumentFile(d.Name))

@@ -38,6 +38,7 @@ paths:
       summary: Place an order.
       operationId: TabletService_CreateOrder
       requestBody:
+        required: true
         content:
           application/json:
             schema:

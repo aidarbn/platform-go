@@ -24,6 +24,7 @@ paths:
       summary: Sign in with a password.
       operationId: AuthService_Login
       requestBody:
+        required: true
         content:
           application/json:
             schema:

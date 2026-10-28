@@ -85,7 +85,10 @@ func Checks(opts Options, run Runner, verify func(ctx context.Context, dir strin
 			if opts.Against == "" {
 				return nil
 			}
-			return run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "breaking", "--against", ".git#branch="+opts.Against)
+			// Only the project's own files: the files of dependencies (googleapis,
+			// gnostic) come and go with buf.yaml and are not its API. Without
+			// --exclude-imports, dropping a dependency reads as deleted files.
+			return run(ctx, dir, io.Discard, nil, "go", "tool", "buf", "breaking", "--against", ".git#branch="+opts.Against, "--exclude-imports")
 		}})
 	}
 	if slices.Contains(opts.Modules, "postgres") {

@@ -115,6 +115,7 @@ paths:
             type: integer
             format: int64
       requestBody:
+        required: true
         content:
           multipart/form-data:
             schema:
@@ -211,6 +212,7 @@ paths:
             type: integer
             format: int64
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -260,6 +262,7 @@ paths:
             type: string
             format: uuid
       requestBody:
+        required: true
         content:
           application/json:
             schema:

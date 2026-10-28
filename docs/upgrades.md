@@ -85,7 +85,7 @@ A project created before this workflow adds the file by hand, together with `wor
 
 | Check | What it catches |
 |---|---|
-| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout by `platformgo upgrade` of the checkout, as a real upgrade: the checkout stands in for a version of its own through `replace`, with no `go mod tidy` beforehand, so a module the new version needs and the upgrade leaves out of `go.sum` fails it. Then `verify`, a tidy `go.mod`, `go build`, `go vet`, `go test` must be clean. One failing release fails CI |
+| Upgrade matrix | a project with every module the release knew is created by each of the last three releases and moved to the checkout by `platformgo upgrade` of the checkout, as a real upgrade: the checkout stands in for a version of its own through `replace`, with no `go mod tidy` beforehand, so a module the new version needs and the upgrade leaves out of `go.sum` fails it. Then `verify`, a tidy `go.mod`, `go build`, `go vet`, `go test` must be clean. With the `api` module the project gets a proto file of its own first (gnostic-annotated when the release had gnostic) on a `base` branch, and after the upgrade `lint --proto-against base` must pass and still catch a deleted field and a deleted file. One failing release fails CI |
 | `kit` API compatibility | `apidiff` against the previous tag. Every run reports the changes; a release tag fails when an incompatible change ships without a new minor version (before v1) or major version (after v1) |
 | Reference projects | demo services in the repository, one per typical module set, always on the latest version |
 | Codemods | before and after tests: the result matches, keeps comments, compiles with the new `kit` and a second run changes nothing |
@@ -122,6 +122,15 @@ Before v1 the platform is still finding its shape, so the policy is what it can 
 ## Behaviour changes
 
 Changes that keep the API but change what a project or its clients see, by the version that brings them: what was, what is, who is affected and how to get the old behaviour back.
+
+### v0.10.1
+
+Fixes of v0.10.0 found on the upgrade of wallet-damdala from v0.9.1.
+
+- **`platformgo lint --proto-against` checks only the project's own proto files.** `buf breaking` ran with the files of dependencies, so a project whose upgrade to v0.10.0 dropped gnostic from `buf.yaml` failed lint on `Previously present file "gnostic/openapi/v3/annotations.proto" was deleted` (and `openapiv3.proto`, `google/protobuf/any.proto`) though its own files had not changed. Now it runs with `--exclude-imports`: a deleted field or file of the project still fails, a dependency that comes or goes does not. The upgrade matrix creates a project with a gnostic-annotated proto file by each release and runs `lint --proto-against` on it after the upgrade, both ways. Nothing to do in a project.
+- **Request bodies are `required: true` again.** protoc-gen-connect-openapi marked them, the platform's generator in v0.10.0 did not. Now a body of `body: "*"` or `body: "<field>"` is required; a `body: "*"` whose fields all sit in the path, or that has none (`google.protobuf.Empty`), stays optional: there is nothing to send. The gateway still takes an empty body as `{}`, so no client that worked stops working; generated clients and the docs page now send a body. Affects the description only: `make generate` rewrites it.
+- **A project with its own error body describes it in `base.yaml`.** v0.10.0 gave every operation the platform's `Error` — `google.rpc.Status`, what the module's default error handler writes — even in a project with `api.HTTPErrorHandler`, whose body is another one, and a schema of that name in `base.yaml` was replaced. Now `components.schemas.Error` and `components.responses.Error` of `base.yaml` win: the generator writes neither, drops the violation and `ErrorInfo` schemas only its own body uses, and points every `default` answer at the base's. A project without its own handler changes nothing; the platform's `Error` is checked against real answers of the gateway and has no `request_id` — the id is the `X-Request-ID` header. A project with its own handler adds its body to `base.yaml` and runs `make generate`.
+- *How to upgrade.* `platformgo upgrade v0.10.1`, then commit the regenerated `api/openapi`. From v0.9.x straight to v0.10.1 is the upgrade of v0.10.0, with these fixes.
 
 ### v0.10.0
 

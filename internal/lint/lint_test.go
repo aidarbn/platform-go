@@ -112,7 +112,7 @@ func TestChecksAndRun(t *testing.T) {
 	for _, c := range calls {
 		joined += strings.Join(c.args, " ") + "\n"
 	}
-	for _, want := range []string{"go mod tidy -diff", "go build ./...", "go tool buf lint", "go tool buf breaking --against .git#branch=dev"} {
+	for _, want := range []string{"go mod tidy -diff", "go build ./...", "go tool buf lint", "go tool buf breaking --against .git#branch=dev --exclude-imports"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("commands lack %q:\n%s", want, joined)
 		}
