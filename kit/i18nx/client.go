@@ -180,6 +180,11 @@ func (t *TxClient) GetAll(ctx context.Context, entity, entityID string) (Transla
 	return getAll(ctx, t.db, entity, entityID)
 }
 
+// GetBatchAll returns the translations of several entities: id to translations.
+func (t *TxClient) GetBatchAll(ctx context.Context, entity string, entityIDs []string) (map[string]Translations, error) {
+	return getBatchAll(ctx, t.db, entity, entityIDs)
+}
+
 func set(ctx context.Context, db DBTX, entity, entityID, field string, locale Locale, text string) error {
 	// An empty entity id is a shared translation, such as the title of a menu.
 	if entity == "" || field == "" || locale == "" {

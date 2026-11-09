@@ -2,6 +2,14 @@
 
 Changes by release. What a project or its clients see differently, with how to keep the old behaviour, is in [docs/upgrades.md](docs/upgrades.md#behaviour-changes); manual steps of an upgrade are there too. Releases before v0.11.0 are described only there.
 
+## v0.12.1
+
+Backward compatible: one addition to `kit`. Upgrade with `platformgo upgrade v0.12.1`; nothing to do in a project.
+
+### Added
+
+- `kit/i18nx`: `TxClient.GetBatchAll` — the translations of several entities read in a transaction, as `Client.GetBatchAll` does outside one.
+
 ## v0.12.0
 
 Backward compatible: only additions to `kit`, nothing existing changes. Upgrade with `platformgo upgrade v0.12.0`; nothing to do in a project.
