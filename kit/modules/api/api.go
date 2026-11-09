@@ -391,12 +391,12 @@ func Authorize(app *platform.App, unary grpc.UnaryServerInterceptor, stream grpc
 }
 
 // Normalize changes every request message before validation, after the project's
-// authentication and guards: trimming strings, Unicode normalisation, as taply's strutil
+// authentication and guards: trimming strings, Unicode normalisation, as taply's strutil, now kit/stringsx,
 // does. It runs in PhaseTransform+50, after the other transforms of the phase — the
 // base fields the i18n module takes from translations are normalised too — and the
 // functions run in the order they were added.
 //
-//	api.Normalize(app, strutil.Normalize)
+//	api.Normalize(app, stringsx.Apply)
 func Normalize(app *platform.App, fn func(proto.Message)) {
 	if fn == nil {
 		panic("api: a nil normalizer")

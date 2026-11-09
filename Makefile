@@ -19,10 +19,12 @@ lint: ## go vet
 fmt: ## formatting
 	gofmt -l -w .
 
-proto-test: ## regenerate the test service of the api module, the i18n option and the OpenAPI options
+proto-test: ## regenerate the test service of the api module, the i18n option, the string rules option and the OpenAPI options
 	cd kit/internal/testapi && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate
 	cd kit/i18nx/proto && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate --path platform
 	cd kit/i18nx/proto && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate --path platformtest --template buf.test.gen.yaml
+	cd kit/stringsx/proto && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate --path platform
+	cd kit/stringsx/proto && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate --path platformtest --template buf.test.gen.yaml
 	cd kit/openapipb/proto && go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate
 
 apicheck: ## exported API of kit against the latest release

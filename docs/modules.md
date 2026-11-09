@@ -486,7 +486,7 @@ What the module does for every call, REST included — the gateway calls the loc
 
 `api.AddUnaryInterceptorAt(app, api.PhaseGuard, "restaurant", guard)` and `api.AddStreamInterceptorAt` place a project interceptor in a phase; the phases are a hundred apart, so `api.PhaseGuard+10` runs after every guard. Within a phase the platform's interceptors come first and the project's keep the order they were added in. `api.Chain(app)` and `api.StreamChain(app)` list the chain as `phase/name` once the module has started — a project test can pin it — and the start logs it. Streams have the same phases without the rate limit, normalisation, validation and idempotency.
 
-`api.Normalize(app, func(proto.Message))` changes every request message after the guards and before validation — trimming strings, Unicode normalisation, as taply's `strutil` does — so a normalised value passes the same checks as one sent clean. The functions run in the order they were added.
+`api.Normalize(app, func(proto.Message))` changes every request message after the guards and before validation — trimming strings, Unicode normalisation, as `kit/stringsx` does (taply's `strutil`; the option is `platform.strings.v1.string_rules`) — so a normalised value passes the same checks as one sent clean. The functions run in the order they were added.
 
 The HTTP side, following taply's gateway:
 
