@@ -43,6 +43,11 @@ func ProtoToTranslations(m map[string]*i18npb.LocaleMap) Translations {
 	return out
 }
 
+// ValidateProtoFields is ValidateFields under the name taply's i18n package gives it.
+func ValidateProtoFields(m map[string]*i18npb.LocaleMap, allowed []string) error {
+	return ValidateFields(m, allowed)
+}
+
 // ValidateFields refuses a field_translations map with a field the entity does not
 // translate, before it reaches the table.
 func ValidateFields(m map[string]*i18npb.LocaleMap, allowed []string) error {
