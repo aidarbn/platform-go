@@ -79,6 +79,13 @@ func TestTxClient(t *testing.T) {
 		if got["title"]["en"] != "Main menu" || got["title"]["tr"] != "Menü" || got["title"]["kk"] != "Мәзір" {
 			t.Errorf("inside the transaction: %v", got)
 		}
+		batch, err := tc.GetBatchAll(ctx, "menu", []string{"7", "9"})
+		if err != nil {
+			return err
+		}
+		if len(batch) != 1 || batch["7"]["title"]["en"] != "Main menu" {
+			t.Errorf("GetBatchAll inside the transaction: %v", batch)
+		}
 		return nil
 	})
 	if err != nil {
