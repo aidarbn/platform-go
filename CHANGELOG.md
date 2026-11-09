@@ -2,6 +2,18 @@
 
 Changes by release. What a project or its clients see differently, with how to keep the old behaviour, is in [docs/upgrades.md](docs/upgrades.md#behaviour-changes); manual steps of an upgrade are there too. Releases before v0.11.0 are described only there.
 
+## v0.12.0
+
+Backward compatible: only additions to `kit`, nothing existing changes. Upgrade with `platformgo upgrade v0.12.0`; nothing to do in a project.
+
+### Added
+
+- `kit/ptrx`: pointer helpers — `ValueOr`, `Prefer`, `Equal`, `NonZero`.
+- `kit/convx`: `MapSlice`, `MapSliceWithError`.
+- `kit/pgdb`: `RunAsync` and `AsyncCommit` — a transaction committed with `synchronous_commit = off`, for writes that may be lost on a crash of the database (counters, logs) in exchange for a faster commit.
+- `kit/stringsx`: `Apply` — normalizes string fields of a proto message by the field option `(platform.strings.v1.string_rules)` (trim, collapse spaces, case, NFC, strip control characters, clear an empty field), map values included; plug it in with `api.Normalize(app, stringsx.Apply)`. The option is in `kit/stringsx/proto/platform/strings/v1/strings.proto` (extension 50002), generated code in `kit/stringsx/stringspb`.
+- `kit/i18nx`: `NewWith` with the options `WithDefaultLocale` and `WithLocales`, `Default`, `AllLanguages`, `GetLanguageInfo`, `Migrate`, `ValidateProtoFields`. `New` is unchanged.
+
 ## v0.11.2
 
 Backward compatible: no API of `kit` changes incompatibly. One default changes, listed under Changed: the start check of `s3` and `postgres` is retried for 15 seconds instead of being made once; `S3_STARTUP_TIMEOUT=0` and `DATABASE_STARTUP_TIMEOUT=0` give the old behaviour back. Upgrade with `platformgo upgrade v0.11.2`; nothing to do in a project, but see Fixed for a `.env` that still sets `RIVER_QUEUES=default=10`.
