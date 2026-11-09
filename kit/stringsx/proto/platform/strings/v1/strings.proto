@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+// The string rules option of the platform, ported from taply: opt-in sanitisation of the
+// string fields of a request, applied by stringsx.Apply.
+package platform.strings.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/aidarbn/platform-go/kit/stringsx/stringspb;stringspb";
+
+// StringRules — opt-in sanitization rules applied to a string field on the
+// request side, before authentication / idempotency / validation.
+//
+// Order of application is fixed and independent of field order in the message:
+//   1. strip_control    — remove \x00-\x1F (except \t \n \r), zero-width, BOM
+//   2. nfc              — Unicode NFC normalization
+//   3. trim             — TrimSpace (leading and trailing)
+//   4. collapse_spaces  — collapse runs of whitespace to a single ASCII space
+//   5. lowercase OR uppercase
+//   6. nullify_empty    — if the result is "" after the above, clear the field
+//                         (only effective on proto3 optional fields)
+//
+// Fields without this annotation are left untouched. Passwords and secrets
+// simply do not carry the annotation — there is no blocklist.
+//
+// Example — Update profile:
+//
+//   message UpdateProfileRequest {
+//     string name = 1 [(platform.strings.v1.string_rules) = {
+//       trim: true, collapse_spaces: true, nfc: true
+//     }];
+//     string email = 2 [(platform.strings.v1.string_rules) = {
+//       trim: true, lowercase: true
+//     }];
+//     string password = 3; // intentionally untouched
+//   }
+message StringRules {
+  // strings.TrimSpace — removes leading and trailing whitespace.
+  bool trim = 1;
+
+  // Collapse internal runs of whitespace to a single ASCII space.
+  // Does not trim leading or trailing whitespace — combine with `trim` for that.
+  bool collapse_spaces = 2;
+
+  // strings.ToLower — applied after trim and collapse_spaces.
+  // Mutually exclusive with `uppercase` (if both set, lowercase wins).
+  bool lowercase = 3;
+
+  // strings.ToUpper — applied after trim and collapse_spaces.
+  bool uppercase = 4;
+
+  // Unicode NFC normalization — canonical composition.
+  // Protects against visually identical but byte-different inputs
+  // (e.g. "é" as one code point vs e + combining acute).
+  bool nfc = 5;
+
+  // Remove C0 controls (\x00-\x1F, except \t \n \r), zero-width spaces, BOM.
+  // Defensive against paste artefacts and basic unicode attacks.
+  bool strip_control = 6;
+
+  // If the string is empty after all other rules, clear the field entirely.
+  // Only effective on proto3 optional fields — for non-optional fields the
+  // field stays set to "".
+  bool nullify_empty = 7;
+}
+
+// Field-level option for annotating a string field with sanitization rules.
+// 50001 is taken by i18n_field; this extension uses 50002.
+// Field-level option for annotating a string field with sanitisation rules.
+// 50001 is taken by platform.i18n.v1.i18n_field; this extension uses 50002, the number it
+// has in taply, so the encoded options of a taply descriptor stay readable.
+extend google.protobuf.FieldOptions {
+  StringRules string_rules = 50002;
+}

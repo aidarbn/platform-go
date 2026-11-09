@@ -349,8 +349,8 @@ func database(t *testing.T) *i18nx.Client {
 	if err := i18nx.EnsureSchema(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	if err := i18nx.EnsureSchema(ctx, pool); err != nil {
-		t.Fatalf("second EnsureSchema: %v", err)
+	if err := i18nx.Migrate(ctx, pool); err != nil {
+		t.Fatalf("second EnsureSchema, as Migrate: %v", err)
 	}
 	c := i18nx.New(pool, i18nx.LocaleRU, i18nx.LocaleKK, i18nx.LocaleEN)
 	if err := c.LoadMessages([]byte(i18nx.Builtin)); err != nil {

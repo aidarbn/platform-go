@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// Messages for the tests of the stringsx package.
+package platformtest.strings.v1;
+
+import "platform/strings/v1/strings.proto";
+
+option go_package = "github.com/aidarbn/platform-go/kit/stringsx/internal/testpb;testpb";
+
+message Group {
+  // Trimmed, collapsed and normalised.
+  string name = 1 [(platform.strings.v1.string_rules) = {trim: true, collapse_spaces: true, nfc: true}];
+  // No rules: left as it is.
+  optional string search = 2;
+  // Cleared when empty after trimming.
+  optional string note = 3 [(platform.strings.v1.string_rules) = {trim: true, nullify_empty: true}];
+  repeated string tags = 4 [(platform.strings.v1.string_rules) = {trim: true, lowercase: true}];
+  map<string, string> labels = 5 [(platform.strings.v1.string_rules) = {trim: true}];
+  Group parent = 6;
+  repeated Group children = 7;
+  map<string, Group> by_name = 8;
+  // Only a control: stripped, nothing else.
+  string raw = 9 [(platform.strings.v1.string_rules) = {strip_control: true}];
+  string code = 10 [(platform.strings.v1.string_rules) = {trim: true, uppercase: true}];
+}

@@ -47,6 +47,16 @@ var Languages = []LanguageInfo{
 	{Code: LocaleTR, Name: "Turkish", NativeName: "Türkçe"},
 }
 
+// AllLanguages is Languages under the name taply's i18n package gives it.
+var AllLanguages = Languages
+
+// Default returns the locale of the base columns of entities (products.name, ...) in
+// taply: Russian. Client.DefaultLocale is the one a client is configured with.
+func Default() Locale { return LocaleRU }
+
+// GetLanguageInfo is LanguageByCode under the name taply's i18n package gives it.
+func GetLanguageInfo(code string) (LanguageInfo, bool) { return LanguageByCode(code) }
+
 // LanguageByCode returns the names of a locale.
 func LanguageByCode(code string) (LanguageInfo, bool) {
 	for _, l := range Languages {

@@ -74,6 +74,11 @@ func EnsureSchema(ctx context.Context, db DBTX) error {
 	return nil
 }
 
+// Migrate is EnsureSchema for a pool, the name taply's i18n package gives it. It does not
+// use taply's separate i18n_migrations goose table: the table is versioned by pgdb and a
+// database taply migrated is recognised, as the statements are IF NOT EXISTS.
+func Migrate(ctx context.Context, pool *pgxpool.Pool) error { return EnsureSchema(ctx, pool) }
+
 // schemaSteps are the versions of the translations table. Version 1 is the schema
 // releases before versioning created, so it keeps IF NOT EXISTS; later steps only append.
 var schemaSteps = []pgdb.SchemaStep{{Version: 1, Statements: []string{
