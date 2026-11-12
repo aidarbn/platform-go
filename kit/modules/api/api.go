@@ -111,7 +111,31 @@ type Config struct {
 	// shutdown timeout allows.
 	HTTPStopTimeout time.Duration
 	GRPCStopTimeout time.Duration
+
+	// Timeouts of the REST server, those of http.Server; they bound each request on the
+	// connection, so a preflight that follows a call on a keep-alive connection gets
+	// fresh ones. HTTPReadHeaderTimeout bounds reading the headers of a request — a
+	// slowloris client is cut off by it — and is never off: zero or less means 10s.
+	// HTTPReadTimeout bounds reading a whole request, its body included, from its first
+	// byte; zero, the default, leaves the body unbounded, since an upload over a slow link
+	// may take long. HTTPWriteTimeout bounds a request from the end of its headers to the
+	// end of its answer; zero, the default, leaves it unbounded, since a server-streaming
+	// method behind the gateway, a download or a long call would be cut off in the middle
+	// of its answer. A handler that needs more than the server allows extends its own
+	// deadlines with http.ResponseController. HTTPIdleTimeout is how long a keep-alive
+	// connection may wait for its next request; zero means 2 minutes, negative never
+	// closes it.
+	HTTPReadHeaderTimeout time.Duration
+	HTTPReadTimeout       time.Duration
+	HTTPWriteTimeout      time.Duration
+	HTTPIdleTimeout       time.Duration
 }
+
+// Defaults of the REST server timeouts.
+const (
+	DefaultHTTPReadHeaderTimeout = 10 * time.Second
+	DefaultHTTPIdleTimeout       = 2 * time.Minute
+)
 
 // DefaultTrustedProxies are loopback and the private networks.
 var DefaultTrustedProxies = []netip.Prefix{
@@ -167,6 +191,11 @@ func Load(l *confx.Loader) Config {
 		HTTPStopTimeout: nonNegative(l, "API_HTTP_STOP_TIMEOUT"),
 		GRPCStopTimeout: nonNegative(l, "API_GRPC_STOP_TIMEOUT"),
 
+		HTTPReadHeaderTimeout: positive(l, "API_HTTP_READ_HEADER_TIMEOUT", DefaultHTTPReadHeaderTimeout),
+		HTTPReadTimeout:       nonNegative(l, "API_HTTP_READ_TIMEOUT"),
+		HTTPWriteTimeout:      nonNegative(l, "API_HTTP_WRITE_TIMEOUT"),
+		HTTPIdleTimeout:       positive(l, "API_HTTP_IDLE_TIMEOUT", DefaultHTTPIdleTimeout),
+
 		LogBodiesMaskPaths:  l.Strings("API_LOG_BODIES_MASK_PATHS", nil),
 		MetricsTenantHeader: tenantHeader(l),
 	}
@@ -200,6 +229,16 @@ func nonNegative(l *confx.Loader, name string) time.Duration {
 	if d < 0 {
 		l.Fail(fmt.Errorf("%s: %s is negative", l.Key(name), d))
 		return 0
+	}
+	return d
+}
+
+// positive reads a duration that must be above zero.
+func positive(l *confx.Loader, name string, def time.Duration) time.Duration {
+	d := l.Duration(name, def)
+	if d <= 0 {
+		l.Fail(fmt.Errorf("%s: %s is not a positive duration", l.Key(name), d))
+		return def
 	}
 	return d
 }
@@ -283,6 +322,12 @@ func (c *Config) setDefaults() {
 	}
 	if c.IdempotencyLease <= 0 {
 		c.IdempotencyLease = defaultIdempotencyLease
+	}
+	if c.HTTPReadHeaderTimeout <= 0 {
+		c.HTTPReadHeaderTimeout = DefaultHTTPReadHeaderTimeout
+	}
+	if c.HTTPIdleTimeout == 0 {
+		c.HTTPIdleTimeout = DefaultHTTPIdleTimeout
 	}
 	if c.RateLimit.IPv6Prefix <= 0 || c.RateLimit.IPv6Prefix > 128 {
 		c.RateLimit.IPv6Prefix = defaultIPv6Prefix
@@ -803,7 +848,13 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.httpLn, err = net.Listen("tcp", m.cfg.HTTPAddr); err != nil {
 		return fmt.Errorf("api: HTTP on %s: %w", m.cfg.HTTPAddr, err)
 	}
-	m.httpSrv = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	m.httpSrv = &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: m.cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       m.cfg.HTTPReadTimeout,
+		WriteTimeout:      m.cfg.HTTPWriteTimeout,
+		IdleTimeout:       m.cfg.HTTPIdleTimeout,
+	}
 	go func() {
 		if err := m.httpSrv.Serve(m.httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			m.log.Error("the HTTP server stopped with an error", "err", err)
